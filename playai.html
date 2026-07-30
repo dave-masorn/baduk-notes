@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Play AI - Minimal Board</title>
+    <link rel="stylesheet" href="playai.css">
+</head>
+<body>
+
+    <canvas id="go-board"></canvas>
+
+    <script>
+        const canvas = document.getElementById('go-board');
+        const ctx = canvas.getContext('2d');
+
+        // Configuration
+        const BOARD_SIZE = 19;
+        
+        // Hoshi points for a 19x19 board
+        const hoshiPoints = [
+            [3, 3], [3, 9], [3, 15],
+            [9, 3], [9, 9], [9, 15],
+            [15, 3], [15, 9], [15, 15]
+        ];
+
+        function resizeAndDraw() {
+            // Get available window dimensions
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+
+            // Leave some padding around the board
+            const padding = Math.min(winW, winH) * 0.05;
+            
+            // The drawing area for the board
+            const availableSize = Math.min(winW, winH) - (padding * 2);
+
+            // Handle high DPI displays for crisp lines
+            const dpr = window.devicePixelRatio || 1;
+            
+            canvas.width = availableSize * dpr;
+            canvas.height = availableSize * dpr;
+            
+            // Set CSS size
+            canvas.style.width = `${availableSize}px`;
+            canvas.style.height = `${availableSize}px`;
+
+            // Normalize coordinate system to use css pixels
+            ctx.scale(dpr, dpr);
+
+            drawBoard(availableSize);
+        }
+
+        function drawBoard(size) {
+            ctx.clearRect(0, 0, size, size);
+
+            // Board styling
+            const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--grid-color').trim();
+            const hoshiColor = getComputedStyle(document.documentElement).getPropertyValue('--hoshi-color').trim();
+            const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim();
+
+            // We need 18 gaps for 19 lines.
+            // Leave a small margin inside the canvas so the outer border isn't clipped
+            const boardMargin = size * 0.04; 
+            const gridAreaSize = size - (boardMargin * 2);
+            const cellSize = gridAreaSize / (BOARD_SIZE - 1);
+
+            // Sync the CSS variable for the infinite background grid
+            document.documentElement.style.setProperty('--cell-size', `${cellSize}px`);
+
+            // Draw Grid Lines
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = gridColor;
+            ctx.lineCap = 'square';
+
+            ctx.beginPath();
+            for (let i = 0; i < BOARD_SIZE; i++) {
+                // Vertical lines
+                const x = boardMargin + (i * cellSize);
+                ctx.moveTo(Math.round(x) + 0.5, Math.round(boardMargin));
+                ctx.lineTo(Math.round(x) + 0.5, Math.round(boardMargin + gridAreaSize));
+
+                // Horizontal lines
+                const y = boardMargin + (i * cellSize);
+                ctx.moveTo(Math.round(boardMargin), Math.round(y) + 0.5);
+                ctx.lineTo(Math.round(boardMargin + gridAreaSize), Math.round(y) + 0.5);
+            }
+            ctx.stroke();
+
+            // Draw Outer Border (Thicker)
+            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = borderColor;
+            ctx.strokeRect(
+                Math.round(boardMargin) + 0.5, 
+                Math.round(boardMargin) + 0.5, 
+                gridAreaSize, 
+                gridAreaSize
+            );
+
+            // Draw Hoshi Points (Star Points)
+            const hoshiRadius = cellSize * 0.12; // Relative to cell size
+            ctx.fillStyle = hoshiColor;
+
+            hoshiPoints.forEach(([col, row]) => {
+                const cx = boardMargin + (col * cellSize);
+                const cy = boardMargin + (row * cellSize);
+                
+                ctx.beginPath();
+                ctx.arc(cx, cy, hoshiRadius, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        // Initialize and handle resize
+        window.addEventListener('resize', resizeAndDraw);
+        
+        // Initial draw
+        resizeAndDraw();
+    </script>
+</body>
+</html>

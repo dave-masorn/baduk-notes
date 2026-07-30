@@ -1,0 +1,10 @@
+{
+  "name": "Go Board Diagram Annotator",
+  "short_name": "Go Annotator",
+  "description": "An interactive web application to create, annotate, and crop Go/Weiqi diagrams.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#eab308",
+  "icons": []
+}

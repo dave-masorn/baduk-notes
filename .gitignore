@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+server.log
+Qwen_html_*.html
+tech_log-*.html
+pre_sgf/
+kifu/
+obsidian-things-main/
+obsidian-things-main.zip
+red-bean/
+red-bean.zip

@@ -1,0 +1,56 @@
+:root {
+    --page-bg: #f4f4f0; 
+    --grid-color: #2c2c2a;
+    --hoshi-color: #2c2c2a;
+    --border-color: #2c2c2a;
+    
+    /* CSS background (extended board) colors */
+    --bg-grid-color: rgba(44, 44, 42, 0.15);
+    --bg-hoshi-color: rgba(44, 44, 42, 0.2);
+    
+    /* These will be set dynamically by JS to perfectly match the canvas board */
+    --cell-size: 30px; 
+    --bg-hoshi-radius: calc(var(--cell-size) * 0.12);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--page-bg);
+    
+    background-image: 
+        /* Hoshis (repeat every 6 cells) */
+        radial-gradient(circle at center, var(--bg-hoshi-color) var(--bg-hoshi-radius), transparent var(--bg-hoshi-radius)),
+        /* Vertical Grid Lines */
+        linear-gradient(to right, transparent calc(50% - 0.5px), var(--bg-grid-color) calc(50% - 0.5px), var(--bg-grid-color) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+        /* Horizontal Grid Lines */
+        linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--bg-grid-color) calc(50% - 0.5px), var(--bg-grid-color) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+    
+    background-size: 
+        calc(var(--cell-size) * 6) calc(var(--cell-size) * 6),
+        var(--cell-size) var(--cell-size),
+        var(--cell-size) var(--cell-size);
+        
+    background-position: 
+        center center, 
+        center center, 
+        center center;
+
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* The canvas itself has no background, letting the page bg show through. */
+canvas {
+    display: block;
+    /* width and height are set dynamically to fit the screen */
+}

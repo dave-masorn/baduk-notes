@@ -1,0 +1,54 @@
+// Ensure you have `targetCtx` (your Canvas 2D context)
+// `cx` and `cy` are the center coordinates of your stone
+// `currentStoneRadius` is the radius of the stone
+
+targetCtx.save();
+
+// 1. Establish the 3D Drop Shadow
+// This renders underneath the stone and bleeds onto the board
+targetCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+targetCtx.shadowBlur = Math.max(3, currentStoneRadius * 0.25);
+targetCtx.shadowOffsetX = Math.max(2, currentStoneRadius * 0.15);
+targetCtx.shadowOffsetY = Math.max(2, currentStoneRadius * 0.15);
+
+if (cell.player === 'B') {
+    // 2A. Black Stone Gradient - Directional Lighting
+    // The key here is offsetting the outer circle towards the bottom right (cx - radius * 0.1),
+    // which prevents the "glowing center dot" and makes the highlight wash smoothly over the top left.
+    const gradient = targetCtx.createRadialGradient(
+        cx - currentStoneRadius * 0.3, cy - currentStoneRadius * 0.3, currentStoneRadius * 0.1,
+        cx - currentStoneRadius * 0.1, cy - currentStoneRadius * 0.1, currentStoneRadius * 1.1
+    );
+    gradient.addColorStop(0.0, '#5a5a5a'); // Soft matte highlight at the top left
+    gradient.addColorStop(0.4, '#1a1a1a'); // Mid tone curvature
+    gradient.addColorStop(1.0, '#000000'); // Pure black shadow at the bottom right
+    
+    targetCtx.fillStyle = gradient;
+    targetCtx.beginPath();
+    targetCtx.arc(cx, cy, currentStoneRadius, 0, Math.PI * 2);
+    targetCtx.fill();
+
+} else {
+    // 2B. White Stone Gradient - Directional Lighting
+    const gradient = targetCtx.createRadialGradient(
+        cx - currentStoneRadius * 0.3, cy - currentStoneRadius * 0.3, currentStoneRadius * 0.2,
+        cx - currentStoneRadius * 0.1, cy - currentStoneRadius * 0.1, currentStoneRadius * 1.1
+    );
+    gradient.addColorStop(0.0, '#ffffff'); // Crisp white highlight
+    gradient.addColorStop(0.5, '#e6e6e6'); // Main body volume
+    gradient.addColorStop(1.0, '#a0a0a0'); // Shadowed edge receding into the board
+    
+    targetCtx.fillStyle = gradient;
+    targetCtx.beginPath();
+    targetCtx.arc(cx, cy, currentStoneRadius, 0, Math.PI * 2);
+    targetCtx.fill();
+    
+    // 3. Subtle Rim Edge for White Stones
+    // We disable the shadow before stroking so the border doesn't cast a *second* drop shadow
+    targetCtx.shadowColor = 'transparent';
+    targetCtx.lineWidth = Math.max(0.5, currentStoneRadius * 0.02);
+    targetCtx.strokeStyle = '#888888';
+    targetCtx.stroke();
+}
+
+targetCtx.restore();

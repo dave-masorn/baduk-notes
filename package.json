@@ -1,0 +1,18 @@
+{
+  "name": "baduk-notes",
+  "version": "1.0.0",
+  "description": "",
+  "main": "annotation_v4.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build-docs": "node sync-docs.js && cd tech-log && npx next build --webpack && rm -rf ../tech-log-dist/* && cp -r out/* ../tech-log-dist"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@sabaki/deadstones": "^2.1.2",
+    "esbuild": "^0.28.1"
+  }
+}
