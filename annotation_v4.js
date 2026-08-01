@@ -348,6 +348,44 @@ const sfxAnnotUndo = new Audio('_sfx/annot_undo.wav');
 sfxAnnot.load();
 sfxAnnotUndo.load();
 
+// ---------------------------------------------------------------------------
+// Audio unlock — modern browsers (Chrome, Safari, Firefox) block
+// HTMLAudioElement.play() until the page receives a user-activation gesture;
+// once a site loses its media-engagement status (or after a browser update)
+// sounds can silently stop even though the files still load fine. On the first
+// interaction we pre-play each SFX muted and immediately pause it, satisfying
+// the autoplay policy so every later play() (stone placement, undo,
+// annotation, board flip, replayer) is permitted for the rest of the session.
+// ---------------------------------------------------------------------------
+const sfxGlobalPool = [stoneSound, removeSound, fwd5Sound, sfxAnnot, sfxAnnotUndo];
+(function unlockSfxOnFirstGesture() {
+    let unlocked = false;
+    const unlock = () => {
+        if (unlocked) return;
+        unlocked = true;
+        for (const evt of ['pointerdown', 'keydown', 'touchstart']) {
+            window.removeEventListener(evt, unlock, true);
+        }
+        for (const audio of sfxGlobalPool) {
+            try {
+                audio.muted = true;
+                const p = audio.play();
+                if (p && typeof p.then === 'function') {
+                    p.then(() => { audio.pause(); audio.currentTime = 0; audio.muted = false; })
+                     .catch(() => { audio.muted = false; });
+                } else {
+                    audio.pause();
+                    audio.currentTime = 0;
+                    audio.muted = false;
+                }
+            } catch (e) { /* ignore individual unlock failures */ }
+        }
+    };
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
+    window.addEventListener('touchstart', unlock, true);
+})();
+
 // History management state
 let undoStack = [];
 let redoStack = [];

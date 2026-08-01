@@ -85,6 +85,11 @@ Three-part fix completing the v0.1.026 parity work:
 2. **The Scoring Modal's educational edits are remembered per REC**, stored in localStorage (not SGF): lifted dead stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/interaction mode, and frozen state. Only `DD`/`MA`/`TB`/`TW` go into the SGF (`rec.workingSgf`), regenerated on save.
 3. **All consumers derive identical `DD`/`MA`/`TB`/`TW`** from one shared converter, so the REC SGF file, the export, the modal prop-bars, and the main board can never drift.
 
+Also in this version:
+
+4. **Sound restored across browsers.** All SFX (`stone`, `remove`, `annot`, `board flip`, `replay`) are pre-unlocked on the first user interaction — modern browsers (Chrome/Safari/Firefox) block `HTMLAudioElement.play()` until the page receives a user-activation gesture, so after a browser update or a drop in media-engagement status sounds can stop even though the files load fine. `unlockSfxOnFirstGesture()` (in `annotation_v4.js`, right after the SFX element declarations) silently plays each element muted on the first `pointerdown`/`keydown`/`touchstart` and pauses it, satisfying the autoplay policy for the whole session. No mute toggle involved; the code path and audio files were verified intact (the logs show all `_sfx/*` files served successfully).
+5. **Version-sync system is now self-maintaining and documented.** `sync-docs.js` derives the version from the `SITEMAP.md` frontmatter and auto-patches the `index.html` header label, `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and the `tech_log-{version}.html` redirect (see *SSOT Sync System* in the Tech Log System chapter).
+
 #### Shared converter — `computeScoringPropsFromSession(session)`
 
 Module-level SSOT function that turns a session-shaped object (`scoringState` or `rec.scoringData`) into `{ dd, ma, tb, tw, board: stonesWithDead, rawCounts }`:
@@ -1288,13 +1293,60 @@ All Markdown elements are styled via `#sgf-comment-display` descendant selectors
 
 The project includes a **tech_log** — a standalone Next.js (Fumadocs) documentation site that renders the `SITEMAP.md` content as navigable web pages. It is built and served as static files from `tech-log-dist/`.
 
+### SSOT Sync System — one source of truth, zero drift
+
+Every user-facing surface that shows a version or content keeps in sync automatically from a single source: **the `SITEMAP.md` frontmatter `version:` field** and the **`SITEMAP.md` headings** themselves. `sync-docs.js` is the one sync engine; nothing is hand-edited downstream.
+
+```
+                           ┌──────────────────────────────────────────┐
+                           │        SITEMAP.md  (source of truth)     │
+                           │  frontmatter: version: 0.1.027           │
+                           │  H2/H3 headings + body text              │
+                           └───────────────────┬──────────────────────┘
+                                               │  node sync-docs.js
+                                               ▼
+                                     ┌────────────────────┐
+                                     │     sync-docs.js    │
+                                     │  (single sync point)│
+                                     └──────┬──────┬───────┘
+              version sync                  │      │  content sync
+              (syncVersion)                 │      │  (H2 → MDX pages)
+   ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
+   │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
+   │  "tech_log-0.1.027"          │                        │  index.mdx + meta.json            │
+   ├──────────────────────────────┤                        └───────────────┬──────────────────┘
+   │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
+   │  TECH_LOG_VERSION='0.1.027'  │                                        ▼
+   ├──────────────────────────────┤                        ┌──────────────────────────────────┐
+   │  tech_log-0.1.027.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
+   └──────────────────────────────┘                        └──────────────────────────────────┘
+```
+
+**Rules for "always in sync":**
+
+1. **Version** — bump only `version:` in the `SITEMAP.md` frontmatter, then run `npm run build-docs` (or `node sync-docs.js`). `sync-docs.js`'s `syncVersion()` patches all three version consumers automatically: the `index.html` header link label (`tech_log-{version}`), `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts` (docs nav badge), and creates the `tech_log-{version}.html` redirect file when missing. Running a second time reports *"Version … already in sync across all consumers."*
+2. **Content** — edit only `SITEMAP.md` (or `board-estimate.md` / `liberties.md` / `SGF_COMPLIANCE_UPGRADE_LOG.md`); `sync-docs.js` splits `SITEMAP.md` H2 sections into `.mdx` pages, rebuilds `meta.json` sidebars, and the Next.js static export lands in `tech-log-dist/`.
+3. **Never hand-edit downstream artifacts** — `index.html`'s label, `version.ts`, redirect files, and `tech-log/content/docs/*.mdx` are all generated/patched output. Hand edits are overwritten on the next sync.
+
+**How to update these docs (flow)**
+
+```
+SITEMAP.md (edit: frontmatter version + content)
+  → node sync-docs.js         (syncs version everywhere + regenerates content/docs/*.mdx)
+    → cd tech-log && npx next build --webpack    (static export → tech-log/out/)
+      → cp -r out/* ../tech-log-dist/            (served: http://localhost:8577/tech-log-dist/docs/)
+```
+
+One command does all of it: `npm run build-docs` (defined in the root `package.json`).
+
 ### How It Works
 
 ```
 baduk-notes/
   ├── tech-log/                    ← Next.js source project
   │   ├── source.config.ts         ← Fumadocs: defineDocs({ dir: 'content/docs' })
-  │   ├── content/docs/            ← MDX content files (the source of truth)
+  │   ├── content/docs/            ← MDX content files (GENERATED by sync-docs.js from SITEMAP.md)
   │   │   ├── index.mdx            ← Landing page
   │   │   ├── meta.json            ← Page ordering for sidebar
   │   │   ├── overview/            ← Overview section
@@ -1365,7 +1417,7 @@ The tech log includes a search API at `/api/search` (route handler in `src/app/a
 
 ### How to Update These Docs
 
-When `SITEMAP.md` or any project documentation changes, the tech-log MDX pages must be updated, rebuilt, and synced. Here is the exact workflow:
+When `SITEMAP.md` or any project documentation changes, the tech-log MDX pages must be updated, rebuilt, and synced (structure overview: *SSOT Sync System* above). Here is the exact workflow:
 
 #### Update Flow
 
