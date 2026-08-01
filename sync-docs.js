@@ -54,6 +54,53 @@ function slugify(text) {
     .replace(/-+/g, '-');
 }
 
+// Sync the tech_log version everywhere from the SITEMAP.md frontmatter `version:` field:
+//   - index.html header link label (tech_log-{version})
+//   - tech-log/src/lib/version.ts (TECH_LOG_VERSION, displayed in the docs nav badge)
+//   - the tech_log-{version}.html redirect file (if missing)
+// Bumping only the SITEMAP.md frontmatter keeps every consumer in sync.
+function syncVersion(sitemapContent) {
+  const m = sitemapContent.match(/^version:\s*(v?[0-9]+\.[0-9]+\.[0-9]+)/m);
+  if (!m) {
+    console.warn('syncVersion: no "version:" field in SITEMAP.md frontmatter; skipping version sync.');
+    return;
+  }
+  const ver = m[1].replace(/^v/, '');
+  const label = `tech_log-${ver}`;
+  let synced = 0;
+
+  const indexPath = path.join(ROOT_DIR, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    const html = fs.readFileSync(indexPath, 'utf8');
+    const patched = html.replace(/tech_log-0\.\d+\.\d+/, label);
+    if (patched !== html) {
+      fs.writeFileSync(indexPath, patched, 'utf8');
+      console.log(`Synced index.html label -> ${label}`);
+      synced++;
+    }
+  }
+
+  const versionTsPath = path.join(ROOT_DIR, 'tech-log', 'src', 'lib', 'version.ts');
+  if (fs.existsSync(versionTsPath)) {
+    const ts = fs.readFileSync(versionTsPath, 'utf8');
+    const patched = ts.replace(/TECH_LOG_VERSION\s*=\s*'[^']*'/, `TECH_LOG_VERSION = '${ver}'`);
+    if (patched !== ts) {
+      fs.writeFileSync(versionTsPath, patched, 'utf8');
+      console.log(`Synced version.ts -> ${ver}`);
+      synced++;
+    }
+  }
+
+  const redirectPath = path.join(ROOT_DIR, `${label}.html`);
+  if (!fs.existsSync(redirectPath)) {
+    fs.writeFileSync(redirectPath, `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>${label}</title><script>window.location.replace("tech-log-dist/docs/");</script></head><body></body></html>\n`, 'utf8');
+    console.log(`Created ${label}.html redirect`);
+    synced++;
+  }
+
+  if (synced === 0) console.log(`Version ${ver} already in sync across all consumers.`);
+}
+
 function run() {
   console.log('Starting documentation sync...');
   ensureDirSync(DOCS_CONTENT_DIR);
@@ -65,6 +112,9 @@ function run() {
     return;
   }
   const sitemapContent = fs.readFileSync(sitemapPath, 'utf8');
+
+  // Keep tech_log version in sync everywhere from the SITEMAP.md frontmatter
+  syncVersion(sitemapContent);
 
   // Split SITEMAP.md into sections
   // We can use a regex to split by H2 headers: \n## (.*?)\n

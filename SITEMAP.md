@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.026
+version: 0.1.027
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -1319,7 +1319,7 @@ baduk-notes/
   │   │       └── reference-tables.mdx
   │   ├── src/lib/
   │   │   ├── source.ts            ← Fumadocs loader: loader({ baseUrl: '/docs', source: docs.toFumadocsSource() })
-  │   │   └── version.ts           ← TECH_LOG_VERSION = '0.1.004' (displayed in nav)
+  │   │   └── version.ts           ← TECH_LOG_VERSION (auto-synced to SITEMAP.md frontmatter by sync-docs.js)
   │   └── src/app/docs/
   │       ├── layout.tsx           ← DocsLayout with nav title + version badge
   │       └── [[...slug]]/page.tsx ← Catch-all route: resolves slug → MDX page
@@ -1337,9 +1337,11 @@ baduk-notes/
 
 ### Version Display
 
-The version string (`TECH_LOG_VERSION`) is displayed in two places:
+The version string (`TECH_LOG_VERSION`) is displayed in two places, both auto-synced by `sync-docs.js` from the `SITEMAP.md` frontmatter `version:` field:
 1. **Tech log nav bar** — `<span style={{ color: '#9F2627' }}>{TECH_LOG_VERSION}</span>` next to the "baduk-notes" title in the docs layout
 2. **Main app header** — `<a href="/tech-log-dist/docs/">tech_log-{version}</a>` link in `index.html` (line 298)
+
+`sync-docs.js` also creates the `tech_log-{version}.html` redirect file when missing. To bump the version, change **only** the `version:` field in the `SITEMAP.md` frontmatter and run `npm run build-docs` (or `node sync-docs.js`); every consumer is patched automatically.
 
 ### URL Routing
 
@@ -1380,18 +1382,12 @@ SITEMAP.md (source of truth)
 1. **Edit `SITEMAP.md` or standalone doc files (`board-estimate.md`, `liberties.md`)**:
    - `SITEMAP.md` is the primary source of truth. Running `node sync-docs.js` automatically parses `SITEMAP.md` H2 headers into matching `.mdx` pages in `tech-log/content/docs/`.
 
-2. **Bump the version across all references**:
-   - Edit `tech-log/src/lib/version.ts`:
-     ```typescript
-     export const TECH_LOG_VERSION = '0.1.007';
+2. **Bump the version**:
+   - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
+     ```yaml
+     version: 0.1.027
      ```
-   - Edit `SITEMAP.md` frontmatter: `version: 0.1.007`
-   - Edit `index.html` main header link (line 298): `tech_log-0.1.007`
-   - Create redirect file `tech_log-0.1.007.html`:
-     ```html
-     <!DOCTYPE html>
-     <html><head><script>window.location.replace("tech-log-dist/docs/");</script></head></html>
-     ```
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.027`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.027.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1404,7 +1400,7 @@ SITEMAP.md (source of truth)
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.007`) in the sidebar
+   - Version badge shows the new version (`0.1.027`) in the sidebar
    - Updated content renders cleanly
 
 ---
