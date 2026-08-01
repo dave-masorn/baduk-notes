@@ -77,6 +77,46 @@ How the application files interact — UI shell, script load order, scoring pipe
                 tech-log-dist/docs/
 ```
 
+### v0.1.027 — Manual Scoring snapshot persistence + session ⇄ SGF sync (single source of truth)
+
+Three-part fix completing the v0.1.026 parity work:
+
+1. **Manually marked territory no longer falls back to auto-derived territory.** `saveScoringResult` previously wrote `rec.scoringData` without `manualTerritory` (and without `frozen`/dirty flags), so reopening the modal or re-running the score silently discarded the user's explicit territory marks and re-derived them automatically. `saveScoringResult` now persists the **exact last-edited board** as the per-REC snapshot.
+2. **The Scoring Modal's educational edits are remembered per REC**, stored in localStorage (not SGF): lifted dead stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/interaction mode, and frozen state. Only `DD`/`MA`/`TB`/`TW` go into the SGF (`rec.workingSgf`), regenerated on save.
+3. **All consumers derive identical `DD`/`MA`/`TB`/`TW`** from one shared converter, so the REC SGF file, the export, the modal prop-bars, and the main board can never drift.
+
+#### Shared converter — `computeScoringPropsFromSession(session)`
+
+Module-level SSOT function that turns a session-shaped object (`scoringState` or `rec.scoringData`) into `{ dd, ma, tb, tw, board: stonesWithDead, rawCounts }`:
+
+- `DD`/`MA` from `markedDead`; `stonesWithDead` like before;
+- `TB`/`TW` = explicit `manualTerritory` wins (1 = black, 2 = white); else GoScorer auto-derived;
+- guards null `markedDead`/board rows; honors `session.ruleMode || 'japanese'`.
+
+Both `computeSgfPropsFromScoringData(data)` (export/viewer/inject/session-fallback — kept its `null` guard, which some consumers depend on) and `computeSgfPropertyBars()` (modal bar widget) now delegate to it, replacing two implementations that could drift.
+
+#### `buildScoringSessionSnapshot()` — one builder for every persisted copy
+
+Single snapshot builder used by both `closeScoringModal` (→ `_scoringPersistData`) and `saveScoringResult` (→ `rec.scoringData`). `saveScoringResult` finalizes the session state **before** building the snapshot: `_scoringDirty = false`, `_scoringHasSaved = true`, `setScoringFrozen(true)` (all unconditional — record-or-not), then persists the snapshot and regenerates `rec.workingSgf` so downloaded SGFs carry `DD`/`MA`/`TB`/`TW`.
+
+#### Legacy migration — `normalizeScoringSession(session)`
+
+Records saved before v0.1.027 have `scoringData` with no `manualTerritory` key. `normalizeScoringSession` returns the session unchanged if it already has manual territory marks; otherwise it looks up `findEndgameMarkup(false)` (SGF tree only — never the session being normalized) and, if the tree has `TB`/`TW`, returns a **new** session object with `manualTerritory` backfilled (1 = black, 2 = white) on empty, non-dead intersections. Used in `resolveScoringInputs`'s session tiers and in `restoreScoringFromSavedData` (which swaps in the backfilled `manualTerritory`). So a legacy record's recorded territory is treated as the user's explicit territory, not re-derived.
+
+#### `findEndgameMarkup(includeSession)`
+
+New opt-out param on the session fallback tier (`includeSession !== false`), so backfill reads only the SGF tree.
+
+#### Territory seeding on reset
+
+`resetScoringBoardFromState` now also seeds `manualTerritory` from the resolved markup's `TB`/`TW` (empty, non-dead intersections only) — a freshly opened session shows the recorded territory explicitly instead of silently auto-deriving.
+
+#### Export/viewer backstop sync
+
+Both injection sites (export ~line 2165 and viewer ~line 2255) now use `hasAllSgfScoringProps(sgfStr, props)` (checks each non-empty prop's `DD[`/`MA[`/`TB[`/`TW[` presence in the SGF string) and inject session-derived props whenever any is missing — replacing the old `!DD[ && !TB[` guard.
+
+(Headless-verified: 17 harness scenarios — snapshot persistence incl. manual territory + frozen; prop-bar vs converter identity; legacy backfill; reopened-modal restore; plus probes confirming each fix has a failing test when reverted.)
+
 ### v0.1.026 — Unified scoring-input resolution (blue panel ⇄ Manual Scoring parity)
 
 Fixes the residual mismatch where the blue-panel Run score differed from the Manual Scoring Modal's score for a saved study record. The fix is **not** a per-record patch and **not** a `source` flag branching the scorer — it is a single canonical resolution chain consumed identically by both surfaces.

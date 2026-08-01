@@ -109,7 +109,7 @@ The scorer requires Life & Death data for the *position it scores*. Historically
 3. **Filtered sequence**: the last markup-bearing move in `state.sgfMoves`.
 4. **Root props**: `state.sgfRootProps` / `state.sgfMetadata.tb` / `.tw`.
 5. **Raw main line**: the last markup-bearing node of `SgfEngine.extractMainLine(state.sgfTree)` — catches terminal annotation-only nodes that loadSGF could not fold onto a move.
-6. **Saved scoring session**: the study record's `rec.scoringData`, converted through the shared `computeSgfPropsFromScoringData` (see *Unified Scoring-Input Resolution* below) — for records whose `workingSgf` string never received the props.
+6. **Saved scoring session**: the study record's `rec.scoringData`, converted through the shared `computeSgfPropsFromScoringData` (see *Unified Scoring-Input Resolution* below) — for records whose `workingSgf` string never received the props. `findEndgameMarkup(includeSession)` now takes an opt-out param: callers like `normalizeScoringSession` pass `false` to read **only** the SGF tree, never the session being normalized.
 
 Whenever the resolved markup is **not** on the current node, the engine **replays the entire game in memory** onto a fresh board using `playStoneWithCaptures`, accumulating full-game capture tallies (`compCaptures`) and reconstructing the exact terminal position (`compBoard`), and labels the card `Endgame position (move N)`.
 
@@ -129,6 +129,18 @@ A session that resolves **nothing** (no dead marks, no territory) is skipped so 
 
 `computeSgfPropsFromScoringData` was hoisted to module top level (it is a pure function of `data`) and now also returns the restored `board`; `findEndgameMarkup`'s step 6 delegates to it, so every consumer derives identical `DD`/`MA`/`TB`/`TW` sets. `window.resolveScoringInputs` and `window.findEndgameMarkup` are exposed for console diagnostics.
 
+Since v0.1.027 both `computeSgfPropsFromScoringData` and the modal's bar widget (`computeSgfPropertyBars`) delegate to **one** module-level converter, `computeScoringPropsFromSession(session)`, so `DD`/`MA`/`TB`/`TW` can never drift between surfaces. Rules: `DD`/`MA` come from `markedDead`; `TB`/`TW` use the session's **explicit `manualTerritory` when present** (1 = black, 2 = white), otherwise GoScorer auto-derivation; `session.ruleMode || 'japanese'` selects the rule set; null `markedDead`/board rows are guarded.
+
+### Scoring Session Snapshot Persistence (per REC, localStorage)
+
+`buildScoringSessionSnapshot()` is the single builder for every persisted copy of the scoring board: `closeScoringModal` stores it in `_scoringPersistData` (live session memory), and `saveScoringResult` stores it in `rec.scoringData`. The snapshot captures the **exact last-edited board** — lifted dead stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/interaction mode, and frozen state — and persists **per record** via `StudyRecordDB` (localStorage), **not** in SGF. Only `DD`/`MA`/`TB`/`TW`, derived from that snapshot by the shared converter, are written to `rec.workingSgf`.
+
+This fixes two defects: manually marked territory no longer silently falls back to auto-derived territory on reopen (the old `saveScoringResult` dropped `manualTerritory`), and the modal's educational edits (rearranged/replaced stones, etc.) survive page reloads because they are remembered per REC rather than only in memory.
+
+#### Legacy migration — `normalizeScoringSession(session)`
+
+Records saved before v0.1.027 lack `manualTerritory` in `scoringData`. `normalizeScoringSession` returns the session unchanged if it already has manual territory marks; otherwise it calls `findEndgameMarkup(false)` (SGF tree only) and, when the tree has `TB`/`TW`, returns a **new** session object with `manualTerritory` backfilled (1 = black, 2 = white) on empty, non-dead intersections. It is applied in `resolveScoringInputs`'s session tiers and in `restoreScoringFromSavedData`, so a legacy record's recorded territory is honored as the user's explicit territory instead of being re-derived.
+
 ### Terminal-Markup Fold — Full Main-Line Scan
 
 `loadSGF` folds endgame markup from non-move terminal nodes onto the final move so scorers can resolve Life & Death. The fold previously scanned only the trailing 12 main-line nodes; it now finds the last **move** node in the main line and scans **only the annotation-only nodes strictly after it**, folding the last markup-bearing one onto the final move. No arbitrary window, and mid-game markup is never folded onto the final move.
@@ -138,7 +150,7 @@ A session that resolves **nothing** (no dead marks, no territory) is skipped so 
 Two algorithmic changes fix stale dead-stone marks when reopening Manual Scoring:
 
 - **`openScoringModal(savedData)`** restores the most recent session when called without explicit data (e.g. from the Estimation panel's **Open Manual Scoring Modal** button): first `_scoringPersistData` (the most recently closed session), then `StudyRecordDB.getRecord(state.activeStudyId).scoringData` — so a fresh page load still shows the latest saved marks.
-- **`resetScoringBoardFromState()`** seeds `scoringState.markedDead` from the game's own `DD`/`MA`/`TB`/`TW` markup (via `findEndgameMarkup`): `DD`/`MA` points are marked dead directly; opponent stones inside `TB`/`TW` territory bounds are dead. A fresh session starts from the game's resolved Life & Death marks instead of an empty board.
+- **`resetScoringBoardFromState()`** seeds `scoringState.markedDead` from the game's own `DD`/`MA`/`TB`/`TW` markup (via `findEndgameMarkup`): `DD`/`MA` points are marked dead directly; opponent stones inside `TB`/`TW` territory bounds are dead. A fresh session starts from the game's resolved Life & Death marks instead of an empty board. Since v0.1.027 it also seeds `scoringState.manualTerritory` from `TB`/`TW` (empty, non-dead intersections only), so a freshly opened session shows the recorded territory explicitly rather than silently auto-deriving it.
 
 ### Computational Method (Blue Panel) & No-Markup Warning
 

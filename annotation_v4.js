@@ -2162,10 +2162,13 @@ function setupEventListeners() {
         const exportFilename = `${baseName}—${rec.recNo}.sgf`;
         let cleanSgf = rec.workingSgf;
 
-        // If rec has scoringData but workingSgf does not have DD/TB markup, inject scoring props into terminal node
-        if (rec.scoringData && (!cleanSgf.includes('DD[') && !cleanSgf.includes('TB['))) {
+        // SSOT sync: the saved scoring session is the canonical source for DD/MA/TB/TW. When
+        // the stored workingSgf is missing any of the session-derived scoring props (legacy
+        // records, or saves predating manualTerritory persistence), inject the canonical values
+        // into the terminal node so the downloaded file always matches the session.
+        if (rec.scoringData) {
             const props = computeSgfPropsFromScoringData(rec.scoringData);
-            if (props) {
+            if (props && !hasAllSgfScoringProps(cleanSgf, props)) {
                 cleanSgf = injectSgfScoringPropsIntoTerminalNode(cleanSgf, props);
             }
         }
@@ -2252,10 +2255,13 @@ function setupEventListeners() {
 
         let cleanSgf = rec.workingSgf;
 
-        // If rec has scoringData but workingSgf does not have DD/TB markup, inject scoring props into terminal node
-        if (rec.scoringData && (!cleanSgf.includes('DD[') && !cleanSgf.includes('TB['))) {
+        // SSOT sync: the saved scoring session is the canonical source for DD/MA/TB/TW. When
+        // the stored workingSgf is missing any of the session-derived scoring props (legacy
+        // records, or saves predating manualTerritory persistence), inject the canonical values
+        // into the terminal node so the code viewer always matches the session.
+        if (rec.scoringData) {
             const props = computeSgfPropsFromScoringData(rec.scoringData);
-            if (props) {
+            if (props && !hasAllSgfScoringProps(cleanSgf, props)) {
                 cleanSgf = injectSgfScoringPropsIntoTerminalNode(cleanSgf, props);
             }
         }
@@ -2770,6 +2776,14 @@ function setupEventListeners() {
         sgfCodeOverlay.addEventListener('click', (e) => {
             if (e.target === sgfCodeOverlay) closeSgfCodeViewerModal();
         });
+    }
+
+    function hasAllSgfScoringProps(sgfStr, props) {
+        if (!props) return true;
+        return (!props.dd || !props.dd.length || sgfStr.includes('DD[')) &&
+               (!props.ma || !props.ma.length || sgfStr.includes('MA[')) &&
+               (!props.tb || !props.tb.length || sgfStr.includes('TB[')) &&
+               (!props.tw || !props.tw.length || sgfStr.includes('TW['));
     }
 
     function injectSgfScoringPropsIntoTerminalNode(sgfStr, props) {
@@ -10113,31 +10127,46 @@ window.switchBranchAndGoToNode = switchBranchAndGoToNode;
 // Returns { dd, ma, tb, tw } (compressed point strings) plus `board`: the session board with
 // lifted (dead) stones restored to their original colors — exactly the grid GoScorer scores,
 // so a consumer can reproduce the modal's prisoner counts for an identical total.
-function computeSgfPropsFromScoringData(data) {
-    if (!data || !data.board || !data.markedDead) return null;
+// ── SSOT: one canonical scoring-session → SGF-props converter ──────────────
+// Every consumer (modal prop-bar widget, saveScoringResult, SGF export/viewer
+// injection, findEndgameMarkup's session fallback, resolveScoringInputs) derives
+// DD/MA/TB/TW from this single function, so a session always produces identical
+// marks no matter which surface reads it. The input is session-shaped (the live
+// `scoringState` or a persisted `rec.scoringData` snapshot are interchangeable).
+function computeScoringPropsFromSession(session) {
     const dd = [];
     const ma = [];
     const tb = [];
     const tw = [];
+    const ruleMode = (session.ruleMode || 'japanese');
+    const boardData = session.board || [];
+    const markedDead = session.markedDead || null;
+    const deadInfo = session.deadStonesInfo || null;
+    const manualTerritory = session.manualTerritory || null;
 
-    for (let r = 0; r < 19; r++) {
-        for (let c = 0; c < 19; c++) {
-            if (data.markedDead[r] && data.markedDead[r][c]) {
-                const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
-                    ? SgfEngine.formatGoPoint(c, r)
-                    : null;
-                if (pt) {
-                    dd.push(pt);
-                    ma.push(pt);
+    // DD & MA: every position currently marked dead (MA mirrors DD by convention)
+    if (markedDead) {
+        for (let r = 0; r < 19; r++) {
+            const row = markedDead[r];
+            if (!row) continue;
+            for (let c = 0; c < 19; c++) {
+                if (row[c]) {
+                    const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
+                        ? SgfEngine.formatGoPoint(c, r)
+                        : null;
+                    if (pt) {
+                        dd.push(pt);
+                        ma.push(pt);
+                    }
                 }
             }
         }
     }
 
-    const stonesWithDead = data.board.map((row, ri) =>
+    const stonesWithDead = boardData.map((row, ri) =>
         row.map((val, ci) => {
-            if (data.markedDead[ri] && data.markedDead[ri][ci] && val === 0) {
-                return (data.deadStonesInfo && data.deadStonesInfo[ri] && data.deadStonesInfo[ri][ci]) || 0;
+            if (markedDead && markedDead[ri] && markedDead[ri][ci] && val === 0) {
+                return (deadInfo && deadInfo[ri] && deadInfo[ri][ci]) || 0;
             }
             return val;
         })
@@ -10147,23 +10176,26 @@ function computeSgfPropsFromScoringData(data) {
     let areaScores = null;
     if (window.GoScorer) {
         try {
-            if ((data.ruleMode || 'japanese') === 'japanese') {
-                locScores = window.GoScorer.territoryScoring(stonesWithDead, data.markedDead, false);
+            if (ruleMode === 'japanese') {
+                locScores = window.GoScorer.territoryScoring(stonesWithDead, markedDead, false);
             } else {
-                areaScores = window.GoScorer.areaScoring(stonesWithDead, data.markedDead);
+                areaScores = window.GoScorer.areaScoring(stonesWithDead, markedDead);
             }
         } catch (e) {}
     }
 
+    // TB & TW: territory intersections (explicit manual marks win; auto-derived otherwise)
     for (let r = 0; r < 19; r++) {
+        const row = boardData[r];
+        if (!row) continue;
         for (let c = 0; c < 19; c++) {
-            if (data.board[r][c] !== 0) continue;
+            if (row[c] !== 0) continue;
             let terrColor = 0;
-            if (data.manualTerritory && data.manualTerritory[r] && data.manualTerritory[r][c] > 0) {
-                terrColor = data.manualTerritory[r][c];
-            } else if ((data.ruleMode || 'japanese') === 'japanese' && locScores) {
+            if (manualTerritory && manualTerritory[r] && manualTerritory[r][c] > 0) {
+                terrColor = manualTerritory[r][c];
+            } else if (ruleMode === 'japanese' && locScores) {
                 terrColor = (locScores[r][c] && locScores[r][c].isTerritoryFor) || 0;
-            } else if ((data.ruleMode || 'japanese') === 'chinese' && areaScores) {
+            } else if (ruleMode === 'chinese' && areaScores) {
                 terrColor = (areaScores[r] && areaScores[r][c]) || 0;
             }
 
@@ -10188,11 +10220,70 @@ function computeSgfPropsFromScoringData(data) {
         ma: compFn(ma),
         tb: compFn(tb),
         tw: compFn(tw),
-        board: stonesWithDead
+        board: stonesWithDead,
+        rawCounts: { dd: dd.length, ma: ma.length, tb: tb.length, tw: tw.length }
     };
 }
 
-function findEndgameMarkup() {
+function computeSgfPropsFromScoringData(data) {
+    if (!data || !data.board || !data.markedDead) return null;
+    return computeScoringPropsFromSession(data);
+}
+
+// ── Legacy migration: reconcile a session missing manual territory ──────────
+// Sessions saved by older builds did NOT persist manualTerritory (the bug that made
+// manually-marked territory silently fall back to auto-derived territory). When a
+// restored session has no manual territory marks but the loaded SGF carries TB/TW,
+// recover the recorded territory from the SGF tree so every downstream consumer —
+// the reopened modal, the prop bars, the blue-panel Run score, the export — sees the
+// saved territory instead of auto-derived points. The tree-only lookup (includeSession
+// = false) avoids reading back the very session we are normalizing. Pure: returns a
+// NEW session when it backfills, the same reference otherwise (never mutates).
+function normalizeScoringSession(session) {
+    if (!session || !session.board) return session;
+    const mt = session.manualTerritory;
+    let hasManual = false;
+    if (mt) {
+        outer: for (let r = 0; r < 19; r++) {
+            const row = mt[r];
+            if (!row) continue;
+            for (let c = 0; c < 19; c++) {
+                if (row[c]) { hasManual = true; break outer; }
+            }
+        }
+    }
+    if (hasManual) return session;
+
+    const mk = findEndgameMarkup(false);
+    if (!mk || (!mk.TB && !mk.TW)) return session;
+
+    const bw = (session.board[0] && session.board[0].length) || 19;
+    const bh = session.board.length || 19;
+    const md = session.markedDead || null;
+    const out = {
+        ...session,
+        manualTerritory: mt ? mt.map(r => (r ? [...r] : r)) : Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => 0))
+    };
+    if (mk.TB) {
+        SgfEngine.expandPointList(mk.TB, bw, bh).forEach(pt => {
+            const row = session.board[pt.r];
+            if (!row || row[pt.c] !== 0) return;
+            if (md && md[pt.r] && md[pt.r][pt.c]) return;
+            out.manualTerritory[pt.r][pt.c] = 1;
+        });
+    }
+    if (mk.TW) {
+        SgfEngine.expandPointList(mk.TW, bw, bh).forEach(pt => {
+            const row = session.board[pt.r];
+            if (!row || row[pt.c] !== 0) return;
+            if (md && md[pt.r] && md[pt.r][pt.c]) return;
+            out.manualTerritory[pt.r][pt.c] = 2;
+        });
+    }
+    return out;
+}
+
+function findEndgameMarkup(includeSession) {
     const hasMarkup = (m) => !!(m && (m.DD || m.MA || m.TB || m.TW));
 
     if (state.currentMoveIndex >= 0 && state.sgfMoves && hasMarkup(state.sgfMoves[state.currentMoveIndex])) {
@@ -10237,7 +10328,8 @@ function findEndgameMarkup() {
     // string) would otherwise appear "unmarked" to the scorer while the user sees them in the
     // buffer. Rebuild the props through the shared canonical converter so this fallback always
     // derives the exact same marks the Manual Scoring Modal derives for that session.
-    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+    // `includeSession === false` skips this tier (used for tree-only lookups).
+    if (includeSession !== false && state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
         if (rec && rec.scoringData) {
             const props = computeSgfPropsFromScoringData(rec.scoringData);
@@ -10280,10 +10372,10 @@ function resolveScoringInputs() {
     // ── Tier 1/2: Manual Scoring session (live memory, then persisted record) ──
     let session = null;
     if (_scoringPersistData && _scoringPersistData.board) {
-        session = _scoringPersistData;
+        session = normalizeScoringSession(_scoringPersistData);
     } else if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
-        if (rec && rec.scoringData && rec.scoringData.board) session = rec.scoringData;
+        if (rec && rec.scoringData && rec.scoringData.board) session = normalizeScoringSession(rec.scoringData);
     }
 
     if (session) {
@@ -14812,6 +14904,21 @@ function resetScoringBoardFromState() {
         applyMark(markupMove.MA, false);
         applyMark(markupMove.TB, true, 2);
         applyMark(markupMove.TW, true, 1);
+
+        // Mirror the territory side too: seed manualTerritory from the resolved TB/TW so the
+        // fresh session shows the recorded territory explicitly (never silently auto-derived).
+        // Only empty, non-dead intersections are claimed.
+        const applyTerritory = (list, terrColor) => {
+            if (!list) return;
+            SgfEngine.expandPointList(list, bw, bh).forEach(pt => {
+                const v = scoringState.board[pt.r] && scoringState.board[pt.r][pt.c];
+                if (v !== 0) return;
+                if (scoringState.markedDead[pt.r][pt.c]) return;
+                scoringState.manualTerritory[pt.r][pt.c] = terrColor;
+            });
+        };
+        applyTerritory(markupMove.TB, 1);
+        applyTerritory(markupMove.TW, 2);
     }
 
     updateScoringSaveButton();
@@ -14909,28 +15016,38 @@ function openScoringModal(savedData) {
     drawBoard();
 }
 
+// ── SSOT: one builder defines the persisted scoring-session snapshot shape ──
+// The SAME snapshot is written to _scoringPersistData (in-page memory) and to
+// rec.scoringData (the per-REC persistent snapshot in the web/localStorage).
+// Every field the modal needs to reconstruct the EXACT last-edited board —
+// lifted dead stones, manual territory, rearrange/replace buckets, captures,
+// komi, rule/interaction mode, frozen state, dirty flags — is captured here.
+function buildScoringSessionSnapshot() {
+    return {
+        board: scoringState.board.map(r => [...r]),
+        markedDead: scoringState.markedDead.map(r => [...r]),
+        deadStonesInfo: scoringState.deadStonesInfo.map(r => [...r]),
+        manualTerritory: scoringState.manualTerritory.map(r => [...r]),
+        bucketBlack: [...scoringState.bucketBlack],
+        bucketWhite: [...scoringState.bucketWhite],
+        rearrangeBlack: [...scoringState.rearrangeBlack],
+        rearrangeWhite: [...scoringState.rearrangeWhite],
+        deadWhite: [...scoringState.deadWhite],
+        deadBlack: [...scoringState.deadBlack],
+        ruleMode: scoringState.ruleMode,
+        interactionMode: scoringState.interactionMode,
+        komi: scoringState.komi,
+        blackCaptures: scoringState.blackCaptures,
+        whiteCaptures: scoringState.whiteCaptures,
+        frozen: scoringState.frozen,
+        _scoringDirty: _scoringDirty,
+        _scoringHasSaved: _scoringHasSaved
+    };
+}
+
 function closeScoringModal() {
     if (scoringState.active) {
-        _scoringPersistData = {
-            board: scoringState.board.map(r => [...r]),
-            markedDead: scoringState.markedDead.map(r => [...r]),
-            deadStonesInfo: scoringState.deadStonesInfo.map(r => [...r]),
-            manualTerritory: scoringState.manualTerritory.map(r => [...r]),
-            bucketBlack: [...scoringState.bucketBlack],
-            bucketWhite: [...scoringState.bucketWhite],
-            rearrangeBlack: [...scoringState.rearrangeBlack],
-            rearrangeWhite: [...scoringState.rearrangeWhite],
-            deadWhite: [...scoringState.deadWhite],
-            deadBlack: [...scoringState.deadBlack],
-            ruleMode: scoringState.ruleMode,
-            interactionMode: scoringState.interactionMode,
-            komi: scoringState.komi,
-            blackCaptures: scoringState.blackCaptures,
-            whiteCaptures: scoringState.whiteCaptures,
-            frozen: scoringState.frozen,
-            _scoringDirty: _scoringDirty,
-            _scoringHasSaved: _scoringHasSaved
-        };
+        _scoringPersistData = buildScoringSessionSnapshot();
     }
     scoringState.active = false;
     const overlay = document.getElementById('scoring-modal-overlay');
@@ -15065,25 +15182,22 @@ function saveScoringResult() {
         }
     }
 
+    // Save always finalizes the session state (saved flags, frozen) regardless of whether a
+    // study record exists; the record block then snapshots the exact last-edited board.
+    _scoringDirty = false;
+    _scoringHasSaved = true;
+    setScoringFrozen(true);
+
     if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
         if (rec) {
-            rec.scoringData = {
-                board: scoringState.board.map(r => [...r]),
-                markedDead: scoringState.markedDead.map(r => [...r]),
-                deadStonesInfo: scoringState.deadStonesInfo.map(r => [...r]),
-                bucketBlack: [...scoringState.bucketBlack],
-                bucketWhite: [...scoringState.bucketWhite],
-                rearrangeBlack: [...scoringState.rearrangeBlack],
-                rearrangeWhite: [...scoringState.rearrangeWhite],
-                deadWhite: [...scoringState.deadWhite],
-                deadBlack: [...scoringState.deadBlack],
-                ruleMode: scoringState.ruleMode,
-                interactionMode: scoringState.interactionMode,
-                komi: scoringState.komi,
-                blackCaptures: scoringState.blackCaptures,
-                whiteCaptures: scoringState.whiteCaptures
-            };
+            // Persist the exact last-edited scoring board as the per-REC snapshot: lifted dead
+            // stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/
+            // interaction mode, and frozen state. This is the single source of truth for what
+            // the modal shows on reopen AND for the blue panel's Run score; DD/MA/TB/TW are
+            // derived from it by the shared converter. Territory is intentionally NOT stored
+            // as auto-derived points here — manualTerritory is what the user actually marked.
+            rec.scoringData = buildScoringSessionSnapshot();
 
             // Update rec.workingSgf so downloaded SGF files contain DD / MA / TB / TW
             if (typeof generateCurrentSgfString === 'function') {
@@ -15097,9 +15211,6 @@ function saveScoringResult() {
     const badge = document.getElementById('sgf-prop-bars-save-badge');
     if (badge) badge.style.display = '';
 
-    _scoringDirty = false;
-    _scoringHasSaved = true;
-    setScoringFrozen(true);
     updateScoringSaveButton();
 }
 
@@ -15108,6 +15219,21 @@ function restoreScoringFromSavedData(data) {
     scoringState.markedDead = data.markedDead.map(r => [...r]);
     scoringState.deadStonesInfo = data.deadStonesInfo ? data.deadStonesInfo.map(r => [...r]) : Array.from({length: 19}, () => Array.from({length: 19}, () => null));
     scoringState.manualTerritory = data.manualTerritory ? data.manualTerritory.map(r => [...r]) : Array.from({length: 19}, () => Array.from({length: 19}, () => 0));
+    // Legacy migration: sessions saved before manualTerritory was persisted carried no
+    // territory marks and silently fell back to auto-derived territory. If this snapshot has
+    // no manual territory but the loaded SGF tree records TB/TW, recover the saved territory
+    // so the reopened modal (and every downstream consumer) respects it.
+    {
+        const norm = normalizeScoringSession({
+            board: scoringState.board,
+            markedDead: scoringState.markedDead,
+            manualTerritory: scoringState.manualTerritory,
+            ruleMode: scoringState.ruleMode
+        });
+        if (norm && norm.manualTerritory && norm.manualTerritory !== scoringState.manualTerritory) {
+            scoringState.manualTerritory = norm.manualTerritory;
+        }
+    }
     scoringState.bucketBlack = [...(data.bucketBlack || [])];
     scoringState.bucketWhite = [...(data.bucketWhite || [])];
     scoringState.rearrangeBlack = [...(data.rearrangeBlack || [])];
@@ -15281,91 +15407,9 @@ function updateScoringUI() {
  * where each element is an SGF point like "cc" or "qq".
  */
 function computeSgfPropertyBars() {
-    const dd = [];
-    const ma = [];
-    const tb = [];
-    const tw = [];
-
-    // ── DD & MA: every position currently marked dead ──────────────────────
-    for (let r = 0; r < 19; r++) {
-        for (let c = 0; c < 19; c++) {
-            if (scoringState.markedDead[r][c]) {
-                const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
-                    ? SgfEngine.formatGoPoint(c, r)
-                    : null;
-                if (pt) {
-                    dd.push(pt);
-                    ma.push(pt); // MA mirrors DD by convention
-                }
-            }
-        }
-    }
-
-    // ── TB & TW: territory intersections ───────────────────────────────────
-    // Re-run same scoring logic used during board rendering.
-    const stonesWithDead = scoringState.board.map((row, ri) =>
-        row.map((val, ci) => {
-            if (scoringState.markedDead[ri][ci] && val === 0) {
-                return scoringState.deadStonesInfo[ri][ci] || 0;
-            }
-            return val;
-        })
-    );
-
-    let locScores = null;
-    let areaScores = null;
-
-    if (window.GoScorer) {
-        try {
-            if (scoringState.ruleMode === 'japanese') {
-                locScores = window.GoScorer.territoryScoring(stonesWithDead, scoringState.markedDead, false);
-            } else {
-                areaScores = window.GoScorer.areaScoring(stonesWithDead, scoringState.markedDead);
-            }
-        } catch (e) { /* ignore */ }
-    }
-
-    for (let r = 0; r < 19; r++) {
-        for (let c = 0; c < 19; c++) {
-            if (scoringState.board[r][c] !== 0) continue; // only empty intersections
-
-            let terrColor = 0;
-            if (scoringState.manualTerritory[r][c] > 0) {
-                terrColor = scoringState.manualTerritory[r][c];
-            } else if (scoringState.ruleMode === 'japanese' && locScores) {
-                terrColor = (locScores[r][c] && locScores[r][c].isTerritoryFor) || 0;
-            } else if (scoringState.ruleMode === 'chinese' && areaScores) {
-                terrColor = (areaScores[r] && areaScores[r][c]) || 0;
-            }
-
-            if (terrColor === 1 || terrColor === 2) {
-                const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
-                    ? SgfEngine.formatGoPoint(c, r)
-                    : null;
-                if (pt) {
-                    if (terrColor === 1) tb.push(pt);
-                    else tw.push(pt);
-                }
-            }
-        }
-    }
-
-    const compFn = (typeof SgfEngine !== 'undefined' && SgfEngine.compressGoPoints)
-        ? SgfEngine.compressGoPoints
-        : (pts => pts);
-
-    return {
-        dd: compFn(dd),
-        ma: compFn(ma),
-        tb: compFn(tb),
-        tw: compFn(tw),
-        rawCounts: {
-            dd: dd.length,
-            ma: ma.length,
-            tb: tb.length,
-            tw: tw.length
-        }
-    };
+    // SSOT: delegate to the single canonical session→props converter so the prop-bar
+    // widget, the SGF save path, and every other consumer can never drift apart.
+    return computeScoringPropsFromSession(scoringState);
 }
 
 /**
