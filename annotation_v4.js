@@ -1216,41 +1216,45 @@ function setupEventListeners() {
     window.addEventListener('mouseup', handleMouseUp);
 
     // Copy Code Button
-    elements.btnCopyCode.addEventListener('click', () => {
-        const codeText = elements.repCodeOutput.value;
-        if (!codeText) return;
-        navigator.clipboard.writeText(codeText)
-            .then(() => {
-                const prevText = elements.btnCopyCode.innerHTML;
-                elements.btnCopyCode.innerHTML = 'Copied!';
-                setTimeout(() => {
-                    elements.btnCopyCode.innerHTML = prevText;
-                }, 1500);
-            })
-            .catch(err => {
-                console.error('Failed to copy code: ', err);
-                alert('Could not copy code. Please select and copy manually.');
-            });
-    });
+    if (elements.btnCopyCode && elements.repCodeOutput) {
+        elements.btnCopyCode.addEventListener('click', () => {
+            const codeText = elements.repCodeOutput.value;
+            if (!codeText) return;
+            navigator.clipboard.writeText(codeText)
+                .then(() => {
+                    const prevText = elements.btnCopyCode.innerHTML;
+                    elements.btnCopyCode.innerHTML = 'Copied!';
+                    setTimeout(() => {
+                        elements.btnCopyCode.innerHTML = prevText;
+                    }, 1500);
+                })
+                .catch(err => {
+                    console.error('Failed to copy code: ', err);
+                    alert('Could not copy code. Please select and copy manually.');
+                });
+        });
+    }
 
     // Save Code Button (.txt file)
-    elements.btnSaveCode.addEventListener('click', () => {
-        const codeText = elements.repCodeOutput.value;
-        if (!codeText) return;
+    if (elements.btnSaveCode && elements.repCodeOutput) {
+        elements.btnSaveCode.addEventListener('click', () => {
+            const codeText = elements.repCodeOutput.value;
+            if (!codeText) return;
 
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-        const filename = `annotation_${timestamp}.txt`;
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            const filename = `annotation_${timestamp}.txt`;
 
-        const blob = new Blob([codeText], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    });
+            const blob = new Blob([codeText], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    }
 
     // Load Code Button
     if (elements.btnLoadCode) {
@@ -1947,6 +1951,7 @@ function setupEventListeners() {
 
     let _activeCodeViewerRecordId = null;
     let _sgfCodeWordWrapOn = false;
+    let _sgfCodeCommentsOn = true;
     let _isEditingSgfCode = false;
     let _sgfCodeOriginalText = '';
 
@@ -1955,10 +1960,15 @@ function setupEventListeners() {
         const btnDiscard = document.getElementById('btn-discard-sgf-code');
         const historyCtrls = document.getElementById('sgf-editor-history-controls');
         const dirtyBadge = document.getElementById('sgf-code-dirty-badge');
+        const contentEl = document.getElementById('sgf-code-text-content');
 
         if (dirtyBadge) {
             dirtyBadge.style.display = isDirty ? 'inline-flex' : 'none';
         }
+
+        // In view mode the highlighted layer is the scroll container (pointer-events auto);
+        // in edit mode the textarea takes over scrolling (content layer stays inert).
+        if (contentEl) contentEl.style.pointerEvents = isEditing ? 'none' : 'auto';
 
         if (isEditing) {
             if (btnEdit) {
@@ -1976,6 +1986,19 @@ function setupEventListeners() {
             }
             if (btnDiscard) btnDiscard.style.display = 'none';
             if (historyCtrls) historyCtrls.style.display = 'none';
+        }
+
+        const btnComments = document.getElementById('btn-toggle-sgf-comments');
+        if (btnComments) {
+            if (isEditing) {
+                btnComments.style.opacity = '0.4';
+                btnComments.style.pointerEvents = 'none';
+                btnComments.title = 'Comments shown while editing';
+            } else {
+                btnComments.style.opacity = '1';
+                btnComments.style.pointerEvents = 'auto';
+                applySgfCommentsButtonState();
+            }
         }
     }
 
@@ -2007,18 +2030,13 @@ function setupEventListeners() {
 
         _sgfCodeOriginalText = cleanSgf;
 
-        const highlighted = highlightSgfCode(cleanSgf);
-
         const lineNumsEl = document.getElementById('sgf-code-line-numbers');
         const contentEl  = document.getElementById('sgf-code-text-content');
         const textareaEl = document.getElementById('sgf-code-editor-textarea');
         const overlay    = document.getElementById('sgf-code-modal-overlay');
 
-        if (lineNumsEl) lineNumsEl.innerHTML = highlighted.lineNumbersHtml;
-        if (contentEl) {
-            contentEl.innerHTML = highlighted.codeHtml;
-            contentEl.style.display = 'block';
-        }
+        renderSgfCodeDisplay(0, 0);
+
         if (textareaEl) {
             textareaEl.value = cleanSgf;
             textareaEl.style.display = 'none';
@@ -2052,7 +2070,7 @@ function setupEventListeners() {
         const btnCopy = document.getElementById('btn-copy-sgf-code');
         if (btnCopy) {
             btnCopy.onclick = () => {
-                const currentText = _isEditingSgfCode && textareaEl ? textareaEl.value : cleanSgf;
+                const currentText = getSgfDisplayText();
                 navigator.clipboard.writeText(currentText).then(() => {
                     const oldText = btnCopy.textContent;
                     btnCopy.textContent = 'Copied!';
@@ -2064,6 +2082,12 @@ function setupEventListeners() {
                 });
             };
         }
+
+        // The goban color palettes apply to a board, which is not present in this modal; make them unavailable
+        if (typeof customPanelState !== 'undefined') customPanelState.visible = false;
+        if (typeof applyCustomPanelState === 'function') applyCustomPanelState();
+        const paletteFab = document.getElementById('fab-toggle-floating');
+        if (paletteFab) paletteFab.style.display = 'none';
 
         if (overlay) {
             overlay.classList.remove('hidden');
@@ -2109,13 +2133,18 @@ function setupEventListeners() {
         if (textareaEl) textareaEl.style.display = 'none';
         _isEditingSgfCode = false;
         updateSgfEditorUIState(false, false);
+
+        const paletteFab = document.getElementById('fab-toggle-floating');
+        if (paletteFab) paletteFab.style.display = '';
     }
 
     function applyWordWrapStyle() {
         const contentEl  = document.getElementById('sgf-code-text-content');
         const textareaEl = document.getElementById('sgf-code-editor-textarea');
         const btnWrap    = document.getElementById('btn-toggle-sgf-word-wrap');
-        const wrapStatus = document.getElementById('sgf-word-wrap-status');
+
+        const ICON_WRAP_ON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><polyline points="16 16 14 18 16 20"></polyline><path d="M3 18h9"></path></svg>';
+        const ICON_WRAP_OFF = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="10" x2="3" y2="10"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="21" y1="18" x2="3" y2="18"></line></svg>';
 
         if (_sgfCodeWordWrapOn) {
             if (contentEl) {
@@ -2128,8 +2157,11 @@ function setupEventListeners() {
                 textareaEl.style.wordBreak = 'break-all';
                 textareaEl.style.overflowX = 'hidden';
             }
-            if (btnWrap) btnWrap.style.background = 'rgba(16,185,129,0.3)';
-            if (wrapStatus) wrapStatus.textContent = 'Wrap: ON';
+            if (btnWrap) {
+                btnWrap.style.background = 'rgba(16,185,129,0.3)';
+                btnWrap.innerHTML = ICON_WRAP_ON;
+                btnWrap.title = 'Word Wrap: ON — click to turn off';
+            }
         } else {
             if (contentEl) {
                 contentEl.style.whiteSpace = 'pre';
@@ -2141,8 +2173,11 @@ function setupEventListeners() {
                 textareaEl.style.wordBreak = 'normal';
                 textareaEl.style.overflowX = 'auto';
             }
-            if (btnWrap) btnWrap.style.background = 'rgba(255,255,255,0.06)';
-            if (wrapStatus) wrapStatus.textContent = 'Wrap: OFF';
+            if (btnWrap) {
+                btnWrap.style.background = 'rgba(255,255,255,0.06)';
+                btnWrap.innerHTML = ICON_WRAP_OFF;
+                btnWrap.title = 'Word Wrap: OFF — click to turn on';
+            }
         }
 
         syncLineNumberHeights();
@@ -2152,6 +2187,102 @@ function setupEventListeners() {
         _sgfCodeWordWrapOn = !_sgfCodeWordWrapOn;
         window._sgfWordWrapOn = _sgfCodeWordWrapOn;
         applyWordWrapStyle();
+    }
+
+    function stripSgfComments(raw) {
+        if (!raw || typeof raw !== 'string') return raw;
+        const n = raw.length;
+        let out = '';
+        let i = 0;
+        while (i < n) {
+            let j = i;
+            while (j < n && /[A-Za-z]/.test(raw[j])) j++;
+            const prop = raw.slice(i, j);
+            if (prop && raw[j] === '[') {
+                if (prop === 'C') {
+                    let k = j + 1;
+                    while (k < n) {
+                        if (raw[k] === '\\') { k += 2; continue; }
+                        if (raw[k] === ']') break;
+                        k++;
+                    }
+                    if (k < n) {
+                        out += 'C[]';
+                        i = k + 1;
+                        continue;
+                    }
+                } else {
+                    let k = j + 1;
+                    while (k < n) {
+                        if (raw[k] === '\\') { k += 2; continue; }
+                        if (raw[k] === ']') break;
+                        k++;
+                    }
+                    if (k < n) {
+                        out += raw.slice(i, k + 1);
+                        i = k + 1;
+                        continue;
+                    }
+                    out += prop + '[';
+                    i = j + 1;
+                    continue;
+                }
+            }
+            if (j > i) {
+                out += prop;
+                i = j;
+                continue;
+            }
+            out += raw[i];
+            i++;
+        }
+        return out;
+    }
+
+    function getSgfDisplayText() {
+        const textareaEl = document.getElementById('sgf-code-editor-textarea');
+        const base = (_isEditingSgfCode && textareaEl) ? textareaEl.value : _sgfCodeOriginalText;
+        return _sgfCodeCommentsOn ? base : stripSgfComments(base);
+    }
+
+    function renderSgfCodeDisplay(scrollTop, scrollLeft) {
+        const text = getSgfDisplayText();
+        const highlighted = highlightSgfCode(text);
+        const lineNumsEl = document.getElementById('sgf-code-line-numbers');
+        const contentEl  = document.getElementById('sgf-code-text-content');
+        if (lineNumsEl) lineNumsEl.innerHTML = highlighted.lineNumbersHtml;
+        if (contentEl) {
+            contentEl.innerHTML = highlighted.codeHtml;
+            contentEl.style.display = 'block';
+            if (scrollTop !== undefined) contentEl.scrollTop = scrollTop;
+            if (scrollLeft !== undefined) contentEl.scrollLeft = scrollLeft;
+        }
+        syncLineNumberHeights();
+    }
+
+    function applySgfCommentsButtonState() {
+        const btn = document.getElementById('btn-toggle-sgf-comments');
+        if (!btn) return;
+        const ICON_COMMENTS_ON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
+        const ICON_COMMENTS_OFF = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><line x1="3" y1="3" x2="21" y2="21"></line></svg>';
+        if (_sgfCodeCommentsOn) {
+            btn.style.background = 'rgba(16,185,129,0.3)';
+            btn.innerHTML = ICON_COMMENTS_ON;
+            btn.title = 'Comments: ON - click to hide';
+        } else {
+            btn.style.background = 'rgba(255,255,255,0.06)';
+            btn.innerHTML = ICON_COMMENTS_OFF;
+            btn.title = 'Comments: OFF - click to show';
+        }
+    }
+
+    function toggleSgfComments() {
+        _sgfCodeCommentsOn = !_sgfCodeCommentsOn;
+        window._sgfCommentsOn = _sgfCodeCommentsOn;
+        applySgfCommentsButtonState();
+        if (!_isEditingSgfCode) {
+            renderSgfCodeDisplay();
+        }
     }
 
     function syncLineNumberHeights() {
@@ -2192,6 +2323,11 @@ function setupEventListeners() {
                 textareaEl.style.color = 'transparent';
                 textareaEl.style.caretColor = '#34d399';
                 textareaEl.focus();
+                if (contentEl) {
+                    // Carry over the view-mode scroll position so editing starts where the user was looking
+                    textareaEl.scrollTop = contentEl.scrollTop;
+                    textareaEl.scrollLeft = contentEl.scrollLeft;
+                }
             }
             handleSgfTextareaInput();
             const isDirty = textareaEl ? (textareaEl.value !== _sgfCodeOriginalText) : false;
@@ -2215,13 +2351,7 @@ function setupEventListeners() {
             }
 
             // Re-render highlighted view
-            const highlighted = highlightSgfCode(newSgfText);
-            const lineNumsEl = document.getElementById('sgf-code-line-numbers');
-            if (lineNumsEl) lineNumsEl.innerHTML = highlighted.lineNumbersHtml;
-            if (contentEl) {
-                contentEl.innerHTML = highlighted.codeHtml;
-                contentEl.style.display = 'block';
-            }
+            renderSgfCodeDisplay(0, 0);
             textareaEl.style.display = 'none';
 
             _isEditingSgfCode = false;
@@ -2251,13 +2381,7 @@ function setupEventListeners() {
             textareaEl.style.display = 'none';
         }
 
-        const highlighted = highlightSgfCode(_sgfCodeOriginalText);
-        const lineNumsEl = document.getElementById('sgf-code-line-numbers');
-        if (lineNumsEl) lineNumsEl.innerHTML = highlighted.lineNumbersHtml;
-        if (contentEl) {
-            contentEl.innerHTML = highlighted.codeHtml;
-            contentEl.style.display = 'block';
-        }
+        renderSgfCodeDisplay(0, 0);
 
         _isEditingSgfCode = false;
         updateSgfEditorUIState(false, false);
@@ -2395,11 +2519,20 @@ function setupEventListeners() {
     window.openSgfCodeViewerModal  = openSgfCodeViewerModal;
     window.closeSgfCodeViewerModal = closeSgfCodeViewerModal;
     window.toggleSgfCodeWordWrap   = toggleSgfCodeWordWrap;
+    window.toggleSgfComments       = toggleSgfComments;
     window.toggleSgfCodeEditMode   = toggleSgfCodeEditMode;
     window.discardSgfCodeChanges   = discardSgfCodeChanges;
     window.undoSgfCodeEdit          = undoSgfCodeEdit;
     window.redoSgfCodeEdit          = redoSgfCodeEdit;
     window.highlightSgfCode         = highlightSgfCode;
+
+    // Click overlay background (exclusive of the modal) to exit the SGF code viewer
+    const sgfCodeOverlay = document.getElementById('sgf-code-modal-overlay');
+    if (sgfCodeOverlay) {
+        sgfCodeOverlay.addEventListener('click', (e) => {
+            if (e.target === sgfCodeOverlay) closeSgfCodeViewerModal();
+        });
+    }
 
     function computeSgfPropsFromScoringData(data) {
         if (!data || !data.board || !data.markedDead) return null;
@@ -3629,10 +3762,12 @@ function setupEventListeners() {
         });
     }
 
-    elements.repIncludeText.addEventListener('change', () => {
-        ensureRepIncludeTextChecked();
-        updateReplicationCode();
-    });
+    if (elements.repIncludeText) {
+        elements.repIncludeText.addEventListener('change', () => {
+            ensureRepIncludeTextChecked();
+            updateReplicationCode();
+        });
+    }
 
     // Formatting Toolbar Buttons
     document.querySelectorAll('.btn-format').forEach(btn => {
@@ -6034,8 +6169,11 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         }
         targetCtx.restore();
         
-        // Draw red cross if the stone is marked as dead by AI Estimation
-        if (r !== null && c !== null && state.deadMap && state.deadMap[r][c]) {
+        // Draw red cross if the stone is marked as dead by AI Estimation.
+        // Never render on the scoring board: the scoring modal has its own markedDead
+        // overlay and the estimation crosses are not part of the scoring computation.
+        const isScoringCanvas = targetCtx.canvas && targetCtx.canvas.id === 'go-board-canvas-scoring';
+        if (r !== null && c !== null && state.deadMap && state.deadMap[r][c] && !isScoringCanvas) {
             const size = cellSize * 0.25;
             targetCtx.save();
             targetCtx.beginPath();
@@ -8167,7 +8305,7 @@ function deserializeState(jsonString) {
         updateCropBadge();
         
         // Clear paste input
-        elements.repCodeInput.value = '';
+        if (elements.repCodeInput) elements.repCodeInput.value = '';
         alert('Board configuration successfully applied!');
     } catch (err) {
         console.error('Failed to parse board code: ', err);
@@ -10213,40 +10351,80 @@ function goToMove(index) {
         }
         
         // ── Computational Method (Japanese Territory Scoring Pipeline) ──
-        const rawBoardData = BoardEstimate.fromBoard(state.board);
+        // The scorer requires Life & Death data (DD/MA/TB/TW) for the position it scores.
+        // Resolve which node supplies that markup: the move under the replayer if it carries
+        // markup, otherwise the game's terminal move (loadSGF folds terminal markup onto the
+        // final move). A game that DOES carry endgame markup must never halt just because the
+        // replayer is positioned mid-game, so replay to the terminal position in memory and
+        // score that. Only games with no endgame markup anywhere keep the halt card.
+        let markupMove = null;
+        if (state.currentMoveIndex >= 0 && state.sgfMoves && state.sgfMoves[state.currentMoveIndex]) {
+            const curMove = state.sgfMoves[state.currentMoveIndex];
+            if (curMove.DD || curMove.MA || curMove.TB || curMove.TW) {
+                markupMove = curMove;
+            }
+        }
+
+        let compBoard = state.board;
+        let compCaptures = state.captures ? { B: state.captures.B, W: state.captures.W } : { B: 0, W: 0 };
+        let compPositionLabel = state.currentMoveIndex >= 0 ? `Position after move ${state.currentMoveIndex + 1}` : 'Initial board state';
+
+        if (!markupMove && state.allSgfMoves && state.allSgfMoves.length > 0) {
+            const lastMove = state.allSgfMoves[state.allSgfMoves.length - 1];
+            if (lastMove && (lastMove.DD || lastMove.MA || lastMove.TB || lastMove.TW)) {
+                markupMove = lastMove;
+                const tempBoard = state.setupBoard
+                    ? JSON.parse(JSON.stringify(state.setupBoard))
+                    : Array.from({length: 19}, () => Array.from({length: 19}, () => ({ player: null, annotation: null, label: null })));
+                let bCaps = 0, wCaps = 0;
+                for (const m of state.allSgfMoves) {
+                    if (!m.isPass && m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
+                        const cap = playStoneWithCaptures(tempBoard, m.r, m.c, m.player);
+                        if (m.player === 'B') bCaps += cap.count; else wCaps += cap.count;
+                    }
+                }
+                compBoard = tempBoard;
+                compCaptures = { B: bCaps, W: wCaps };
+                compPositionLabel = `Endgame position (move ${state.allSgfMoves.length})`;
+            }
+        }
+
+        const rawBoardData = BoardEstimate.fromBoard(compBoard);
         const bHeight = rawBoardData.length;
         const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
         const totalIntersections = bHeight * bWidth;
         
         // 1. Extract dead stones: Explicit SGF Markup (DD / MA) or Territory Derivation (TB / TW)
         const compDeadStones = [];
+        const compTbPoints = [];
+        const compTwPoints = [];
         let hasSgfMarkup = false;
 
-        if (state.currentMoveIndex >= 0 && state.sgfMoves && state.sgfMoves[state.currentMoveIndex]) {
-            const curMove = state.sgfMoves[state.currentMoveIndex];
-
-            if (curMove.DD || curMove.MA) {
+        if (markupMove) {
+            if (markupMove.DD || markupMove.MA) {
                 hasSgfMarkup = true;
-                if (curMove.DD) {
-                    SgfEngine.expandPointList(curMove.DD, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
+                if (markupMove.DD) {
+                    SgfEngine.expandPointList(markupMove.DD, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
                 }
-                if (curMove.MA) {
-                    SgfEngine.expandPointList(curMove.MA, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
+                if (markupMove.MA) {
+                    SgfEngine.expandPointList(markupMove.MA, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
                 }
-            } else if (curMove.TB || curMove.TW) {
+            } else if (markupMove.TB || markupMove.TW) {
                 // ARCHITECTURAL FIX: Deduce dead stones via SGF FF[4] territory bounds.
                 // Any opponent stone residing inside marked territory is mathematically dead.
                 hasSgfMarkup = true;
-                if (curMove.TB) {
-                    SgfEngine.expandPointList(curMove.TB, bWidth, bHeight).forEach(pt => {
+                if (markupMove.TB) {
+                    SgfEngine.expandPointList(markupMove.TB, bWidth, bHeight).forEach(pt => {
+                        compTbPoints.push({ r: pt.r, c: pt.c });
                         // Black Territory (TB): Scrub any White stones (-1)
                         if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === -1) {
                             compDeadStones.push({ r: pt.r, c: pt.c });
                         }
                     });
                 }
-                if (curMove.TW) {
-                    SgfEngine.expandPointList(curMove.TW, bWidth, bHeight).forEach(pt => {
+                if (markupMove.TW) {
+                    SgfEngine.expandPointList(markupMove.TW, bWidth, bHeight).forEach(pt => {
+                        compTwPoints.push({ r: pt.r, c: pt.c });
                         // White Territory (TW): Scrub any Black stones (1)
                         if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === 1) {
                             compDeadStones.push({ r: pt.r, c: pt.c });
@@ -10274,17 +10452,25 @@ function goToMove(index) {
             `;
         } else {
             // 2. Run deterministic Japanese Territory Scorer (Guaranteed L&D resolution)
-            const compResult = BoardEstimate.evaluateJapaneseTerritory(state.board, {
+            //    Explicit TB/TW lists are passed through so the scorer counts declared
+            //    territory directly instead of running topological flood-fill.
+            const compResult = BoardEstimate.evaluateJapaneseTerritory(compBoard, {
                 deadStones: compDeadStones,
-                inGameCaptures,
+                tbPoints: compTbPoints,
+                twPoints: compTwPoints,
+                inGameCaptures: compCaptures,
                 komi,
                 handicap
             });
 
-            let lastMoveText = '';
-            if (state.currentMoveIndex >= 0 && state.sgfMoves && state.sgfMoves[state.currentMoveIndex]) {
-                const lastPlayer = state.sgfMoves[state.currentMoveIndex].player === 'W' ? 'White' : 'Black';
-                lastMoveText = `${lastPlayer} played move ${state.currentMoveIndex + 1}`;
+            let lastMoveText = compPositionLabel;
+            if (markupMove && markupMove.player) {
+                const lastPlayer = markupMove.player === 'W' ? 'White' : 'Black';
+                if (markupMove === state.sgfMoves[state.currentMoveIndex]) {
+                    lastMoveText = `${lastPlayer} played move ${state.currentMoveIndex + 1}`;
+                } else {
+                    lastMoveText = `${lastPlayer} played move ${state.allSgfMoves.length} (endgame position)`;
+                }
             }
 
             // Render blue card UI
@@ -10308,7 +10494,7 @@ function goToMove(index) {
                     </div>
 
                     <div style="background: rgba(255, 255, 255, 0.08); padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 12px; font-size: 0.84rem;">
-                        <div style="color: #93c5fd; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 6px;">3. Flood-Fill Territory Counting</div>
+                        <div style="color: #93c5fd; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 6px;">3. Explicit Territory Counting (TB/TW Markup)</div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                             <span><span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#333; border:1px solid #aaa; margin-right:6px;"></span>Black Territory:</span>
                             <span><strong>${compResult.bTerritory} pts</strong></span>
@@ -11022,10 +11208,34 @@ function loadSGF(sgfString) {
                 nodeAnnotation,
                 nodeName,
                 moveNumber,
+                DD: props.DD ? props.DD.slice() : null,
+                MA: props.MA ? props.MA.slice() : null,
+                TB: props.TB ? props.TB.slice() : null,
+                TW: props.TW ? props.TW.slice() : null,
                 sgfNode: props
             });
         }
     });
+
+    // A terminal node that carries only endgame markup (DD/MA/TB/TW, no B/W move) is not a
+    // move and is skipped above. Fold that markup onto the final move so scorers can resolve
+    // Life & Death for the end position instead of halting for "missing" markup.
+    // Scan the trailing region of the main line (which may also contain pass nodes that follow
+    // the markup node) for the last node carrying endgame markup and fold it onto the final move.
+    if (state.allSgfMoves.length > 0) {
+        const lastMove = state.allSgfMoves[state.allSgfMoves.length - 1];
+        for (let i = mainLine.length - 1; i >= Math.max(0, mainLine.length - 12); i--) {
+            const node = mainLine[i];
+            if (node && (node.DD || node.MA || node.TB || node.TW)) {
+                ['DD', 'MA', 'TB', 'TW'].forEach(tag => {
+                    if (node[tag] && !lastMove[tag]) {
+                        lastMove[tag] = node[tag].slice();
+                    }
+                });
+                break;
+            }
+        }
+    }
 
     const getMeta = (tag) => {
         return (rootProps[tag] && rootProps[tag].length > 0) ? rootProps[tag][0] : '';
@@ -11509,7 +11719,10 @@ function updateStudyCrop() {
     boardViewport.style.height = `${studyBoardSize}px`;
     
     const scale = scalePerc / 100;
-    boardViewport.style.transform = `scale(${scale})`;
+    boardViewport.style.position = 'absolute';
+    boardViewport.style.top = '50%';
+    boardViewport.style.left = '50%';
+    boardViewport.style.transform = `translate(-50%, -50%) scale(${scale})`;
     boardViewport.style.transformOrigin = 'center center';
 }
 
@@ -11877,9 +12090,25 @@ function applyCustomPanelState() {
     }
 }
 
+function collapseAllAccordionItems() {
+    document.querySelectorAll('.accordion-content').forEach(content => {
+        content.classList.remove('open');
+        content.style.maxHeight = '0';
+    });
+    document.querySelectorAll('.accordion-trigger').forEach(t => {
+        t.classList.remove('active');
+    });
+    document.querySelectorAll('.custom-stones-section').forEach(section => {
+        section.classList.remove('expanded');
+        const body = section.querySelector('.custom-stones-body');
+        if (body) body.style.maxHeight = '0';
+    });
+}
+
 function toggleCustomPanel() {
     customPanelState.visible = !customPanelState.visible;
     localStorage.setItem('baduk_custom_panel_visible', customPanelState.visible);
+    collapseAllAccordionItems();
     applyCustomPanelState();
     if (customPanelState.visible) {
         keepCustomPanelInViewport();
@@ -11889,6 +12118,7 @@ function toggleCustomPanel() {
 function hideCustomPanel() {
     customPanelState.visible = false;
     localStorage.setItem('baduk_custom_panel_visible', 'false');
+    collapseAllAccordionItems();
     applyCustomPanelState();
 }
 
@@ -12805,7 +13035,7 @@ function updateEndgameScoringUI() {
     const el = document.getElementById('endgame-scoring-shortcut');
     if (!el) return;
     const onLastMove = state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex === state.sgfMoves.length - 1;
-    el.style.display = onLastMove ? '' : 'none';
+    el.style.display = onLastMove ? 'block' : 'none';
 }
 
 function initGameEndPopup() {
@@ -14001,7 +14231,15 @@ function initScoringModal() {
     const endgameScoringEl = document.getElementById('endgame-scoring-shortcut');
     if (endgameScoringEl) {
         endgameScoringEl.addEventListener('click', () => {
-            const savedData = _scoringPersistData || null;
+            let savedData = _scoringPersistData || null;
+            // Fall back to the study record's saved scoring state so a fresh page load
+            // (where _scoringPersistData is empty) still restores the latest result.
+            if (!savedData && state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+                const rec = StudyRecordDB.getRecord(state.activeStudyId);
+                if (rec && rec.scoringData) {
+                    savedData = rec.scoringData;
+                }
+            }
             openScoringModal(savedData);
         });
     }
@@ -14149,6 +14387,10 @@ function openScoringModal(savedData) {
         }
         const elRuleSelect = document.getElementById('scoring-rule-mode');
         if (elRuleSelect) elRuleSelect.value = scoringState.ruleMode;
+
+        // Open frozen: scoring board starts read-only with the Edit button visible,
+        // so the user must click Edit before making any changes.
+        setScoringFrozen(true);
 
         resetScoringBoardFromState();
     }
@@ -14377,6 +14619,22 @@ function restoreScoringFromSavedData(data) {
 
 window.openScoringModal = openScoringModal;
 window.closeScoringModal = closeScoringModal;
+
+function hasAnyDeadStones() {
+    if (!scoringState) return false;
+    if (scoringState.deadWhite && scoringState.deadWhite.length > 0) return true;
+    if (scoringState.deadBlack && scoringState.deadBlack.length > 0) return true;
+    if (scoringState.markedDead) {
+        for (let r = 0; r < scoringState.markedDead.length; r++) {
+            const row = scoringState.markedDead[r];
+            if (!row) continue;
+            for (let c = 0; c < row.length; c++) {
+                if (row[c]) return true;
+            }
+        }
+    }
+    return false;
+}
 
 function updateScoringUI() {
     const subtitle = document.getElementById('scoring-subtitle');

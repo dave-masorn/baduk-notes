@@ -554,7 +554,7 @@ BoardEstimate.estimate = function(board, {komi = 6.5, handicap = 0, territoryBla
 }
 
 // ── Japanese Territory Scorer (Deterministic Rule-Accurate Pipeline) ──
-BoardEstimate.evaluateJapaneseTerritory = function(board, {deadStones = [], inGameCaptures = {B: 0, W: 0}, komi = 6.5, handicap = 0} = {}) {
+BoardEstimate.evaluateJapaneseTerritory = function(board, {deadStones = [], tbPoints = [], twPoints = [], inGameCaptures = {B: 0, W: 0}, komi = 6.5, handicap = 0} = {}) {
     const rawData = BoardEstimate.fromBoard(board);
     const height = rawData.length;
     const width = height > 0 ? rawData[0].length : 0;
@@ -587,46 +587,60 @@ BoardEstimate.evaluateJapaneseTerritory = function(board, {deadStones = [], inGa
     let bTerritory = 0;
     let wTerritory = 0;
     let dameCount = 0;
-    const visited = [...Array(height)].map(_ => Array(width).fill(false));
-    
-    for (let r = 0; r < height; r++) {
-        for (let c = 0; c < width; c++) {
-            if (grid[r][c] !== 0 || visited[r][c]) continue;
-            
-            const region = [];
-            const surroundingColors = new Set();
-            const queue = [{r, c}];
-            visited[r][c] = true;
-            
-            while (queue.length > 0) {
-                const curr = queue.shift();
-                region.push(curr);
-                
-                const neighbors = [
-                    {r: curr.r - 1, c: curr.c},
-                    {r: curr.r + 1, c: curr.c},
-                    {r: curr.r, c: curr.c - 1},
-                    {r: curr.r, c: curr.c + 1}
-                ];
-                
-                for (let n of neighbors) {
-                    if (n.r >= 0 && n.r < height && n.c >= 0 && n.c < width) {
-                        if (grid[n.r][n.c] !== 0) {
-                            surroundingColors.add(grid[n.r][n.c]);
-                        } else if (!visited[n.r][n.c]) {
-                            visited[n.r][n.c] = true;
-                            queue.push(n);
+
+    // Explicit territory markup (TB/TW) wins over algorithmic flood-fill: the SGF
+    // author's declared territory is the mathematical truth, so we count the point
+    // lists directly (deterministic, immune to seki/dame leakage). Flood-fill remains
+    // only as a fallback for markup that supplies DD/MA but no TB/TW.
+    const tbOnBoard = tbPoints.filter(pt => pt && pt.r >= 0 && pt.r < height && pt.c >= 0 && pt.c < width);
+    const twOnBoard = twPoints.filter(pt => pt && pt.r >= 0 && pt.r < height && pt.c >= 0 && pt.c < width);
+    const useExplicitTerritory = tbOnBoard.length > 0 || twOnBoard.length > 0;
+
+    if (useExplicitTerritory) {
+        bTerritory = tbOnBoard.length;
+        wTerritory = twOnBoard.length;
+    } else {
+        const visited = [...Array(height)].map(_ => Array(width).fill(false));
+
+        for (let r = 0; r < height; r++) {
+            for (let c = 0; c < width; c++) {
+                if (grid[r][c] !== 0 || visited[r][c]) continue;
+
+                const region = [];
+                const surroundingColors = new Set();
+                const queue = [{r, c}];
+                visited[r][c] = true;
+
+                while (queue.length > 0) {
+                    const curr = queue.shift();
+                    region.push(curr);
+
+                    const neighbors = [
+                        {r: curr.r - 1, c: curr.c},
+                        {r: curr.r + 1, c: curr.c},
+                        {r: curr.r, c: curr.c - 1},
+                        {r: curr.r, c: curr.c + 1}
+                    ];
+
+                    for (let n of neighbors) {
+                        if (n.r >= 0 && n.r < height && n.c >= 0 && n.c < width) {
+                            if (grid[n.r][n.c] !== 0) {
+                                surroundingColors.add(grid[n.r][n.c]);
+                            } else if (!visited[n.r][n.c]) {
+                                visited[n.r][n.c] = true;
+                                queue.push(n);
+                            }
                         }
                     }
                 }
-            }
-            
-            if (surroundingColors.size === 1) {
-                const owner = [...surroundingColors][0];
-                if (owner === 1) bTerritory += region.length;
-                else if (owner === -1) wTerritory += region.length;
-            } else {
-                dameCount += region.length;
+
+                if (surroundingColors.size === 1) {
+                    const owner = [...surroundingColors][0];
+                    if (owner === 1) bTerritory += region.length;
+                    else if (owner === -1) wTerritory += region.length;
+                } else {
+                    dameCount += region.length;
+                }
             }
         }
     }
