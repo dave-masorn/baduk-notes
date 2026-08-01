@@ -10177,7 +10177,11 @@ function computeScoringPropsFromSession(session) {
     const tb = [];
     const tw = [];
     const ruleMode = (session.ruleMode || 'japanese');
-    const boardData = session.board || [];
+    // Territory is derived from the CANONICAL board when the session carries one: the final
+    // W+1, saved DD/MA/TB/TW and the blue-panel Run score must never move when the user
+    // re-arranges/replaces stones (those edits live only in session.board). Legacy sessions
+    // without baseBoard fall back to the display board, preserving previous behavior.
+    const boardData = (session.baseBoard && session.baseBoard.length) ? session.baseBoard : (session.board || []);
     const markedDead = session.markedDead || null;
     const deadInfo = session.deadStonesInfo || null;
     const manualTerritory = session.manualTerritory || null;
@@ -14865,6 +14869,12 @@ function resetScoringBoardFromState() {
         }
     }
 
+    // Canonical game board: the FINAL (W+1) result is anchored to this board. Re-arranging /
+    // Replacing dead stones only mutates scoringState.board (the display/computing board) and
+    // must NEVER move the game's final result — so we keep an untouched snapshot of the game
+    // position here that rearrange/replace never touch.
+    scoringState.baseBoard = scoringState.board.map(r => [...r]);
+
     // 1. Captured stones extraction
     let bCaps = 0;
     let wCaps = 0;
@@ -14894,6 +14904,7 @@ function resetScoringBoardFromState() {
 
     scoringState.blackCaptures = bCaps;
     scoringState.whiteCaptures = wCaps;
+    scoringState.baseCaptures = { B: bCaps, W: wCaps };
 
     // 2. Komi extraction from SGF metadata
     let rawKomi = null;
@@ -14935,6 +14946,17 @@ function resetScoringBoardFromState() {
                 if (!v) return;
                 if (!isTerritory || v === oppVal) {
                     scoringState.markedDead[pt.r][pt.c] = true;
+                    // Recorded marks behave EXACTLY like manually clicked marks: keep the
+                    // stone's color in deadStonesInfo and populate the dead/bucket stacks so
+                    // the computing formula and replace/rearrange availability see them.
+                    scoringState.deadStonesInfo[pt.r][pt.c] = v;
+                    if (v === 1) {
+                        scoringState.deadBlack.push('B');
+                        scoringState.bucketWhite.push('B');
+                    } else if (v === 2) {
+                        scoringState.deadWhite.push('W');
+                        scoringState.bucketBlack.push('W');
+                    }
                 }
             });
         };
@@ -14959,27 +14981,105 @@ function resetScoringBoardFromState() {
         applyTerritory(markupMove.TW, 2);
     }
 
+    // First entry per game: when the loaded record carries no endgame markup, seed the modal
+    // from the goscorer (Sabaki) dead-stone heuristic so auto-marked dead stones and their
+    // auto-derived territory are shown and counted EXACTLY like manual marks (one combined
+    // set for computing).
+    if (!markupMove) {
+        seedAutoDeadMarks(scoringState);
+    }
+
+    // Keep the canonical window reference in sync: the modal draws from window.scoringState,
+    // and every mutation targets the same object in production (harmless no-op there), while
+    // embedders/tests that inject a separate stub stay consistent.
+    window.scoringState = scoringState;
+
     updateScoringSaveButton();
     updateScoringUI();
     drawBoard();
 }
 
-function autoMarkDeadStones() {
-    if (typeof window.BoardEstimate !== 'undefined' && typeof window.BoardEstimate.detectDeadStonesHeuristic === 'function') {
-        try {
-            const signData = scoringState.board.map(row => row.map(val => val === 1 ? 1 : (val === 2 ? -1 : 0)));
-            const deadMap = window.BoardEstimate.detectDeadStonesHeuristic(signData);
-            for (let r = 0; r < 19; r++) {
-                for (let c = 0; c < 19; c++) {
-                    scoringState.markedDead[r][c] = (deadMap && deadMap[r] && deadMap[r][c] === true);
+// Seed the scoring session from the goscorer (Sabaki) dead-stone heuristic on the FIRST
+// entry per game, when no endgame markup resolved. Auto-detected dead stones are folded
+// into the same markedDead / deadStonesInfo / dead-bucket structures as manual marks, so
+// the modal treats the algorithm's output and the user's clicks as ONE combined set for
+// computing. Territory is auto-derived by drawBoard from the same marks, so both are shown.
+function seedAutoDeadMarks(ss) {
+    const base = ss.baseBoard || ss.board;
+    if (!base || typeof window.BoardEstimate === 'undefined' ||
+        typeof window.BoardEstimate.detectDeadStonesHeuristic !== 'function') {
+        return false;
+    }
+    let marked = false;
+    try {
+        const signData = base.map(row => row.map(v => v === 1 ? 1 : (v === 2 ? -1 : 0)));
+        const deadMap = window.BoardEstimate.detectDeadStonesHeuristic(signData);
+        for (let r = 0; r < 19; r++) {
+            for (let c = 0; c < 19; c++) {
+                if (deadMap && deadMap[r] && deadMap[r][c] && base[r][c] !== 0 && !ss.markedDead[r][c]) {
+                    const v = base[r][c];
+                    ss.markedDead[r][c] = true;
+                    ss.deadStonesInfo[r][c] = v;
+                    if (v === 1) {
+                        ss.deadBlack.push('B');
+                        ss.bucketWhite.push('B');
+                    } else if (v === 2) {
+                        ss.deadWhite.push('W');
+                        ss.bucketBlack.push('W');
+                    }
+                    marked = true;
                 }
             }
-        } catch(e) {
-            console.error("Auto mark dead error:", e);
+        }
+    } catch (e) {
+        console.error("Auto mark dead error:", e);
+        return false;
+    }
+    return marked;
+}
+
+// Number of stones of the given color currently marked dead (1 = Black, 2 = White).
+// Dead-stone accounting in the formulas comes from the MARKS (markedDead/deadStonesInfo) —
+// the game's true Life & Death set — so recorded/auto/manual marks all count as one, and
+// Replacing a dead stone (which pops a bucket for placement) never changes the count.
+function countMarkedDeadStones(ss, colorVal) {
+    let n = 0;
+    const md = ss.markedDead;
+    const info = ss.deadStonesInfo;
+    if (!md || !info) return n;
+    for (let r = 0; r < 19; r++) {
+        const mdRow = md[r];
+        const infoRow = info[r];
+        if (!mdRow || !infoRow) continue;
+        for (let c = 0; c < 19; c++) {
+            if (mdRow[c] && infoRow[c] === colorVal) n++;
         }
     }
-    updateScoringUI();
-    drawBoard();
+    return n;
+}
+
+// Count territory/area cells for a given GoScorer score grid, with explicit manualTerritory
+// marks always overriding the algorithm. Works for both Japanese (locScores[..].isTerritoryFor)
+// and Chinese (areaScores[..] = color) rule modes; when GoScorer is unavailable it falls back
+// to counting manual territory only.
+function countTerritoryFromScores(ss, locScores, areaScores, ruleMode) {
+    let b = 0, w = 0;
+    const isJpn = ruleMode === 'japanese';
+    for (let y = 0; y < 19; y++) {
+        for (let x = 0; x < 19; x++) {
+            if (ss.manualTerritory[y][x] > 0) {
+                if (ss.manualTerritory[y][x] === 1) b++;
+                else if (ss.manualTerritory[y][x] === 2) w++;
+            } else if (isJpn && locScores && locScores[y] && locScores[y][x]) {
+                if (locScores[y][x].isTerritoryFor === 1) b++;
+                else if (locScores[y][x].isTerritoryFor === 2) w++;
+            } else if (!isJpn && areaScores && areaScores[y] && areaScores[y][x]) {
+                if (areaScores[y][x] === 1) b++;
+                else if (areaScores[y][x] === 2) w++;
+            }
+        }
+    }
+    return { b, w };
 }
 
 function openScoringModal(savedData) {
@@ -15063,6 +15163,8 @@ function openScoringModal(savedData) {
 function buildScoringSessionSnapshot() {
     return {
         board: scoringState.board.map(r => [...r]),
+        baseBoard: scoringState.baseBoard ? scoringState.baseBoard.map(r => [...r]) : undefined,
+        baseCaptures: scoringState.baseCaptures ? { B: scoringState.baseCaptures.B, W: scoringState.baseCaptures.W } : undefined,
         markedDead: scoringState.markedDead.map(r => [...r]),
         deadStonesInfo: scoringState.deadStonesInfo.map(r => [...r]),
         manualTerritory: scoringState.manualTerritory.map(r => [...r]),
@@ -15285,12 +15387,23 @@ function restoreScoringFromSavedData(data) {
     if (elKomiInput) elKomiInput.value = scoringState.komi;
     scoringState.blackCaptures = data.blackCaptures || 0;
     scoringState.whiteCaptures = data.whiteCaptures || 0;
+    // Canonical board for the FINAL result. Re-arrange/replace edits live in data.board (the
+    // display/computing board); baseBoard is the untouched game position the final W+1 and
+    // the saved DD/MA/TB/TW stay anchored to. Legacy sessions predate baseBoard — the final
+    // then falls back to the display board (previous behavior).
+    scoringState.baseBoard = data.baseBoard ? data.baseBoard.map(r => [...r]) : null;
+    scoringState.baseCaptures = data.baseCaptures
+        ? { B: data.baseCaptures.B, W: data.baseCaptures.W }
+        : { B: scoringState.blackCaptures, W: scoringState.whiteCaptures };
 
     scoringState.active = true;
     scoringState.pendingClick = null;
     scoringHistory = [];
     scoringFuture = [];
     updateUndoRedoButtonsUI();
+
+    // Keep the canonical window reference in sync (see resetScoringBoardFromState).
+    window.scoringState = scoringState;
 
     _scoringHasSaved = true;
     const elRuleSelect = document.getElementById('scoring-rule-mode');
@@ -15305,22 +15418,6 @@ function restoreScoringFromSavedData(data) {
 
 window.openScoringModal = openScoringModal;
 window.closeScoringModal = closeScoringModal;
-
-function hasAnyDeadStones() {
-    if (!scoringState) return false;
-    if (scoringState.deadWhite && scoringState.deadWhite.length > 0) return true;
-    if (scoringState.deadBlack && scoringState.deadBlack.length > 0) return true;
-    if (scoringState.markedDead) {
-        for (let r = 0; r < scoringState.markedDead.length; r++) {
-            const row = scoringState.markedDead[r];
-            if (!row) continue;
-            for (let c = 0; c < row.length; c++) {
-                if (row[c]) return true;
-            }
-        }
-    }
-    return false;
-}
 
 function updateScoringUI() {
     const subtitle = document.getElementById('scoring-subtitle');
@@ -15339,21 +15436,6 @@ function updateScoringUI() {
             help.textContent = 'Click empty territory to place opponent prisoner stone there (deducts their territory points).';
         } else if (scoringState.interactionMode === 'mark-territory') {
             help.textContent = 'Click empty intersection to assign territory to a color. Click again to unassign.';
-        }
-    }
-
-    const btnAutoDead = document.getElementById('btn-scoring-auto-dead');
-    if (btnAutoDead) {
-        if (hasAnyDeadStones()) {
-            btnAutoDead.textContent = 'Unselect Dead Stones';
-            btnAutoDead.style.background = 'rgba(239, 68, 68, 0.2)';
-            btnAutoDead.style.color = '#fca5a5';
-            btnAutoDead.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-        } else {
-            btnAutoDead.textContent = 'Auto-Mark Dead';
-            btnAutoDead.style.background = 'rgba(16, 185, 129, 0.2)';
-            btnAutoDead.style.color = '#34d399';
-            btnAutoDead.style.borderColor = 'rgba(16, 185, 129, 0.4)';
         }
     }
 
@@ -16103,8 +16185,9 @@ function renderScoringBoardToCtx(ctx) {
         // Japanese rules: prisoners = dead stones of the OPPONENT color + game captures
         // dead White stones → Black captured them → count for BLACK (+1 each)
         // dead Black stones → White captured them → count for WHITE (+1 each)
-        bDead = scoringState.deadWhite ? scoringState.deadWhite.length : 0;
-        wDead = scoringState.deadBlack ? scoringState.deadBlack.length : 0;
+        // Dead accounting comes from the MARKS (auto + recorded + manual are one set).
+        bDead = countMarkedDeadStones(scoringState, 2);
+        wDead = countMarkedDeadStones(scoringState, 1);
         const bCaps = scoringState.blackCaptures || 0;
         const wCaps = scoringState.whiteCaptures || 0;
         komi = scoringState.komi;
@@ -16145,8 +16228,8 @@ function renderScoringBoardToCtx(ctx) {
             }
         }
         // Chinese area scoring: living stones + territory + dead opponent stones as prisoners
-        const bDeadA = scoringState.deadWhite ? scoringState.deadWhite.length : 0;
-        const wDeadA = scoringState.deadBlack ? scoringState.deadBlack.length : 0;
+        const bDeadA = countMarkedDeadStones(scoringState, 2);
+        const wDeadA = countMarkedDeadStones(scoringState, 1);
         const bCapsA = scoringState.blackCaptures || 0;
         const wCapsA = scoringState.whiteCaptures || 0;
         komi = scoringState.komi;
@@ -16165,9 +16248,51 @@ function renderScoringBoardToCtx(ctx) {
         if (elWF) elWF.textContent = `${wArea} (area) + ${wDeadA} (dead prisoners) + ${komi} (komi)`;
         if (elWT) elWT.textContent = `= ${wTotal}`;
     }
+
+    // ── FINAL (W+1) — anchored to the canonical game board ────────────────
+    // Re-arranging / Replacing dead stones may change the per-color Computing above (that is
+    // its educational purpose) but must NEVER move the game's FINAL result. The Final is
+    // computed from scoringState.baseBoard — the untouched game position that rearrange/
+    // replace never mutate — plus mark-derived dead stones and the game's captures. On a
+    // legacy session without baseBoard it falls back to the display board (old behavior).
+    let fBTotal, fWTotal;
+    const finalBoard = scoringState.baseBoard || scoringState.board;
+    let finalLocScores = null;
+    let finalAreaScores = null;
+    if (window.GoScorer && finalBoard) {
+        const finalStonesWithDead = finalBoard.map((row, r) =>
+            row.map((val, c) => {
+                if (scoringState.markedDead[r] && scoringState.markedDead[r][c] && val === 0) {
+                    return scoringState.deadStonesInfo[r][c] || 0;
+                }
+                return val;
+            })
+        );
+        try {
+            if (scoringState.ruleMode === 'japanese') {
+                finalLocScores = window.GoScorer.territoryScoring(finalStonesWithDead, scoringState.markedDead, false);
+            } else {
+                finalAreaScores = window.GoScorer.areaScoring(finalStonesWithDead, scoringState.markedDead);
+            }
+        } catch (err) {
+            console.error("GoScorer final error:", err);
+        }
+    }
+    const finalTerr = countTerritoryFromScores(scoringState, finalLocScores, finalAreaScores, scoringState.ruleMode);
+    const fBDead = countMarkedDeadStones(scoringState, 2);
+    const fWDead = countMarkedDeadStones(scoringState, 1);
+    const fBCaps = scoringState.baseCaptures ? (scoringState.baseCaptures.B || 0) : (scoringState.blackCaptures || 0);
+    const fWCaps = scoringState.baseCaptures ? (scoringState.baseCaptures.W || 0) : (scoringState.whiteCaptures || 0);
+    if (scoringState.ruleMode === 'japanese') {
+        fBTotal = finalTerr.b + fBDead + fBCaps;
+        fWTotal = finalTerr.w + fWDead + fWCaps + komi;
+    } else {
+        fBTotal = finalTerr.b + fBDead;
+        fWTotal = finalTerr.w + fWDead + komi;
+    }
     const elResult = document.getElementById('scoring-result-display');
     if (elResult) {
-        const diff = bTotal - wTotal;
+        const diff = fBTotal - fWTotal;
         let text;
         if (diff > 0) text = `B+${Number.isInteger(diff) ? diff : diff.toFixed(1)}`;
         else if (diff < 0) text = `W+${Number.isInteger(-diff) ? -diff : (-diff).toFixed(1)}`;

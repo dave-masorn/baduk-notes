@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.027
+version: 0.1.028
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -77,7 +77,20 @@ How the application files interact — UI shell, script load order, scoring pipe
                 tech-log-dist/docs/
 ```
 
-### v0.1.027 — Manual Scoring snapshot persistence + session ⇄ SGF sync (single source of truth)
+### v0.1.028 — Manual Scoring Modal: goscorer auto-dead seeding + canonical Final anchor
+
+Completes the Manual Scoring Modal's L&D edits with three fixes:
+
+1. **First-entry goscorer dead stones are shown and counted like manual marks.** On the first open of the Manual Scoring Modal per game, when no endgame `DD`/`MA`/`TB`/`TW` markup resolves, `resetScoringBoardFromState` now runs `seedAutoDeadMarks()`: it runs `BoardEstimate.detectDeadStonesHeuristic` (Sabaki) on the **canonical game board** and folds every detected stone into the same `markedDead` / `deadStonesInfo` / dead-bucket structures a manual click writes. The modal shows the marks (X) and their territory immediately, and they count in the Computing formulas, the Final, and the saved props as ONE combined set with the user's own marks.
+2. **The Final W+1 is anchored to the untouched game position.** `resetScoringBoardFromState` captures `baseBoard` (deep copy of the game board) and `baseCaptures`; the Final badge (`scoring-result-display`) is recomputed from `baseBoard` + the current mark set + `baseCaptures` (falling back to the display board for legacy sessions). Re-Arranging/Replacing dead stones still mutates `scoringState.board` — which is exactly what the per-color Computing lines (territory + dead + caps + komi) are meant to teach — but they can **never** move the game's real result, nor the saved `DD`/`MA`/`TB`/`TW` (that converter also derives from `baseBoard`). Marking/unmarking a stone dead remains a legitimate edit that moves both.
+3. **Dead-stone accounting now comes from the marks, not the buckets.** The formulas' dead term is `countMarkedDeadStones()` over `markedDead`/`deadStonesInfo`, so recorded, auto-seeded and manual marks count identically, and Replacing a dead stone (which pops a bucket for placement) never changes the count.
+
+Also in this version:
+
+4. **Recorded markup dead stones seed the mark set on reset.** The `applyMark` seeding path now also fills `deadStonesInfo` and the dead/bucket stacks, so a resolved `DD` markup is indistinguishable from the user clicking the same stone.
+5. **The dead "Auto Dead / Unselect Dead Stones Button" is removed** from the modal sidebar (`index.html` block, the `updateScoringUI` wiring, and the now-unused `autoMarkDeadStones` / `hasAnyDeadStones` helpers are gone) — dead-stone detection is automatic and unified.
+
+(Headless-verified: 22 harness scenarios — auto-seed parity, canonical-Final anchoring across rearrange/replace, snapshot persistence of `baseBoard`/`baseCaptures` with legacy fallback, recorded-mark seeding, button removal — plus 9 regression probes, each confirming a fix has a failing test when reverted.)
 
 Three-part fix completing the v0.1.026 parity work:
 
@@ -89,6 +102,8 @@ Also in this version:
 
 4. **Sound restored across browsers.** All SFX (`stone`, `remove`, `annot`, `board flip`, `replay`) are pre-unlocked on the first user interaction — modern browsers (Chrome/Safari/Firefox) block `HTMLAudioElement.play()` until the page receives a user-activation gesture, so after a browser update or a drop in media-engagement status sounds can stop even though the files load fine. `unlockSfxOnFirstGesture()` (in `annotation_v4.js`, right after the SFX element declarations) silently plays each element muted on the first `pointerdown`/`keydown`/`touchstart` and pauses it, satisfying the autoplay policy for the whole session. No mute toggle involved; the code path and audio files were verified intact (the logs show all `_sfx/*` files served successfully).
 5. **Version-sync system is now self-maintaining and documented.** `sync-docs.js` derives the version from the `SITEMAP.md` frontmatter and auto-patches the `index.html` header label, `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and the `tech_log-{version}.html` redirect (see *SSOT Sync System* in the Tech Log System chapter).
+
+### v0.1.027 — Manual Scoring snapshot persistence + session ⇄ SGF sync (single source of truth)
 
 #### Shared converter — `computeScoringPropsFromSession(session)`
 
@@ -1300,7 +1315,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                           │  frontmatter: version: 0.1.027           │
+                           │  frontmatter: version: 0.1.028           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1313,12 +1328,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.027"          │                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.028"          │                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.027'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.028'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.027.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.028.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1437,9 +1452,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-     version: 0.1.027
+     version: 0.1.028
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.027`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.027.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.028`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.028.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1452,7 +1467,7 @@ SITEMAP.md (source of truth)
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.027`) in the sidebar
+   - Version badge shows the new version (`0.1.028`) in the sidebar
    - Updated content renders cleanly
 
 ---
