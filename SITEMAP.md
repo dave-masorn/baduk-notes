@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.024
+version: 0.1.026
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -48,11 +48,12 @@ How the application files interact — UI shell, script load order, scoring pipe
         │                                                            │
         │  loadSGF ───────────▶ SgfEngine.parseSgf / extractMainLine │
         │  runScoreEstimate ──▶ yellow panel (AI dead-map + tables) │
-        │      └─ Computational Method: gated Run button (▶)        │
+        │      └─ Computational Method: blue panel + "Run / Compute >" at Game End │
         │           └─ markup DD/MA/TB/TW ──▶ explicit TB/TW card   │
         │           └─ no markup ──▶ amber warn → Manual Scoring    │
-        │  resumeStudySession ──▶ inject DD/MA/TB/TW before loadSGF │
-        │  replayToTerminal ──▶ score endgame position (any cursor) │
+        │  resumeStudySession ──▶ loadSGF(rec.workingSgf) as-is       │
+        │  findEndgameMarkup ──▶ DD/MA/TB/TW lookup (any node)        │
+        │  replayToTerminal ──▶ score endgame position (any cursor)   │
         │  GoScorer ─────────▶ territory tally in scoring modal     │
         │  deadstones.guess ─▶ AI dead map (yellow panel, iter 200) │
         │  Liberties · phase-detector · _termHL · game-tree         │
@@ -76,24 +77,74 @@ How the application files interact — UI shell, script load order, scoring pipe
                 tech-log-dist/docs/
 ```
 
-### v0.1.024 — Study Record Resume Fix + Gated Computational Method
+### v0.1.026 — Unified scoring-input resolution (blue panel ⇄ Manual Scoring parity)
 
-#### Resume vs Download markup parity (fix)
+Fixes the residual mismatch where the blue-panel Run score differed from the Manual Scoring Modal's score for a saved study record. The fix is **not** a per-record patch and **not** a `source` flag branching the scorer — it is a single canonical resolution chain consumed identically by both surfaces.
 
-The Download/export path (`exportStudySessionSgf`) injects the session's `DD`/`MA`/`TB`/`TW` scoring markup into the terminal SGF node, but the Resume path (`resumeStudySession`) previously called `loadSGF(rec.workingSgf)` without that injection — so a resumed game silently lost its endgame markup and fell back to approximate scoring.
+#### `resolveScoringInputs()` — one canonical snapshot, one precedence chain
 
-`resumeStudySession` now mirrors the export path: before `loadSGF`, if `rec.scoringData` exists and the stored `workingSgf` lacks `DD[`/`TB[`, it injects the scoring markup via `computeSgfPropsFromScoringData(rec.scoringData)` + `injectSgfScoringPropsIntoTerminalNode(...)`. The terminal move regains `TB`/`TW`/`DD`/`MA`, so resumed games score explicitly again. (Headless-verified: resume with `scoringData` + unmarked `workingSgf` → terminal move gains `TB`/`TW`, explicit `W+1`; resume without `scoringData` → unchanged fallback.)
+New module-level helper returns a single `{ board, captures, komi, handicap, deadStones, tbPoints, twPoints, hasMarkup, positionLabel, provenance, markupMove }` snapshot. `runComputationalMethod` no longer extracts markup itself; it consumes this snapshot only. Precedence (strict, game-agnostic — the most recent, user-confirmed resolution wins):
 
-#### Gated Computational Method (Estimation modal)
+1. **Live session memory** (`_scoringPersistData`) — the first source `openScoringModal` restores;
+2. **Persisted study `scoringData`** (`rec.scoringData`) — the second source the modal restores;
+3. **SGF endgame markup** (`DD`/`MA`/`TB`/`TW`) resolved anywhere in the record (`findEndgameMarkup`).
 
-The blue Computational Method card no longer renders automatically on `⌘+Shift+E`. Inside the yellow Estimation overlay there is now a **"Computational Method (Japanese Territory Rules)"** row with a Run button:
+A session that carries **no resolution** (no dead marks, no territory) is skipped so the record's own markup can still drive the score; a session that resolves anything is authoritative over markup — because it is the exact board+marks snapshot the modal displays. Because tiers 1–2 mirror `openScoringModal`'s restore order, the Run control always scores what the reopened modal shows.
 
-- **Locked until Game End** — the button is disabled with the prerequisite hint *"Available upon Game Ended, Dead Stones, Territories identified."* until the replayer reaches the final move.
-- **Enabled at the final move** — the button shows a **▶ Run** (Play icon) state.
-- **Run with markup** → renders the existing dark-navy explicit scoring card (`#computational-estimate-card`, section *3. Explicit Territory Counting (TB/TW Markup)*).
-- **Run without `DD`/`MA`/`TB`/`TW`** → renders an amber warning (*"No DD/MA/TB/TW endgame markup found"*) with an **Open Manual Scoring Modal** button — instead of the previous automatic flood-fill fallback card.
+Session parity is exact: the snapshot feeds the scorer the session's own board (dead stones re-inserted via `deadStonesInfo`), the session's captures, the session's komi, and territory derived by the same `computeSgfPropsFromScoringData`/`GoScorer` path the modal's bar widget uses — with `handicap` forced to 0 because the modal's displayed formula (`territory + dead + captures + komi`) never includes a handicap term. The blue panel's provenance caption states the source (`Manual Scoring session` vs `SGF endgame markup (DD/MA/TB/TW)`).
 
-Saving from the Manual Scoring Modal now also mirrors the four properties onto the terminal move's direct `DD`/`MA`/`TB`/`TW` fields (in addition to `unknownProps`), so the Run gate finds them immediately — no reload needed.
+#### Single source of truth for session → markup
+
+`computeSgfPropsFromScoringData(data)` was hoisted from inside `setupEventListeners` to module top level (it is a pure function of `data`). It now also returns `board` — the session board with lifted dead stones restored to their original colors — and is shared by the modal export path, `findEndgameMarkup`'s session fallback (step 6 below), and `resolveScoringInputs`, so every consumer derives identical `DD`/`MA`/`TB`/`TW` sets.
+
+#### `findEndgameMarkup()` — step 6 (session fallback) now uses the shared converter
+
+The session fallback previously hand-derived `DD`/`MA` from `markedDead` and `TB`/`TW` only from `manualTerritory`. It now delegates to `computeSgfPropsFromScoringData`, so its territory derivation (GoScorer / `manualTerritory`) always matches the modal's for the same session.
+
+`window.resolveScoringInputs` and `window.findEndgameMarkup` are exposed for console diagnostics.
+
+(Headless-verified: 13 harness scenarios; a saved session wins over a stale raw-main-line `DD`/`MA` node with no record-specific logic, and the scorer receives the session's exact dead/captures/komi inputs.)
+
+### v0.1.025 — Algorithmic Endgame Markup Resolution + Fresh Manual Scoring
+
+Fixes for the "No DD/MA/TB/TW Endgame Markup Found" false-negative (REC 002) and the stale-dead-marks bug in Manual Scoring. Both are **algorithmic and game-agnostic** — they resolve markup for any record regardless of where loadSGF placed (or failed to fold) the props, instead of per-game patches.
+
+#### Algorithmic markup lookup — `findEndgameMarkup()`
+
+New module-level helper that returns the first node carrying `DD`/`MA`/`TB`/`TW`, searching in order:
+
+1. the move currently under the replayer (`state.sgfMoves[state.currentMoveIndex]`),
+2. the **last** markup-bearing move in `state.allSgfMoves` (full sequence),
+3. the **last** markup-bearing move in the (possibly filtered) `state.sgfMoves`,
+4. root-level props (`state.sgfRootProps` / `state.sgfMetadata.tb` / `.tw`),
+5. the **last** markup-bearing raw node in `SgfEngine.extractMainLine(state.sgfTree)` — covers terminal annotation-only nodes that loadSGF could not fold onto a move,
+6. the study record's **saved scoring session** (`rec.scoringData`) via the shared `computeSgfPropsFromScoringData` converter — for records whose `workingSgf` string never received the props.
+
+`runComputationalMethod` uses this instead of the old "current move, else last `allSgfMoves`" check, so a game whose markup sits on the root, on a non-move terminal node, or anywhere in the main line scores explicitly and never halts with the warning. (Headless-verified: markup node beyond the old 12-node fold window and root-level `TB`/`TW` both resolve.)
+
+#### Terminal-markup fold — full main-line scan
+
+The loadSGF fold previously scanned only the last 12 main-line nodes (`mainLine.length - 12`). It now finds the last **move** node in the main line and scans **only the annotation-only nodes strictly after it** for endgame markup, folding it onto the final move. No arbitrary window — and mid-game markup is never folded onto the final move.
+
+#### Manual Scoring Modal — fresh marks on every open
+
+Two changes fix the "reopened modal shows outdated dead-stone marks" bug:
+
+- **`openScoringModal(savedData)`** now restores the most recent session when called without explicit data (e.g. from the Estimation panel's **Open Manual Scoring Modal** button): first `_scoringPersistData` (the session closed most recently), then `StudyRecordDB.getRecord(state.activeStudyId).scoringData` — so a fresh page load still shows the latest saved marks.
+- **`resetScoringBoardFromState()`** now seeds `scoringState.markedDead` from the game's own `DD`/`MA`/`TB`/`TW` markup (via `findEndgameMarkup`): `DD`/`MA` points are marked dead directly; opponent stones inside `TB`/`TW` territory bounds are dead. A fresh session starts from the game's resolved Life & Death marks instead of an empty board.
+
+#### Resume vs Download markup parity (correction)
+
+Earlier docs claimed `resumeStudySession` injects `DD`/`MA`/`TB`/`TW` before `loadSGF`. That is **not** what the code does: `resumeStudySession` calls `loadSGF(rec.workingSgf)` as-is (annotation_v4.js:3019), and markup injection exists only in the export/viewer paths (`exportStudySessionSgf` / `openSgfCodeViewerModal`). Persisted markup in a resumed game comes from `saveScoringResult`, which writes the four properties into the terminal node's `unknownProps` **and** mirrors them onto its direct `DD`/`MA`/`TB`/`TW` fields. With `findEndgameMarkup()`, a resumed game scores explicitly whenever its `workingSgf` carries the markup anywhere — no injection step required.
+
+#### Computational Method (Estimation modal) — blue panel + gated Run control
+
+On `⌘+Shift+E` the yellow Estimation overlay always renders the **"Computational Method (Japanese Territory Rules)"** blue panel (`#computational-estimate-card`). Its Run control is gated on Game End:
+
+- **Before the final move** — the blue panel shows an *"Available Only Upon Game End"* notice (no button); an exact Japanese score only makes sense once the replayer reaches the final move.
+- **At the final move** — the panel shows the **"Run / Compute >"** button.
+- **Run with markup** → renders the explicit scoring detail (`#computational-method-result`, section *3. Explicit Territory Counting (TB/TW Markup)*).
+- **Run without `DD`/`MA`/`TB`/`TW`** → renders an amber warning (*"No DD/MA/TB/TW endgame markup found"*) with an **Open Manual Scoring Modal** button — instead of any automatic flood-fill fallback.
 
 ## Project Purpose
 
@@ -116,12 +167,12 @@ baduk-notes is a single-page web application for Go players and annotators.
 | File | Lines | Description |
 | --- | --- | --- |
 | `index.html` | 2,561 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 15,655 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (injects `DD`/`MA`/`TB`/`TW` into the loaded SGF before `loadSGF`), gated Computational Method Run button (enabled at Game End; no markup → amber warn to use Manual Scoring Modal), explicit `DD`/`MA`/`TB`/`TW` scoring, `replayToTerminal()` |
+| `annotation_v4.js` | 15,655 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
 | `sgf-parser.js` | 800 | `SgfEngine` namespace — SGF parsing, board size, setup properties, markup, cloneTree, extractMainLine |
-| `board-estimate.js` | 682 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the flood-fill fallback is retained internally but is no longer surfaced by the gated Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal; uses `deadstones.bundle.js` for the AI pass) |
+| `board-estimate.js` | 682 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal; uses `deadstones.bundle.js` for the AI pass) |
 | `goscorer.js` | 1,504 | `GoScorer` namespace — scoring-modal territory counting, `finalTerritoryScore()`, komi/captures tally |
 | `deadstones.bundle.js` | — | WASM bundle — dead stone detection (`@sabaki/deadstones`, esbuild build) |
 | `deadstones_bg.wasm` | — | WASM binary for dead stones |
@@ -900,7 +951,7 @@ All custom functions introduced in baduk-notes, organized by module.
 | Function | Signature | Description |
 | --- | --- | --- |
 | `BoardEstimate.estimate` | `(board, komi, deadStones) → {black, white, total}` | Full score estimation — counts territory + captures + komi. Uses `deadstones.bundle.js` (WASM) for dead stone detection. |
-| `BoardEstimate.evaluateJapaneseTerritory` | `(board, options) → {bTerritory, wTerritory, ..., resultStr}` | Deterministic Japanese territory scorer — resolves dead stones from `DD`/`MA`/`TB`/`TW` markup (current node first, else in-memory replay to the terminal position); flood-fill fallback retained internally for programmatic callers, but the gated Computational Method stops short of it and warns the user to mark dead stones when no endgame markup exists anywhere |
+| `BoardEstimate.evaluateJapaneseTerritory` | `(board, options) → {bTerritory, wTerritory, ..., resultStr}` | Deterministic Japanese territory scorer — resolves dead stones from `DD`/`MA`/`TB`/`TW` markup (current node first, else in-memory replay to the terminal position); flood-fill fallback retained internally for programmatic callers, but the Computational Method stops short of it and warns the user to mark dead stones when no endgame markup exists anywhere |
 | `BoardEstimate.countTerritory` | `(board, deadStones) → {black, white}` | Flood-fill empty regions; regions bordered by exactly one color → that color's territory. |
 | `BoardEstimate.countStones` | `(board) → {black, white}` | Count living stones (excluding dead stones). |
 | `BoardEstimate.findDeadStones` | `(board) → [vertex, ...]` | Calls WASM deadstones bundle to detect dead stones on the board. |
@@ -1463,7 +1514,7 @@ Mixed SGF files, PNGs, and reference images for testing.
 | `window.PhaseDetectorConfig` | phase-detector.js defaults + user overrides | `detectGamePhaseDynamic()` | Phase detection tuning |
 | `window._phaseDebug` | phase-detector.js (when debug=true) | `console.table()` | Per-move phase diagnostics |
 | `window.detectGamePhaseDynamic` | phase-detector.js | annotation_v4.js | Phase classification API |
-| `window.runScoreEstimate` | annotation_v4.js (per-game init) | annotation_v4.js, test harnesses | Score-estimate trigger (`⌘+Shift+E`) — opens the yellow Estimation panel with the gated Computational Method Run button; exposes the estimate pipeline to headless tests |
+| `window.runScoreEstimate` | annotation_v4.js (per-game init) | annotation_v4.js, test harnesses | Score-estimate trigger (`⌘+Shift+E`) — opens the yellow Estimation panel with the Computational Method blue panel (Run/Compute control at Game End); exposes the estimate pipeline to headless tests |
 | `window.openScoringModal` | annotation_v4.js | estimation modal, scoring modal, test harnesses | Opens the Manual Scoring Modal — fresh (from current board state) or restored from `savedData` (`rec.scoringData`) |
 | `window.estimatePanel` | annotation_v4.js | annotation_v4.js, test harnesses | Reference to the estimate modal panel element |
 

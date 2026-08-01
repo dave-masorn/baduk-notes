@@ -364,7 +364,12 @@ function saveHistoryState(actionName = null) {
         exportText: JSON.parse(JSON.stringify(state.exportText)),
         legend: JSON.parse(JSON.stringify(state.legend)),
         playMode: state.playMode,
-        playTurn: state.playTurn
+        playTurn: state.playTurn,
+        sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
+        allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        currentMoveIndex: state.currentMoveIndex,
+        isSgfDirty: state.isSgfDirty,
+        baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
     };
     undoStack.push(snapshot);
     if (undoStack.length > 50) {
@@ -389,6 +394,18 @@ function restoreState(snapshot) {
     }
     state.playMode = !!snapshot.playMode;
     state.playTurn = snapshot.playTurn || 'B';
+
+    if (Array.isArray(snapshot.sgfMoves)) {
+        state.sgfMoves = JSON.parse(JSON.stringify(snapshot.sgfMoves));
+        state.allSgfMoves = Array.isArray(snapshot.allSgfMoves)
+            ? JSON.parse(JSON.stringify(snapshot.allSgfMoves))
+            : state.sgfMoves.slice();
+        state.currentMoveIndex = snapshot.currentMoveIndex != null ? snapshot.currentMoveIndex : -1;
+        state.isSgfDirty = !!snapshot.isSgfDirty;
+        state.baselineAnnotations = JSON.parse(JSON.stringify(snapshot.baselineAnnotations || []));
+        updateReplayerKpiDisplay();
+        if (window.updateSaveRecGameButton) window.updateSaveRecGameButton();
+    }
 
     if (elements.customLetterInput) {
         elements.customLetterInput.value = state.customLetter;
@@ -463,7 +480,12 @@ function undo() {
         exportText: JSON.parse(JSON.stringify(state.exportText)),
         legend: JSON.parse(JSON.stringify(state.legend)),
         playMode: state.playMode,
-        playTurn: state.playTurn
+        playTurn: state.playTurn,
+        sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
+        allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        currentMoveIndex: state.currentMoveIndex,
+        isSgfDirty: state.isSgfDirty,
+        baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
     };
     redoStack.push(currentState);
     restoreState(previousState);
@@ -492,7 +514,12 @@ function redo() {
         exportText: JSON.parse(JSON.stringify(state.exportText)),
         legend: JSON.parse(JSON.stringify(state.legend)),
         playMode: state.playMode,
-        playTurn: state.playTurn
+        playTurn: state.playTurn,
+        sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
+        allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        currentMoveIndex: state.currentMoveIndex,
+        isSgfDirty: state.isSgfDirty,
+        baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
     };
     undoStack.push(currentState);
     restoreState(nextState);
@@ -946,6 +973,202 @@ function updateSourceSelection() {
     }
 }
 
+function createEmptyBoardGrid() {
+    return Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => ({
+        player: null,
+        annotation: null,
+        label: null
+    })));
+}
+
+function initBlankGame() {
+    state.board = createEmptyBoardGrid();
+    state.baselineBoard = createEmptyBoardGrid();
+    state.setupBoard = null;
+    state.allSgfMoves = [];
+    state.sgfMoves = [];
+    state.currentMoveIndex = -1;
+    state.isSgfDirty = false;
+    state.popupShownForCurrentChange = false;
+    state.baselineComment = '';
+    state.baselineAnnotations = [];
+    state.baselineUnknownProps = null;
+    state.sgfMetadata = {};
+    state.sgfRootProps = null;
+    state.sgfTree = null;
+    state.rawSgf = null;
+    state.plColor = null;
+    state.variationData = { branchPoints: [], currentBranchPath: [0] };
+    state.annotLastStone = null;
+    if (elements.sgfExportContainer) elements.sgfExportContainer.style.display = 'none';
+    if (elements.btnExportSgf) elements.btnExportSgf.style.display = 'none';
+}
+
+// Rebuild the grid for the position after `index` moves, from baselineBoard + replay rules.
+function buildPositionUpTo(index) {
+    const grid = JSON.parse(JSON.stringify(state.baselineBoard || createEmptyBoardGrid()));
+    for (let i = 0; i <= index; i++) {
+        const m = state.sgfMoves[i];
+        if (!m || m.isPass) continue;
+        if (m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19 && !grid[m.r][m.c].player) {
+            playStoneWithCaptures(grid, m.r, m.c, m.player);
+        }
+    }
+    return grid;
+}
+
+function boardsEqual(a, b) {
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if ((a[r][c].player || null) !== (b[r][c].player || null)) return false;
+        }
+    }
+    return true;
+}
+
+function groupHasLiberty(board, r, c, color) {
+    const visited = Array.from({ length: 19 }, () => Array(19).fill(false));
+    const stack = [[r, c]];
+    visited[r][c] = true;
+    const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    while (stack.length) {
+        const [cr, cc] = stack.pop();
+        for (const [dr, dc] of dirs) {
+            const nr = cr + dr, nc = cc + dc;
+            if (nr < 0 || nr > 18 || nc < 0 || nc > 18) continue;
+            if (!board[nr][nc].player) return true;
+            if (board[nr][nc].player === color && !visited[nr][nc]) {
+                visited[nr][nc] = true;
+                stack.push([nr, nc]);
+            }
+        }
+    }
+    return false;
+}
+
+// Record a real SGF move (B[]/W[]) at (r,c) as a child of the current position.
+// Returns the move object on success, or null if the point is illegal/occupied.
+function recordMoveAt(r, c, color, toolName) {
+    if (r < 0 || r > 18 || c < 0 || c > 18) return null;
+    if (color !== 'B' && color !== 'W') return null;
+
+    const positionBefore = buildPositionUpTo(state.currentMoveIndex);
+    if (positionBefore[r][c].player) return null; // occupied
+
+    // Validate on a throwaway copy: apply captures, reject suicide, reject ko recapture.
+    const tempBoard = JSON.parse(JSON.stringify(positionBefore));
+    playStoneWithCaptures(tempBoard, r, c, color);
+    if (tempBoard[r][c].player !== color) return null; // suicide
+
+    if (state.currentMoveIndex >= 0) {
+        const positionTwoAgo = buildPositionUpTo(state.currentMoveIndex - 1);
+        if (boardsEqual(tempBoard, positionTwoAgo)) return null; // simple ko
+    }
+
+    saveHistoryState(toolName);
+
+    // Branch: truncate any later moves
+    state.sgfMoves.splice(state.currentMoveIndex + 1);
+    state.allSgfMoves.splice(state.currentMoveIndex + 1);
+
+    // For Play Black / Play White, keep the move numbering the user set in the play-number
+    // input (GoWrite-style); otherwise number positionally from the move list.
+    let playedNumber = null;
+    if (toolName === 'play-b' || toolName === 'play-w') {
+        playedNumber = state.playSeq.number;
+    }
+    const nextMoveNumber = state.sgfMoves.length + 1;
+    const move = {
+        player: color,
+        r: r,
+        c: c,
+        isPass: false,
+        comment: '',
+        annotations: [],
+        unknownProps: null,
+        moveNumber: playedNumber != null ? playedNumber : nextMoveNumber,
+        nodeName: '',
+        moveAnnotation: null,
+        nodeAnnotation: null,
+        territory: null
+    };
+    state.sgfMoves.push(move);
+    state.allSgfMoves.push(move);
+    state.currentMoveIndex = state.sgfMoves.length - 1;
+    state.isSgfDirty = true;
+    state.popupShownForCurrentChange = false;
+
+    if (toolName === 'play-b' || toolName === 'play-w') {
+        state.playSeq.currentColor = color === 'B' ? 'W' : 'B';
+        state.playSeq.number = playedNumber + 1;
+        if (elements.customPlayInput) elements.customPlayInput.value = state.playSeq.number;
+    }
+
+    const replayerSec = document.getElementById('replayer-section');
+    if (replayerSec && replayerSec.style.display === 'none') replayerSec.style.display = 'block';
+    if (elements.sgfExportContainer) elements.sgfExportContainer.style.display = 'flex';
+    if (elements.btnExportSgf) elements.btnExportSgf.style.display = 'flex';
+
+    // Rebuild the display without triggering the "file changed" popup.
+    state.isSgfDirty = false;
+    goToMove(state.currentMoveIndex);
+    state.isSgfDirty = true;
+
+    if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
+    return move;
+}
+
+// Delete the last recorded move (used when clicking the last stone again in play mode).
+function removeLastMove() {
+    if (state.currentMoveIndex < 0 || !state.sgfMoves.length) return false;
+    const m = state.sgfMoves[state.currentMoveIndex];
+    if (m.isPass) return false;
+
+    saveHistoryState('remove-move');
+    state.sgfMoves.pop();
+    state.allSgfMoves.pop();
+    state.currentMoveIndex = state.sgfMoves.length - 1;
+    state.isSgfDirty = true;
+    state.popupShownForCurrentChange = false;
+
+    state.isSgfDirty = false;
+    goToMove(state.currentMoveIndex);
+    state.isSgfDirty = true;
+
+    if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
+    return true;
+}
+
+function replayToTerminal() {
+    const grid = state.setupBoard
+        ? JSON.parse(JSON.stringify(state.setupBoard))
+        : createEmptyBoardGrid();
+    let bCaps = 0, wCaps = 0;
+    const moves = (state.allSgfMoves && state.allSgfMoves.length) ? state.allSgfMoves : (state.sgfMoves || []);
+    for (const m of moves) {
+        if (!m || m.isPass) continue;
+        if (m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
+            const cap = playStoneWithCaptures(grid, m.r, m.c, m.player);
+            if (m.player === 'B') bCaps += cap.count; else wCaps += cap.count;
+        }
+    }
+    return { board: grid, captures: { B: bCaps, W: wCaps }, moveCount: moves.length };
+}
+
+function updateReplayerKpiDisplay() {
+    if (!elements.replayerMoveKpi) return;
+    const index = state.currentMoveIndex;
+    const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    const isFiltered = totalAll > 0 && totalAll !== state.sgfMoves.length;
+    const absIdx = (state.filterStart || 1) - 1 + index;
+    if (isFiltered) {
+        const endMove = (state.filterEnd && state.filterEnd !== Infinity) ? state.filterEnd : totalAll;
+        elements.replayerMoveKpi.textContent = `${absIdx + 1} / ${endMove}`;
+    } else {
+        elements.replayerMoveKpi.textContent = `${absIdx + 1} / ${totalAll}`;
+    }
+}
+
 function init() {
     if (!elements.canvasInitial) elements.canvasInitial = document.getElementById('go-board-canvas-initial');
     if (!elements.canvasStudy) elements.canvasStudy = document.getElementById('go-board-canvas-study');
@@ -963,6 +1186,7 @@ function init() {
     });
     setupEventListeners();
     setupGameInfoEdit();
+    initBlankGame();
     drawBoard();
     updateCropBadge();
     updateReplicationCode();
@@ -1030,6 +1254,20 @@ function setupEventListeners() {
             } else if (tool === 'play-w') {
                 state.playSeq.currentColor = 'W';
                 state.playSeq.number = parseInt(elements.customPlayInput.value, 10) || 1;
+            }
+
+            // Auto-enable "show move numbers" while a play tool is active (GoWrite-style
+            // numbers on played stones), restoring the prior setting when switching away.
+            if (tool === 'play-b' || tool === 'play-w') {
+                state._prevDisplayMoveNumbers = state.displayMoveNumbers;
+                state.displayMoveNumbers = true;
+            } else if (state._prevDisplayMoveNumbers !== undefined) {
+                state.displayMoveNumbers = state._prevDisplayMoveNumbers;
+                state._prevDisplayMoveNumbers = undefined;
+            }
+            if (elements.toggleMoveNumbers) elements.toggleMoveNumbers.checked = state.displayMoveNumbers;
+            if (elements.moveNumbersOptions) {
+                elements.moveNumbersOptions.style.display = state.displayMoveNumbers ? 'flex' : 'none';
             }
             
             drawBoard();
@@ -2534,84 +2772,6 @@ function setupEventListeners() {
         });
     }
 
-    function computeSgfPropsFromScoringData(data) {
-        if (!data || !data.board || !data.markedDead) return null;
-        const dd = [];
-        const ma = [];
-        const tb = [];
-        const tw = [];
-
-        for (let r = 0; r < 19; r++) {
-            for (let c = 0; c < 19; c++) {
-                if (data.markedDead[r] && data.markedDead[r][c]) {
-                    const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
-                        ? SgfEngine.formatGoPoint(c, r)
-                        : null;
-                    if (pt) {
-                        dd.push(pt);
-                        ma.push(pt);
-                    }
-                }
-            }
-        }
-
-        const stonesWithDead = data.board.map((row, ri) =>
-            row.map((val, ci) => {
-                if (data.markedDead[ri] && data.markedDead[ri][ci] && val === 0) {
-                    return (data.deadStonesInfo && data.deadStonesInfo[ri] && data.deadStonesInfo[ri][ci]) || 0;
-                }
-                return val;
-            })
-        );
-
-        let locScores = null;
-        let areaScores = null;
-        if (window.GoScorer) {
-            try {
-                if ((data.ruleMode || 'japanese') === 'japanese') {
-                    locScores = window.GoScorer.territoryScoring(stonesWithDead, data.markedDead, false);
-                } else {
-                    areaScores = window.GoScorer.areaScoring(stonesWithDead, data.markedDead);
-                }
-            } catch (e) {}
-        }
-
-        for (let r = 0; r < 19; r++) {
-            for (let c = 0; c < 19; c++) {
-                if (data.board[r][c] !== 0) continue;
-                let terrColor = 0;
-                if (data.manualTerritory && data.manualTerritory[r] && data.manualTerritory[r][c] > 0) {
-                    terrColor = data.manualTerritory[r][c];
-                } else if ((data.ruleMode || 'japanese') === 'japanese' && locScores) {
-                    terrColor = (locScores[r][c] && locScores[r][c].isTerritoryFor) || 0;
-                } else if ((data.ruleMode || 'japanese') === 'chinese' && areaScores) {
-                    terrColor = (areaScores[r] && areaScores[r][c]) || 0;
-                }
-
-                if (terrColor === 1 || terrColor === 2) {
-                    const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
-                        ? SgfEngine.formatGoPoint(c, r)
-                        : null;
-                    if (pt) {
-                        if (terrColor === 1) tb.push(pt);
-                        else tw.push(pt);
-                    }
-                }
-            }
-        }
-
-        const compFn = (typeof SgfEngine !== 'undefined' && SgfEngine.compressGoPoints)
-            ? SgfEngine.compressGoPoints
-            : (pts => pts);
-
-        return {
-            dd: compFn(dd),
-            ma: compFn(ma),
-            tb: compFn(tb),
-            tw: compFn(tw)
-        };
-    }
-
     function injectSgfScoringPropsIntoTerminalNode(sgfStr, props) {
         if (!props) return sgfStr;
         const compFn = (typeof SgfEngine !== 'undefined' && SgfEngine.compressGoPoints) ? SgfEngine.compressGoPoints : (p => p || []);
@@ -2675,7 +2835,7 @@ function setupEventListeners() {
             rootProps.GC = [state.sgfMetadata.gc];
         }
 
-        const setupBoard = state.setupBoard || state.baselineBoard;
+    const setupBoard = state.setupBoard || state.baselineBoard || createEmptyBoardGrid();
         if (setupBoard) {
             const ab = [], aw = [];
             for (let r = 0; r < 19; r++) {
@@ -4031,16 +4191,18 @@ function handleMouseDown(e) {
     if (state.playMode) {
         if (c >= 0 && c <= 18 && r >= 0 && r <= 18) {
             const cell = state.board[r][c];
-            saveHistoryState();
             if (cell.player === null) {
-                cell.player = state.playTurn;
-                cell.annotation = null;
-                cell.label = null;
-                state.playTurn = state.playTurn === 'B' ? 'W' : 'B';
+                const recorded = recordMoveAt(r, c, state.playTurn, 'play-mode');
+                if (recorded) {
+                    state.playTurn = state.playTurn === 'B' ? 'W' : 'B';
+                }
             } else {
-                cell.player = null;
+                const m = state.currentMoveIndex >= 0 ? state.sgfMoves[state.currentMoveIndex] : null;
+                if (m && !m.isPass && m.r === r && m.c === c) {
+                    removeLastMove();
+                    state.playTurn = state.playTurn === 'B' ? 'W' : 'B';
+                }
             }
-            drawBoard();
         }
         return;
     }
@@ -4396,11 +4558,21 @@ function applyToolToCell(r, c) {
     const cell = state.board[r][c];
     const tool = state.activeTool;
 
+    // Stone & Play tools record real SGF moves (with captures / ko), then rebuild the board.
+    if (tool === 'stone-b' || tool === 'stone-w' || tool === 'play-b' || tool === 'play-w') {
+        // Play Black / Play White alternate from the selected starting color (GoWrite-style):
+        // play-b -> B, W, B, ... ; play-w -> W, B, W, ... via state.playSeq.currentColor.
+        let color;
+        if (tool === 'stone-b') color = 'B';
+        else if (tool === 'stone-w') color = 'W';
+        else color = state.playSeq.currentColor;
+        recordMoveAt(r, c, color, tool);
+        return;
+    }
+
     // Check if the change will actually modify the board state
     let changed = false;
-    if (tool === 'stone-b' && (cell.player !== 'B' || cell.annotation !== null || cell.label !== null)) changed = true;
-    else if (tool === 'stone-w' && (cell.player !== 'W' || cell.annotation !== null || cell.label !== null)) changed = true;
-    else if (tool === 'clear' && (cell.player !== null || cell.annotation !== null || cell.label !== null)) changed = true;
+    if (tool === 'clear' && (cell.player !== null || cell.annotation !== null || cell.label !== null)) changed = true;
     else if (tool === 'hoshi') changed = true;
     else if (tool === 'mark-triangle' && cell.annotation !== 'triangle') changed = true;
     else if (tool === 'mark-square' && cell.annotation !== 'square') changed = true;
@@ -4411,23 +4583,12 @@ function applyToolToCell(r, c) {
     else if (tool === 'label-letter' && cell.label !== state.customLetter) changed = true;
     else if (tool === 'label-number' && cell.label !== String(state.customNumber)) changed = true;
     else if (tool === 'label-text' && cell.label !== state.customText) changed = true;
-    else if ((tool === 'play-b' || tool === 'play-w') && (cell.player !== state.playSeq.currentColor || cell.label !== String(state.playSeq.number))) changed = true;
 
     if (changed) {
         saveHistoryState(tool);
     }
 
-    if (tool === 'stone-b') {
-        cell.player = 'B';
-        cell.annotation = null;
-        cell.label = null;
-        state.annotLastStone = { r, c, player: 'B' };
-    } else if (tool === 'stone-w') {
-        cell.player = 'W';
-        cell.annotation = null;
-        cell.label = null;
-        state.annotLastStone = { r, c, player: 'W' };
-    } else if (tool === 'clear') {
+    if (tool === 'clear') {
         cell.player = null;
         cell.annotation = null;
         cell.label = null;
@@ -4469,14 +4630,6 @@ function applyToolToCell(r, c) {
         if (window.updateResetBtnVisibility) window.updateResetBtnVisibility();
     } else if (tool === 'label-text') {
         cell.label = state.customText;
-    } else if (tool === 'play-b' || tool === 'play-w') {
-        cell.player = state.playSeq.currentColor;
-        cell.label = String(state.playSeq.number);
-        cell.annotation = null;
-        
-        state.playSeq.number++;
-        state.playSeq.currentColor = state.playSeq.currentColor === 'B' ? 'W' : 'B';
-        elements.customPlayInput.value = state.playSeq.number;
     }
 
     drawBoard();
@@ -9942,6 +10095,306 @@ function switchBranchAndGoToNode(path, nodeIndex) {
 }
 window.switchBranchAndGoToNode = switchBranchAndGoToNode;
 
+// ── Endgame markup resolution (DD / MA / TB / TW) ─────────────────────────
+// Algorithmic, game-agnostic lookup for dead-stone / territory markup that works
+// for ANY loaded record regardless of how loadSGF placed (or folded) the props.
+// Resolution order:
+//   1. the move currently under the replayer,
+//   2. the LAST markup-bearing move in allSgfMoves (full sequence),
+//   3. the LAST markup-bearing move in the (possibly filtered) sgfMoves,
+//   4. root-level DD/MA/TB/TW properties (state.sgfRootProps / state.sgfMetadata),
+//   5. the LAST markup-bearing raw node in the parsed SGF main line (covers terminal
+//      annotation-only nodes that loadSGF could not fold onto a move).
+// Returns a node exposing { DD, MA, TB, TW, player } or null when no markup exists.
+// Canonical converter: a saved Manual Scoring session (scoringData) → SGF scoring props.
+// Pure function of `data` (no closure state), so it lives at module top level and is shared by
+// the modal export path, findEndgameMarkup's session fallback, and resolveScoringInputs —
+// one definition of how a session becomes DD/MA/TB/TW, so every consumer derives identical sets.
+// Returns { dd, ma, tb, tw } (compressed point strings) plus `board`: the session board with
+// lifted (dead) stones restored to their original colors — exactly the grid GoScorer scores,
+// so a consumer can reproduce the modal's prisoner counts for an identical total.
+function computeSgfPropsFromScoringData(data) {
+    if (!data || !data.board || !data.markedDead) return null;
+    const dd = [];
+    const ma = [];
+    const tb = [];
+    const tw = [];
+
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if (data.markedDead[r] && data.markedDead[r][c]) {
+                const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
+                    ? SgfEngine.formatGoPoint(c, r)
+                    : null;
+                if (pt) {
+                    dd.push(pt);
+                    ma.push(pt);
+                }
+            }
+        }
+    }
+
+    const stonesWithDead = data.board.map((row, ri) =>
+        row.map((val, ci) => {
+            if (data.markedDead[ri] && data.markedDead[ri][ci] && val === 0) {
+                return (data.deadStonesInfo && data.deadStonesInfo[ri] && data.deadStonesInfo[ri][ci]) || 0;
+            }
+            return val;
+        })
+    );
+
+    let locScores = null;
+    let areaScores = null;
+    if (window.GoScorer) {
+        try {
+            if ((data.ruleMode || 'japanese') === 'japanese') {
+                locScores = window.GoScorer.territoryScoring(stonesWithDead, data.markedDead, false);
+            } else {
+                areaScores = window.GoScorer.areaScoring(stonesWithDead, data.markedDead);
+            }
+        } catch (e) {}
+    }
+
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if (data.board[r][c] !== 0) continue;
+            let terrColor = 0;
+            if (data.manualTerritory && data.manualTerritory[r] && data.manualTerritory[r][c] > 0) {
+                terrColor = data.manualTerritory[r][c];
+            } else if ((data.ruleMode || 'japanese') === 'japanese' && locScores) {
+                terrColor = (locScores[r][c] && locScores[r][c].isTerritoryFor) || 0;
+            } else if ((data.ruleMode || 'japanese') === 'chinese' && areaScores) {
+                terrColor = (areaScores[r] && areaScores[r][c]) || 0;
+            }
+
+            if (terrColor === 1 || terrColor === 2) {
+                const pt = (typeof SgfEngine !== 'undefined' && SgfEngine.formatGoPoint)
+                    ? SgfEngine.formatGoPoint(c, r)
+                    : null;
+                if (pt) {
+                    if (terrColor === 1) tb.push(pt);
+                    else tw.push(pt);
+                }
+            }
+        }
+    }
+
+    const compFn = (typeof SgfEngine !== 'undefined' && SgfEngine.compressGoPoints)
+        ? SgfEngine.compressGoPoints
+        : (pts => pts);
+
+    return {
+        dd: compFn(dd),
+        ma: compFn(ma),
+        tb: compFn(tb),
+        tw: compFn(tw),
+        board: stonesWithDead
+    };
+}
+
+function findEndgameMarkup() {
+    const hasMarkup = (m) => !!(m && (m.DD || m.MA || m.TB || m.TW));
+
+    if (state.currentMoveIndex >= 0 && state.sgfMoves && hasMarkup(state.sgfMoves[state.currentMoveIndex])) {
+        return state.sgfMoves[state.currentMoveIndex];
+    }
+
+    if (state.allSgfMoves && state.allSgfMoves.length) {
+        for (let i = state.allSgfMoves.length - 1; i >= 0; i--) {
+            if (hasMarkup(state.allSgfMoves[i])) return state.allSgfMoves[i];
+        }
+    }
+
+    if (state.sgfMoves && state.sgfMoves.length) {
+        for (let i = state.sgfMoves.length - 1; i >= 0; i--) {
+            if (hasMarkup(state.sgfMoves[i])) return state.sgfMoves[i];
+        }
+    }
+
+    const rootProps = state.sgfRootProps || null;
+    if (rootProps) {
+        const meta = state.sgfMetadata || {};
+        const DD = rootProps.DD || null;
+        const MA = rootProps.MA || null;
+        const TB = rootProps.TB || meta.tb || null;
+        const TW = rootProps.TW || meta.tw || null;
+        if (DD || MA || TB || TW) return { DD, MA, TB, TW, player: null };
+    }
+
+    if (state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+        const mainLine = SgfEngine.extractMainLine(state.sgfTree);
+        for (let i = mainLine.length - 1; i >= 0; i--) {
+            const props = mainLine[i];
+            if (props && (props.DD || props.MA || props.TB || props.TW)) {
+                return { DD: props.DD || null, MA: props.MA || null, TB: props.TB || null, TW: props.TW || null, player: null };
+            }
+        }
+    }
+
+    // Final fallback: the study record's SAVED scoring session. The SGF viewer injects this
+    // markup at display time, so a record whose workingSgf string itself never received the
+    // DD/MA/TB/TW props (e.g. scoring saved through a flow that did not regenerate the SGF
+    // string) would otherwise appear "unmarked" to the scorer while the user sees them in the
+    // buffer. Rebuild the props through the shared canonical converter so this fallback always
+    // derives the exact same marks the Manual Scoring Modal derives for that session.
+    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec && rec.scoringData) {
+            const props = computeSgfPropsFromScoringData(rec.scoringData);
+            if (props && (props.dd.length || props.ma.length || props.tb.length || props.tw.length)) {
+                return { DD: props.dd, MA: props.ma, TB: props.tb, TW: props.tw, player: null };
+            }
+        }
+    }
+
+    return null;
+}
+window.findEndgameMarkup = findEndgameMarkup;
+
+// Unify every scoring-input source into ONE canonical snapshot so the blue-panel Run control
+// and the Manual Scoring Modal always consume identical inputs. Precedence is a strict,
+// algorithmic chain (most recent, user-confirmed resolution wins):
+//   1. Live session memory (_scoringPersistData) — the first source the modal restores.
+//   2. Persisted study scoringData — the second source the modal restores.
+//   3. SGF endgame markup (DD/MA/TB/TW) resolved anywhere in the loaded record.
+// A session that carries NO resolution (no dead marks, no territory) is skipped so the
+// record's own markup can still drive the score; a session that resolves anything is
+// authoritative over markup, because it is the exact board+marks snapshot the modal displays —
+// guaranteeing blue-panel == modal parity for every saved session.
+function resolveScoringInputs() {
+    const snapshot = {
+        board: state.board,
+        captures: { B: 0, W: 0 },
+        komi: (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null && state.sgfMetadata.km !== '')
+            ? (parseFloat(state.sgfMetadata.km) || 6.5) : 6.5,
+        handicap: parseInt((state.sgfMetadata && state.sgfMetadata.ha), 10) || 0,
+        deadStones: [],
+        tbPoints: [],
+        twPoints: [],
+        hasMarkup: false,
+        positionLabel: '',
+        provenance: '',
+        markupMove: null
+    };
+
+    // ── Tier 1/2: Manual Scoring session (live memory, then persisted record) ──
+    let session = null;
+    if (_scoringPersistData && _scoringPersistData.board) {
+        session = _scoringPersistData;
+    } else if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec && rec.scoringData && rec.scoringData.board) session = rec.scoringData;
+    }
+
+    if (session) {
+        const md = session.markedDead || null;
+        const mt = session.manualTerritory || null;
+        let resolves = false;
+        if (md) {
+            for (let r = 0; r < md.length && !resolves; r++) {
+                const row = md[r];
+                if (!row) continue;
+                for (let c = 0; c < row.length; c++) {
+                    if (row[c]) { resolves = true; break; }
+                }
+            }
+        }
+        if (!resolves && mt) {
+            for (let r = 0; r < mt.length && !resolves; r++) {
+                const row = mt[r];
+                if (!row) continue;
+                for (let c = 0; c < row.length; c++) {
+                    if (row[c] === 1 || row[c] === 2) { resolves = true; break; }
+                }
+            }
+        }
+
+        if (resolves) {
+            const props = computeSgfPropsFromScoringData(session);
+            const bHeight = session.board.length || 19;
+            const bWidth = session.board[0] ? session.board[0].length : bHeight;
+            const expand = (list) => (list && list.length) ? SgfEngine.expandPointList(list, bWidth, bHeight) : [];
+            const numericBoard = (props && props.board) ? props.board : session.board;
+
+            snapshot.board = numericBoard.map(row => row.map(v =>
+                v === 1 ? { player: 'B', annotation: null, label: null }
+                : v === 2 ? { player: 'W', annotation: null, label: null }
+                : { player: null, annotation: null, label: null }
+            ));
+            snapshot.captures = { B: session.blackCaptures || 0, W: session.whiteCaptures || 0 };
+            snapshot.komi = (session.komi != null) ? Number(session.komi) : snapshot.komi;
+            // The Scoring Modal's displayed formula is territory + dead + captures + komi and
+            // never adds a handicap term — reproduce it verbatim so blue panel == modal.
+            snapshot.handicap = 0;
+            snapshot.deadStones = expand(props ? props.dd : null);
+            snapshot.tbPoints = expand(props ? props.tb : null);
+            snapshot.twPoints = expand(props ? props.tw : null);
+            snapshot.hasMarkup = snapshot.deadStones.length > 0 || snapshot.tbPoints.length > 0 || snapshot.twPoints.length > 0;
+            snapshot.positionLabel = 'Scored from the Manual Scoring session (matches the Scoring Modal)';
+            snapshot.provenance = 'Manual Scoring session';
+            return snapshot;
+        }
+    }
+
+    // ── Tier 3: SGF endgame markup resolved from the loaded record ──
+    const markupMove = findEndgameMarkup();
+    if (markupMove && (markupMove.DD || markupMove.MA || markupMove.TB || markupMove.TW)) {
+        const markupIsCurrent = !!(state.sgfMoves && markupMove === state.sgfMoves[state.currentMoveIndex]);
+
+        let compBoard = state.board;
+        let compCaptures = state.captures ? { B: state.captures.B, W: state.captures.W } : { B: 0, W: 0 };
+        let positionLabel = state.currentMoveIndex >= 0 ? `Position after move ${state.currentMoveIndex + 1}` : 'Initial board state';
+
+        if (!markupIsCurrent) {
+            const terminal = replayToTerminal();
+            compBoard = terminal.board;
+            compCaptures = terminal.captures;
+            const moveCount = state.allSgfMoves ? state.allSgfMoves.length : (state.sgfMoves ? state.sgfMoves.length : 0);
+            positionLabel = `Endgame position (move ${moveCount})`;
+        }
+
+        const rawBoardData = BoardEstimate.fromBoard(compBoard);
+        const bHeight = rawBoardData.length;
+        const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
+        const expand = (list) => (list) ? SgfEngine.expandPointList(list, bWidth, bHeight) : [];
+        const deadStones = [];
+        const tbPoints = [];
+        const twPoints = [];
+
+        if (markupMove.DD || markupMove.MA) {
+            expand(markupMove.DD).forEach(pt => deadStones.push({ r: pt.r, c: pt.c }));
+            expand(markupMove.MA).forEach(pt => deadStones.push({ r: pt.r, c: pt.c }));
+        } else if (markupMove.TB || markupMove.TW) {
+            if (markupMove.TB) {
+                expand(markupMove.TB).forEach(pt => {
+                    tbPoints.push({ r: pt.r, c: pt.c });
+                    if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === -1) deadStones.push({ r: pt.r, c: pt.c });
+                });
+            }
+            if (markupMove.TW) {
+                expand(markupMove.TW).forEach(pt => {
+                    twPoints.push({ r: pt.r, c: pt.c });
+                    if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === 1) deadStones.push({ r: pt.r, c: pt.c });
+                });
+            }
+        }
+
+        snapshot.board = compBoard;
+        snapshot.captures = compCaptures;
+        snapshot.deadStones = deadStones;
+        snapshot.tbPoints = tbPoints;
+        snapshot.twPoints = twPoints;
+        snapshot.hasMarkup = true;
+        snapshot.positionLabel = positionLabel;
+        snapshot.provenance = 'SGF endgame markup (DD/MA/TB/TW)';
+        snapshot.markupMove = markupMove;
+        return snapshot;
+    }
+
+    return snapshot;
+}
+window.resolveScoringInputs = resolveScoringInputs;
+
 function goToMove(index) {
     if (state.whatIfMode) {
         state.whatIfMode = false;
@@ -10350,107 +10803,91 @@ function goToMove(index) {
             `;
         }
         
-        // ── Computational Method (Japanese Territory Scoring Pipeline) ──
-        // The scorer requires Life & Death data (DD/MA/TB/TW) for the position it scores.
-        // Resolve which node supplies that markup: the move under the replayer if it carries
-        // markup, otherwise the game's terminal move (loadSGF folds terminal markup onto the
-        // final move). A game that DOES carry endgame markup must never halt just because the
-        // replayer is positioned mid-game, so replay to the terminal position in memory and
-        // score that. Only games with no endgame markup anywhere keep the halt card.
-        let markupMove = null;
-        if (state.currentMoveIndex >= 0 && state.sgfMoves && state.sgfMoves[state.currentMoveIndex]) {
-            const curMove = state.sgfMoves[state.currentMoveIndex];
-            if (curMove.DD || curMove.MA || curMove.TB || curMove.TW) {
-                markupMove = curMove;
-            }
-        }
+        // ── Computational Method (Japanese Territory Rules) ──
+        // Always rendered as the blue panel inside the yellow modal. The Run control inside it
+        // is gated on Game End: before the final move the panel shows a short notice that an
+        // exact score is only available at game end; on the final move the "Run / Compute >"
+        // button appears. Pressing it runs the deterministic Japanese territory scorer when the
+        // node carries DD/MA/TB/TW markup, or — if no endgame markup exists anywhere — prompts
+        // the user to resolve dead stones in the Manual Scoring Modal before computing.
+        const atFinalMove = state.currentMoveIndex === (state.sgfMoves ? state.sgfMoves.length - 1 : -1);
 
-        let compBoard = state.board;
-        let compCaptures = state.captures ? { B: state.captures.B, W: state.captures.W } : { B: 0, W: 0 };
-        let compPositionLabel = state.currentMoveIndex >= 0 ? `Position after move ${state.currentMoveIndex + 1}` : 'Initial board state';
-
-        if (!markupMove && state.allSgfMoves && state.allSgfMoves.length > 0) {
-            const lastMove = state.allSgfMoves[state.allSgfMoves.length - 1];
-            if (lastMove && (lastMove.DD || lastMove.MA || lastMove.TB || lastMove.TW)) {
-                markupMove = lastMove;
-                const tempBoard = state.setupBoard
-                    ? JSON.parse(JSON.stringify(state.setupBoard))
-                    : Array.from({length: 19}, () => Array.from({length: 19}, () => ({ player: null, annotation: null, label: null })));
-                let bCaps = 0, wCaps = 0;
-                for (const m of state.allSgfMoves) {
-                    if (!m.isPass && m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
-                        const cap = playStoneWithCaptures(tempBoard, m.r, m.c, m.player);
-                        if (m.player === 'B') bCaps += cap.count; else wCaps += cap.count;
-                    }
-                }
-                compBoard = tempBoard;
-                compCaptures = { B: bCaps, W: wCaps };
-                compPositionLabel = `Endgame position (move ${state.allSgfMoves.length})`;
-            }
-        }
-
-        const rawBoardData = BoardEstimate.fromBoard(compBoard);
-        const bHeight = rawBoardData.length;
-        const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
-        const totalIntersections = bHeight * bWidth;
-        
-        // 1. Extract dead stones: Explicit SGF Markup (DD / MA) or Territory Derivation (TB / TW)
-        const compDeadStones = [];
-        const compTbPoints = [];
-        const compTwPoints = [];
-        let hasSgfMarkup = false;
-
-        if (markupMove) {
-            if (markupMove.DD || markupMove.MA) {
-                hasSgfMarkup = true;
-                if (markupMove.DD) {
-                    SgfEngine.expandPointList(markupMove.DD, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
-                }
-                if (markupMove.MA) {
-                    SgfEngine.expandPointList(markupMove.MA, bWidth, bHeight).forEach(pt => compDeadStones.push({ r: pt.r, c: pt.c }));
-                }
-            } else if (markupMove.TB || markupMove.TW) {
-                // ARCHITECTURAL FIX: Deduce dead stones via SGF FF[4] territory bounds.
-                // Any opponent stone residing inside marked territory is mathematically dead.
-                hasSgfMarkup = true;
-                if (markupMove.TB) {
-                    SgfEngine.expandPointList(markupMove.TB, bWidth, bHeight).forEach(pt => {
-                        compTbPoints.push({ r: pt.r, c: pt.c });
-                        // Black Territory (TB): Scrub any White stones (-1)
-                        if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === -1) {
-                            compDeadStones.push({ r: pt.r, c: pt.c });
-                        }
-                    });
-                }
-                if (markupMove.TW) {
-                    SgfEngine.expandPointList(markupMove.TW, bWidth, bHeight).forEach(pt => {
-                        compTwPoints.push({ r: pt.r, c: pt.c });
-                        // White Territory (TW): Scrub any Black stones (1)
-                        if (rawBoardData[pt.r] && rawBoardData[pt.r][pt.c] === 1) {
-                            compDeadStones.push({ r: pt.r, c: pt.c });
-                        }
-                    });
-                }
-            }
-        }
-
-        // ARCHITECTURAL FIX: Hard Failure on Missing L&D Data
-        // Japanese territory cannot be mathematically scored without resolving dead stones.
-        if (!hasSgfMarkup) {
-            panel.innerHTML += `
-                <div id="computational-estimate-card" style="margin-top: 14px; background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
-                    <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
-                        Computational Method (Japanese Territory Rules)
+        panel.innerHTML += `
+            <div id="computational-estimate-card" style="margin-top: 14px; background: linear-gradient(135deg, #090e52 0%, #0c1468 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
+                <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
+                    Computational Method (Japanese Territory Rules)
+                </div>
+                ${atFinalMove ? `
+                    <div style="text-align: center;">
+                        <button id="btn-run-computational-method" type="button" style="padding: 9px 20px; border-radius: 8px; font-weight: 700; font-size: 0.9rem; cursor: pointer; background: #10b981; color: #ffffff; border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 2px 10px rgba(16, 185, 129, 0.4); font-family: inherit;">Run / Compute &gt;</button>
+                        <div style="color: #cbd5e1; font-size: 0.75rem; margin-top: 8px;">Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.</div>
                     </div>
-                    <div style="background: rgba(0, 0, 0, 0.3); padding: 14px; border-radius: 8px; border: 1px solid #f87171; text-align: center;">
-                        <div style="color: #fca5a5; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 6px;">Evaluation Halted: L&D Resolution Required</div>
-                        <div style="color: #fecaca; font-size: 0.8rem; line-height: 1.4;">
-                            This SGF node lacks explicit endgame markup (DD/MA/TB/TW). To prevent catastrophic territory collapse, the deterministic scorer has halted. <br><br><strong>Action Required:</strong> Manually mark dead stones on the board or trigger an AI Life & Death evaluation before computing the final score.
+                    <div id="computational-method-result" style="margin-top: 12px;"></div>
+                ` : `
+                    <div style="background: rgba(255, 255, 255, 0.08); padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center;">
+                        <div style="color: #93c5fd; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; margin-bottom: 6px;">Available Only Upon Game End</div>
+                        <div style="color: #cbd5e1; font-size: 0.8rem; line-height: 1.4;">
+                            This function is available only when the game has ended. Navigate to the final move to compute the exact Japanese territory score.
                         </div>
                     </div>
-                </div>
-            `;
-        } else {
+                `}
+            </div>
+        `;
+
+        const runBtn = panel.querySelector('#btn-run-computational-method');
+        const resultEl = panel.querySelector('#computational-method-result');
+
+        const runComputationalMethod = () => {
+            if (!resultEl) return;
+            try {
+
+            // Resolve the scoring inputs algorithmically through ONE canonical snapshot
+            // (resolveScoringInputs): the saved/live Manual Scoring session wins when it
+            // carries a resolution; otherwise the SGF DD/MA/TB/TW markup resolved anywhere in
+            // the record (current move, move sequences, root props, raw main line) drives the
+            // score. Both sources feed the identical scorer inputs, so the blue panel always
+            // matches the Scoring Modal for a saved session.
+            const snapshot = resolveScoringInputs();
+            const markupMove = snapshot.markupMove;
+            const compBoard = snapshot.board;
+            const compCaptures = snapshot.captures;
+            const compPositionLabel = snapshot.positionLabel;
+            const compDeadStones = snapshot.deadStones;
+            const compTbPoints = snapshot.tbPoints;
+            const compTwPoints = snapshot.twPoints;
+            const hasSgfMarkup = snapshot.hasMarkup;
+
+            const rawBoardData = BoardEstimate.fromBoard(compBoard);
+            const bHeight = rawBoardData.length;
+            const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
+            const totalIntersections = bHeight * bWidth;
+
+            // No-Markup Gate: without DD/MA/TB/TW anywhere, do NOT approximate. Warn the user
+            // and direct them to the Manual Scoring Modal to mark dead stones, save, re-run.
+            if (!hasSgfMarkup) {
+                resultEl.innerHTML = `
+                    <div id="computational-estimate-warning" style="margin-top: 2px; background: linear-gradient(135deg, #78350f 0%, #92400e 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
+                        <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
+                            Computational Method (Japanese Territory Rules)
+                        </div>
+                        <div style="background: rgba(0, 0, 0, 0.3); padding: 14px; border-radius: 8px; border: 1px solid #fbbf24; text-align: center;">
+                            <div style="color: #fcd34d; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 6px;">No DD/MA/TB/TW Endgame Markup Found</div>
+                            <div style="color: #fef3c7; font-size: 0.8rem; line-height: 1.4;">
+                                The deterministic Japanese territory scorer requires resolved dead stones before counting. This game has no explicit endgame markup (DD/MA/TB/TW) anywhere, so no approximate score is rendered.<br><br><strong>Action Required:</strong> Mark dead stones with the X tool in the Manual Scoring Modal, then save and run again.
+                            </div>
+                            <button id="btn-open-manual-scoring" type="button" style="margin-top: 12px; padding: 8px 18px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer; background: #10b981; color: #ffffff; border: 1px solid rgba(255,255,255,0.3); font-family: inherit;">Open Manual Scoring Modal</button>
+                        </div>
+                    </div>
+                `;
+                const openScoringBtn = document.getElementById('btn-open-manual-scoring');
+                if (openScoringBtn) {
+                    openScoringBtn.addEventListener('click', () => {
+                        if (typeof window.openScoringModal === 'function') window.openScoringModal();
+                    });
+                }
+                return;
+            }
+
             // 2. Run deterministic Japanese Territory Scorer (Guaranteed L&D resolution)
             //    Explicit TB/TW lists are passed through so the scorer counts declared
             //    territory directly instead of running topological flood-fill.
@@ -10459,8 +10896,8 @@ function goToMove(index) {
                 tbPoints: compTbPoints,
                 twPoints: compTwPoints,
                 inGameCaptures: compCaptures,
-                komi,
-                handicap
+                komi: snapshot.komi,
+                handicap: snapshot.handicap
             });
 
             let lastMoveText = compPositionLabel;
@@ -10473,13 +10910,8 @@ function goToMove(index) {
                 }
             }
 
-            // Render blue card UI
-            panel.innerHTML += `
-                <div id="computational-estimate-card" style="margin-top: 14px; background: linear-gradient(135deg, #090e52 0%, #0c1468 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
-                    <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
-                        Computational Method (Japanese Territory Rules)
-                    </div>
-                    
+            // Render score detail inside the blue panel
+            resultEl.innerHTML = `
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; font-size: 0.82rem;">
                         <div style="background: rgba(255, 255, 255, 0.08); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
                             <div style="color: #93c5fd; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 4px;">1. State Reconstruction (SGF Log)</div>
@@ -10488,7 +10920,7 @@ function goToMove(index) {
                         </div>
                         <div style="background: rgba(255, 255, 255, 0.08); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
                             <div style="color: #93c5fd; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 4px;">2. Dead Stones & Prisoners</div>
-                            <div>Scrubbed Dead: B: <strong>${compResult.bDeadCount}</strong> | W: <strong>${compResult.wDeadCount}</strong> <span style="color:#94a3b8; font-size:0.7rem;">(SGF Markup / Derivation)</span></div>
+                            <div>Scrubbed Dead: B: <strong>${compResult.bDeadCount}</strong> | W: <strong>${compResult.wDeadCount}</strong> <span style="color:#94a3b8; font-size:0.7rem;">(${snapshot.provenance})</span></div>
                             <div style="color: #cbd5e1; font-size: 0.78rem; margin-top: 3px;">Total Prisoners: B: ${compResult.bPrisoners} | W: ${compResult.wPrisoners}</div>
                         </div>
                     </div>
@@ -10507,7 +10939,7 @@ function goToMove(index) {
                     </div>
 
                     <div style="background: rgba(255, 255, 255, 0.06); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 12px; font-size: 0.78rem; color: #cbd5e1;">
-                        <span style="color: #93c5fd; font-weight: 600;">Japanese Territory Computation:</span> Black Total = ${compResult.bTerritory} + ${compResult.bPrisoners} = <strong>${compResult.bTotal}</strong> | White Total = ${compResult.wTerritory} + ${compResult.wPrisoners} + ${komi} = <strong>${compResult.wTotal}</strong>
+                        <span style="color: #93c5fd; font-weight: 600;">Japanese Territory Computation:</span> Black Total = ${compResult.bTerritory} + ${compResult.bPrisoners} = <strong>${compResult.bTotal}</strong> | White Total = ${compResult.wTerritory} + ${compResult.wPrisoners} + ${snapshot.komi} = <strong>${compResult.wTotal}</strong>
                     </div>
 
                     <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.3); padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15);">
@@ -10521,10 +10953,27 @@ function goToMove(index) {
                             ${compResult.resultStr}
                         </div>
                     </div>
-                </div>
             `;
+            } catch (err) {
+                console.error('Computational Method failed', err);
+                if (resultEl) {
+                    resultEl.innerHTML = `
+                        <div style="background: rgba(0, 0, 0, 0.3); padding: 14px; border-radius: 8px; border: 1px solid #f87171; text-align: center;">
+                            <div style="color: #fca5a5; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 6px;">Computational Method Error</div>
+                            <div style="color: #fecaca; font-size: 0.8rem; line-height: 1.4;">${String(err && err.message ? err.message : err)}</div>
+                        </div>
+                    `;
+                }
+            }
+        };
+
+        if (runBtn) {
+            runBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                runComputationalMethod();
+            });
         }
-        
+
         // Append to body directly for global popup behavior
         document.body.appendChild(panel);
         
@@ -11220,11 +11669,19 @@ function loadSGF(sgfString) {
     // A terminal node that carries only endgame markup (DD/MA/TB/TW, no B/W move) is not a
     // move and is skipped above. Fold that markup onto the final move so scorers can resolve
     // Life & Death for the end position instead of halting for "missing" markup.
-    // Scan the trailing region of the main line (which may also contain pass nodes that follow
-    // the markup node) for the last node carrying endgame markup and fold it onto the final move.
+    // Algorithmic scan: only annotation-only nodes that appear STRICTLY AFTER the last move
+    // node are terminal markup candidates, so no arbitrary trailing-window limit is needed and
+    // mid-game markup is never folded onto the final move. Moves already carry their own props.
     if (state.allSgfMoves.length > 0) {
         const lastMove = state.allSgfMoves[state.allSgfMoves.length - 1];
-        for (let i = mainLine.length - 1; i >= Math.max(0, mainLine.length - 12); i--) {
+        let lastMoveNodeIndex = -1;
+        for (let i = mainLine.length - 1; i >= 0; i--) {
+            if (mainLine[i] && (mainLine[i].B || mainLine[i].W)) {
+                lastMoveNodeIndex = i;
+                break;
+            }
+        }
+        for (let i = mainLine.length - 1; i > lastMoveNodeIndex; i--) {
             const node = mainLine[i];
             if (node && (node.DD || node.MA || node.TB || node.TW)) {
                 ['DD', 'MA', 'TB', 'TW'].forEach(tag => {
@@ -13066,6 +13523,8 @@ function initGameEndPopup() {
 }
 
 function checkSgfChangeAndShowPopup() {
+    // No SGF was ever loaded (fresh board) — there is no file to "override", so never show the popup.
+    if (!state.sgfTree) return;
     if (state.isSgfDirty && !state.popupShownForCurrentChange) {
         // In Rec/Study mode: never show the file-change popup — user saves manually via "Save / Update Rec Game"
         if (state.activeStudyId) {
@@ -14330,6 +14789,31 @@ function resetScoringBoardFromState() {
         elKomiDefaultTag.textContent = `${parsedKomi} (default)`;
     }
 
+    // Seed dead-stone marks from the game's endgame markup (DD/MA/TB/TW) so a fresh scoring
+    // session starts from the game's resolved Life & Death marks instead of an empty board.
+    // Algorithmic and game-agnostic: the first markup-bearing node found anywhere in the
+    // loaded record (findEndgameMarkup) drives the seed. DD/MA mark dead stones directly;
+    // TB/TW mark territory, so opponent stones inside those bounds are treated as dead.
+    const markupMove = findEndgameMarkup();
+    if (markupMove && scoringState.board.length) {
+        const bw = scoringState.board[0].length || 19;
+        const bh = scoringState.board.length || 19;
+        const applyMark = (list, isTerritory, oppVal) => {
+            if (!list) return;
+            SgfEngine.expandPointList(list, bw, bh).forEach(pt => {
+                const v = scoringState.board[pt.r] && scoringState.board[pt.r][pt.c];
+                if (!v) return;
+                if (!isTerritory || v === oppVal) {
+                    scoringState.markedDead[pt.r][pt.c] = true;
+                }
+            });
+        };
+        applyMark(markupMove.DD, false);
+        applyMark(markupMove.MA, false);
+        applyMark(markupMove.TB, true, 2);
+        applyMark(markupMove.TW, true, 1);
+    }
+
     updateScoringSaveButton();
     updateScoringUI();
     drawBoard();
@@ -14357,6 +14841,21 @@ function openScoringModal(savedData) {
     scoringState.active = true;
     _scoringDirty = false;
     _scoringHasSaved = false;
+
+    // Algorithmic restore: when the modal is opened without explicit saved data (e.g. from
+    // the Estimation panel's "Open Manual Scoring Modal" button), restore the most recent
+    // persisted scoring session first, then the study record's saved scoring state — so the
+    // reopened modal always reflects the latest marked/saved dead stones instead of stale ones.
+    if (!savedData) {
+        if (_scoringPersistData) {
+            savedData = _scoringPersistData;
+        } else if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+            const rec = StudyRecordDB.getRecord(state.activeStudyId);
+            if (rec && rec.scoringData) {
+                savedData = rec.scoringData;
+            }
+        }
+    }
 
     // Names
     const bName = (state.gameInfo && (state.gameInfo.PB || state.gameInfo.pb)) || (state.sgfMetadata && state.sgfMetadata.pb) || 'Black';
@@ -14537,6 +15036,29 @@ function saveScoringResult() {
                 lastMove.unknownProps.TW = sgfProps.tw.slice();
             } else {
                 delete lastMove.unknownProps.TW;
+            }
+            // Mirror the four properties onto the terminal move's DIRECT fields (same shape as
+            // loadSGF) so the Estimation modal Run gate finds the markup immediately, with no
+            // reload needed.
+            if (sgfProps.dd.length > 0) {
+                lastMove.DD = sgfProps.dd.slice();
+            } else {
+                delete lastMove.DD;
+            }
+            if (sgfProps.ma.length > 0) {
+                lastMove.MA = sgfProps.ma.slice();
+            } else {
+                delete lastMove.MA;
+            }
+            if (sgfProps.tb.length > 0) {
+                lastMove.TB = sgfProps.tb.slice();
+            } else {
+                delete lastMove.TB;
+            }
+            if (sgfProps.tw.length > 0) {
+                lastMove.TW = sgfProps.tw.slice();
+            } else {
+                delete lastMove.TW;
             }
             // Mark SGF as dirty so next export includes these properties
             state.isSgfDirty = true;
