@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.030
+version: 0.1.031
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -26,10 +26,11 @@ How the application files interact — UI shell, script load order, scoring pipe
                      │  └─ deadstones_bg   │  └─▶│ cache v3   │
                      │     .wasm           │     └─────────────┘
                      ├─────────────────────┤
-                      │  board-estimate.js  │   BoardEstimate
-                      │  └─ evaluateJapan-  │   evaluateJapaneseTerritory
-                      │     eseTerritory    │   (TB/TW explicit ─┬─ flood-fill
-                      ├─────────────────────┤    markup path     │  internal)
+                       │  board-estimate.js  │   BoardEstimate
+                       │  └─ evaluateJapan-  │   evaluateJapaneseTerritory
+                       │     eseTerritory    │   (TB/TW explicit ─┬─ flood-fill
+                       ├─────────────────────┤    markup path     │  + freed dead-
+                       │  goscorer.js        │    stone points)
                       │  goscorer.js        │   GoScorer.finalTerritoryScore
                      ├─────────────────────┤
                      │  liberties.js       │   Liberties (qi / BFS groups)
@@ -77,6 +78,18 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.031 — Blue panel ⇄ Scoring Modal: dead-stone points now count as territory (REC 002)
+
+The blue Computational Method (JTS) and the Manual Scoring Modal (MSM) must read the **same** Japanese score for a saved record. On REC 002 they did not: JTS showed Black territory 43 with a W+11 result, while MSM showed Black territory 49 → W+5. The two surfaces agreed on arithmetic (territory + prisoners + komi) but disagreed by exactly **6** on Black territory — and that 6 is precisely the number of White stones marked dead. This version closes the gap at its source.
+
+1. **MSM counts a scrubbed dead stone's point as territory; JTS did not.** MSM's territory tally runs `territoryScoring` (GoScorer) over the board with dead stones lifted — a White stone marked dead becomes a Black prisoner **and** its intersection is counted as Black territory (49 total). JTS's blue panel, by contrast, counts territory from the explicit `TB`/`TW` point lists the session converter (`computeScoringPropsFromSession`) writes. That converter only marks **empty** intersections — `if (row[c] !== 0) continue;` — so a cell still holding a stone was never emitted as a territory point. The 6 dead White stones were therefore missing from `TB` → Black territory 43. Both surfaces then summed the same way, so the 6-point hole surfaced as a 6-point score difference (W+11 vs W+5).
+2. **Japanese rules side with MSM.** A stone marked dead is captured; its point is enclosed by the opponent and becomes opponent territory. So the dead-stone cells belong in Black territory, and the blue panel was shortchanging Black by exactly the dead count.
+3. **The fix — count freed dead-stone points in the explicit path.** `evaluateJapaneseTerritory` already scrubs dead stones from its working grid before scoring. When it counts an explicit `TB`/`TW` list (which knows nothing about the dead stones' points), it now also flood-fills the scrubbed grid and adds each scrubbed dead stone's freed point as territory for its enclosing color — a freed point in a mixed (dame) region stays uncounted. The flood-fill owner map is computed once and shared, so the markup-less fallback path is unchanged.
+
+(Verified: a 5×5 harness with one dead White stone inside a Black ring previously reported JTS Black territory 8 vs GoScorer's 9 — now 9 == 9 with full totals matching (MSM 10 == JTS 10); `test_estimate.js` passes; `node --check` clean.)
+
+For REC 002 this changes the blue panel from Black 43 / W+11 to Black 49 / W+5, matching the modal.
 
 ### v0.1.030 — Score Estimate ⇄ Computational Method: YSE now always runs its own estimation
 
@@ -255,7 +268,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
 | `sgf-parser.js` | 800 | `SgfEngine` namespace — SGF parsing, board size, setup properties, markup, cloneTree, extractMainLine |
-| `board-estimate.js` | 682 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal) and `estimate` (the YSE path — when called from `runScoreEstimate` with empty territory it always runs its own AI dead-map + influence computation, never short-circuited by recorded `TB`/`TW`; uses `deadstones.bundle.js` for the AI pass) |
+| `board-estimate.js` | 702 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the explicit path additionally flood-fills the scrubbed grid and counts each dead stone's freed point as territory for its capturer, matching the Scoring Modal; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal) and `estimate` (the YSE path — when called from `runScoreEstimate` with empty territory it always runs its own AI dead-map + influence computation, never short-circuited by recorded `TB`/`TW`; uses `deadstones.bundle.js` for the AI pass) |
 | `goscorer.js` | 1,504 | `GoScorer` namespace — scoring-modal territory counting, `finalTerritoryScore()`, komi/captures tally |
 | `deadstones.bundle.js` | — | WASM bundle — dead stone detection (`@sabaki/deadstones`, esbuild build) |
 | `deadstones_bg.wasm` | — | WASM binary for dead stones |
@@ -1338,7 +1351,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                           │  frontmatter: version: 0.1.030           │
+                            │  frontmatter: version: 0.1.031           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1351,12 +1364,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.030"          │                        │  index.mdx + meta.json            │
+       │  "tech_log-0.1.031"          │                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.030'  │                                        ▼
+       │  TECH_LOG_VERSION='0.1.031'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.030.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+       │  tech_log-0.1.031.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1475,9 +1488,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.030
+version: 0.1.031
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.030`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.030.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.031`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.031.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1490,7 +1503,7 @@ version: 0.1.030
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.030`) in the sidebar
+   - Version badge shows the new version (`0.1.031`) in the sidebar
    - Updated content renders cleanly
 
 ---

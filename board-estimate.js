@@ -596,51 +596,71 @@ BoardEstimate.evaluateJapaneseTerritory = function(board, {deadStones = [], tbPo
     const twOnBoard = twPoints.filter(pt => pt && pt.r >= 0 && pt.r < height && pt.c >= 0 && pt.c < width);
     const useExplicitTerritory = tbOnBoard.length > 0 || twOnBoard.length > 0;
 
-    if (useExplicitTerritory) {
-        bTerritory = tbOnBoard.length;
-        wTerritory = twOnBoard.length;
-    } else {
-        const visited = [...Array(height)].map(_ => Array(width).fill(false));
+    // Flood-fill every empty region on the SCRUBBED grid into a per-cell owner map.
+    // Dead stones were removed above, so their freed points are empty here; a region
+    // touching exactly one color belongs to that color, a mixed region is dame.
+    const ownerMap = [...Array(height)].map(_ => Array(width).fill(0));
+    const visited = [...Array(height)].map(_ => Array(width).fill(false));
+    for (let r = 0; r < height; r++) {
+        for (let c = 0; c < width; c++) {
+            if (grid[r][c] !== 0 || visited[r][c]) continue;
 
-        for (let r = 0; r < height; r++) {
-            for (let c = 0; c < width; c++) {
-                if (grid[r][c] !== 0 || visited[r][c]) continue;
+            const region = [];
+            const surroundingColors = new Set();
+            const queue = [{r, c}];
+            visited[r][c] = true;
 
-                const region = [];
-                const surroundingColors = new Set();
-                const queue = [{r, c}];
-                visited[r][c] = true;
+            while (queue.length > 0) {
+                const curr = queue.shift();
+                region.push(curr);
 
-                while (queue.length > 0) {
-                    const curr = queue.shift();
-                    region.push(curr);
+                const neighbors = [
+                    {r: curr.r - 1, c: curr.c},
+                    {r: curr.r + 1, c: curr.c},
+                    {r: curr.r, c: curr.c - 1},
+                    {r: curr.r, c: curr.c + 1}
+                ];
 
-                    const neighbors = [
-                        {r: curr.r - 1, c: curr.c},
-                        {r: curr.r + 1, c: curr.c},
-                        {r: curr.r, c: curr.c - 1},
-                        {r: curr.r, c: curr.c + 1}
-                    ];
-
-                    for (let n of neighbors) {
-                        if (n.r >= 0 && n.r < height && n.c >= 0 && n.c < width) {
-                            if (grid[n.r][n.c] !== 0) {
-                                surroundingColors.add(grid[n.r][n.c]);
-                            } else if (!visited[n.r][n.c]) {
-                                visited[n.r][n.c] = true;
-                                queue.push(n);
-                            }
+                for (let n of neighbors) {
+                    if (n.r >= 0 && n.r < height && n.c >= 0 && n.c < width) {
+                        if (grid[n.r][n.c] !== 0) {
+                            surroundingColors.add(grid[n.r][n.c]);
+                        } else if (!visited[n.r][n.c]) {
+                            visited[n.r][n.c] = true;
+                            queue.push(n);
                         }
                     }
                 }
+            }
 
-                if (surroundingColors.size === 1) {
-                    const owner = [...surroundingColors][0];
-                    if (owner === 1) bTerritory += region.length;
-                    else if (owner === -1) wTerritory += region.length;
-                } else {
-                    dameCount += region.length;
-                }
+            const owner = surroundingColors.size === 1 ? [...surroundingColors][0] : 0;
+            for (const p of region) ownerMap[p.r][p.c] = owner;
+        }
+    }
+
+    if (useExplicitTerritory) {
+        bTerritory = tbOnBoard.length;
+        wTerritory = twOnBoard.length;
+
+        // Dead-stone freed points are NOT in the TB/TW lists (that markup only marks
+        // empty intersections), but under Japanese rules a scrubbed dead stone's point
+        // is territory for its capturer when enclosed. Add each freed point by its
+        // flood-fill owner so the blue panel matches the Scoring Modal (GoScorer counts
+        // those cells as territory too). A freed point in a dame region stays uncounted.
+        for (let pt of deadStones) {
+            if (!pt) continue;
+            const {r, c} = pt;
+            if (r >= 0 && r < height && c >= 0 && c < width) {
+                if (ownerMap[r][c] === 1) bTerritory++;
+                else if (ownerMap[r][c] === -1) wTerritory++;
+            }
+        }
+    } else {
+        for (let r = 0; r < height; r++) {
+            for (let c = 0; c < width; c++) {
+                if (ownerMap[r][c] === 1) bTerritory++;
+                else if (ownerMap[r][c] === -1) wTerritory++;
+                else if (grid[r][c] === 0) dameCount++;
             }
         }
     }
