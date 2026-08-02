@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.035
+version: 0.1.036
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,15 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.036 — Komi 0 in the SGF no longer turns into a default 6.5 (REC 004)
+
+REC 004 ships `KM[0]` — a no-komi game — yet the blue Computational Method panel computed `White Total = 8 + 2 + 6.5 = 16.5` and reported **B+31.5**. The SGF's komi was being read through a `parseFloat(km) || 6.5` default: `parseFloat('0')` is `0`, which is **falsy**, so a legitimate zero-komi game fell through to the 6.5 fallback. The modal's own session init had always parsed komi with an `isNaN()` guard (0 stays 0), so the two surfaces disagreed on a real zero.
+
+1. **One falsy-`0` slip in the blue panel's komi default.** `resolveScoringInputs` initializes the snapshot with `parseFloat(state.sgfMetadata.km) || 6.5`. The `|| 6.5` is only meant to catch an unparsable/missing value, but `0` is falsy too — so `KM[0]` was silently upgraded to 6.5, inflating White by 6.5 and deflating Black's margin by the same amount (B+31.5 instead of the correct B+38). The modal never had this bug, which is why REC 002's parity drive did not catch it: both surfaces agreed on the *sources* (session vs SGF), but the blue panel's default corrupted a real zero.
+2. **The fix — one SSOT komi resolver, isNaN-guarded.** A new `extractSgfKomi()` now owns komi extraction from the SGF (`state.sgfMetadata.km`, then `state.gameInfo.km/KM/komi`) with an `isNaN(parseFloat(...))` guard so `0` survives and only missing/garbage falls back to 6.5. Both the blue panel's `resolveScoringInputs` and the modal's session init call the same function — the modal's inline extraction is gone, so the two surfaces structurally cannot drift on komi again (SSOT-and-Synced).
+
+(Verified: a harness extracts the real `extractSgfKomi()` source from annotation_v4.js and asserts `KM[0]` → 0, `KM[0.0]` → 0, `KM[6.5]` → 6.5, `KM[7.5]` → 7.5, `gameInfo.KM[0]` → 0, no komi → 6.5, garbage → 6.5; it also reproduces the exact report arithmetic — pre-fix `B+31.5`, post-fix `B+38`. `test_estimate.js` passes; terr_gap still reports MSM B10 == JTS B10 MATCH; the v0.1.034 dead-stone lift and v0.1.035 result-badge harnesses still pass; `node --check` clean.)
 
 ### v0.1.035 — Scoring Modal result badge now always equals the formula shown (REC 002)
 
@@ -314,7 +323,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | File | Lines | Description |
 | --- | --- | --- |
 | `index.html` | 2,588 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 16,354 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), `replayToTerminal()` |
+| `annotation_v4.js` | 16,363 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), SSOT komi resolver (`extractSgfKomi`: `KM[0]` stays 0 via `isNaN` guard — only missing/garbage falls back to 6.5 — shared by the modal session init and the blue-panel snapshot), `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
@@ -1402,7 +1411,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                            │  frontmatter: version: 0.1.035           │
+                            │  frontmatter: version: 0.1.036           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1415,12 +1424,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.035"?v=0.1.035│                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.036"?v=0.1.036│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.035'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.036'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.035.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.036.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1539,9 +1548,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.035
+version: 0.1.036
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.035`) and script cache-busters (`?v=0.1.035`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.035.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.036`) and script cache-busters (`?v=0.1.036`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.036.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1554,7 +1563,7 @@ version: 0.1.035
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.035`) in the sidebar
+   - Version badge shows the new version (`0.1.036`) in the sidebar
    - Updated content renders cleanly
 
 ---

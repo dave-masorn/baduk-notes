@@ -10385,6 +10385,26 @@ function findEndgameMarkup(includeSession) {
 }
 window.findEndgameMarkup = findEndgameMarkup;
 
+// SSOT komi resolver — the ONLY place komi is read from the SGF. Both the Manual Scoring
+// Modal's session init and resolveScoringInputs consume it, so a game with KM[0] is scored
+// with komi 0 on every surface. NOTE: parseFloat() || fallback would turn '0' into the
+// default 6.5 (0 is falsy); the isNaN() guard is what keeps a real 0 komi as 0.
+function extractSgfKomi() {
+    let rawKomi = null;
+    if (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null && state.sgfMetadata.km !== '') {
+        rawKomi = state.sgfMetadata.km;
+    } else if (state.gameInfo && state.gameInfo.km !== undefined && state.gameInfo.km !== null && state.gameInfo.km !== '') {
+        rawKomi = state.gameInfo.km;
+    } else if (state.gameInfo && state.gameInfo.KM !== undefined && state.gameInfo.KM !== null && state.gameInfo.KM !== '') {
+        rawKomi = state.gameInfo.KM;
+    } else if (state.gameInfo && state.gameInfo.komi !== undefined && state.gameInfo.komi !== null && state.gameInfo.komi !== '') {
+        rawKomi = state.gameInfo.komi;
+    }
+    const parsedKomi = parseFloat(rawKomi);
+    return isNaN(parsedKomi) ? 6.5 : parsedKomi;
+}
+window.extractSgfKomi = extractSgfKomi;
+
 // Unify every scoring-input source into ONE canonical snapshot so the blue-panel Run control
 // and the Manual Scoring Modal always consume identical inputs. Precedence is a strict,
 // algorithmic chain (most recent, user-confirmed resolution wins):
@@ -10399,8 +10419,7 @@ function resolveScoringInputs() {
     const snapshot = {
         board: state.board,
         captures: { B: 0, W: 0 },
-        komi: (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null && state.sgfMetadata.km !== '')
-            ? (parseFloat(state.sgfMetadata.km) || 6.5) : 6.5,
+        komi: extractSgfKomi(),
         handicap: parseInt((state.sgfMetadata && state.sgfMetadata.ha), 10) || 0,
         deadStones: [],
         tbPoints: [],
@@ -14906,20 +14925,10 @@ function resetScoringBoardFromState() {
     scoringState.whiteCaptures = wCaps;
     scoringState.baseCaptures = { B: bCaps, W: wCaps };
 
-    // 2. Komi extraction from SGF metadata
-    let rawKomi = null;
-    if (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null && state.sgfMetadata.km !== '') {
-        rawKomi = state.sgfMetadata.km;
-    } else if (state.gameInfo && state.gameInfo.km !== undefined && state.gameInfo.km !== null && state.gameInfo.km !== '') {
-        rawKomi = state.gameInfo.km;
-    } else if (state.gameInfo && state.gameInfo.KM !== undefined && state.gameInfo.KM !== null && state.gameInfo.KM !== '') {
-        rawKomi = state.gameInfo.KM;
-    } else if (state.gameInfo && state.gameInfo.komi !== undefined && state.gameInfo.komi !== null && state.gameInfo.komi !== '') {
-        rawKomi = state.gameInfo.komi;
-    }
-
-    let parsedKomi = parseFloat(rawKomi);
-    if (isNaN(parsedKomi)) parsedKomi = 6.5;
+    // 2. Komi extraction from SGF metadata — shared SSOT resolver, so the modal's session
+    //    and the blue-panel Run snapshot can never disagree on komi (a game with KM[0] is
+    //    scored with komi 0 everywhere; only a missing/unparsable value falls back to 6.5).
+    const parsedKomi = extractSgfKomi();
 
     scoringState.komi = parsedKomi;
     const elKomiInput = document.getElementById('scoring-komi-val');
