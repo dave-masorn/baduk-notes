@@ -14951,10 +14951,13 @@ function resetScoringBoardFromState() {
                 if (scoringState.markedDead[pt.r][pt.c]) return;
                 if (!isTerritory || v === oppVal) {
                     scoringState.markedDead[pt.r][pt.c] = true;
-                    // Recorded marks behave EXACTLY like manually clicked marks: keep the
-                    // stone's color in deadStonesInfo and populate the dead/bucket stacks so
-                    // the computing formula and replace/rearrange availability see them.
+                    // Recorded marks behave EXACTLY like manually clicked marks: lift the stone
+                    // off the display board (X renders on the empty intersection, stone lives in
+                    // its bucket), keep the stone's color in deadStonesInfo and populate the
+                    // dead/bucket stacks so the computing formula and replace/rearrange
+                    // availability see them. baseBoard keeps the canonical position untouched.
                     scoringState.deadStonesInfo[pt.r][pt.c] = v;
+                    if (scoringState.board[pt.r] && scoringState.board[pt.r][pt.c] !== undefined) scoringState.board[pt.r][pt.c] = 0;
                     if (v === 1) {
                         scoringState.deadBlack.push('B');
                         scoringState.bucketWhite.push('B');
@@ -15025,6 +15028,12 @@ function seedAutoDeadMarks(ss) {
                     const v = base[r][c];
                     ss.markedDead[r][c] = true;
                     ss.deadStonesInfo[r][c] = v;
+                    // Lift the stone off the display board, exactly like a manually clicked
+                    // dead mark: the X renders on the empty intersection, the stone sits only
+                    // in its bucket, and Replace/Re-arrange never see the same stone twice
+                    // (once on the board, once in the bucket). baseBoard keeps the canonical
+                    // untouched position for the final result.
+                    if (ss.board && ss.board[r] && ss.board[r][c] !== undefined) ss.board[r][c] = 0;
                     if (v === 1) {
                         ss.deadBlack.push('B');
                         ss.bucketWhite.push('B');
@@ -15395,6 +15404,18 @@ function restoreScoringFromSavedData(data) {
             if (scoringState.markedDead[r][c]) {
                 if (scoringState.deadStonesInfo[r][c] === 1) scoringState.deadBlack.push('B');
                 else if (scoringState.deadStonesInfo[r][c] === 2) scoringState.deadWhite.push('W');
+            }
+        }
+    }
+    // Self-heal sessions saved before dead marks were lifted: the seeds wrote markedDead but
+    // left the stone ON the display board (an X drawn over a still-rendered stone), while
+    // manual marks lift it to an empty intersection. The marks are canonical — any stone
+    // sitting at a markedDead position was meant to be lifted, so lift it now. baseBoard is
+    // already the untouched game position, so the final result never moves.
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if (scoringState.markedDead[r][c] && scoringState.board[r][c] !== 0) {
+                scoringState.board[r][c] = 0;
             }
         }
     }

@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.033
+version: 0.1.034
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,19 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.034 — Auto-detected dead stones now lift off the board exactly like manual marks (REC 002)
+
+The initial auto-detect (`seedAutoDeadMarks`) and the recorded-markup seed (`applyMark`) marked stones dead **without lifting them**: `markedDead`/`deadStonesInfo`/the buckets said "dead", but `scoringState.board` still held the stone — so the board drew a stone with a red X on top of it, while a manually clicked dead mark lifts the stone to an empty intersection and draws the X there. That inconsistency surfaced in **Replacing Dead Stones / Re-Arranging Stones**: a Replace click popped a `deadWhite` entry to place a prisoner while the "dead" stone itself was still sitting on the board, and a Re-arrange click on such a stone collected it into the rearrange bucket **on top of** its existing dead-bucket entry — the same stone counted in two buckets.
+
+1. **Manual marks lift; the seeds didn't.** `handleScoringBoardClick` sets `board[r][c] = 0` (annotation_v4.js:15659) when a stone is clicked dead. `seedAutoDeadMarks` and the `applyMark` seed only wrote `markedDead` + `deadStonesInfo` + the bucket stacks, leaving the display cell full. The comment at the seed sites claimed "behave EXACTLY like manually clicked marks" — the lift was the missing half.
+2. **The fix — every dead-mark seed lifts, and restore self-heals.** All three `markedDead = true` write sites now also zero the display cell (the canonical `baseBoard` snapshot never changes, so the game's final result and saved `DD`/`MA`/`TB`/`TW` stay anchored):
+   - `seedAutoDeadMarks` — the goscorer heuristic auto-detect lifts each detected dead stone.
+   - `applyMark` — the `DD`/`MA`/`TB`/`TW` markup seed lifts each recorded dead stone.
+   - `restoreScoringFromSavedData` — self-heals sessions saved before this fix (same pattern as the v0.1.032 restore rebuild): any stone sitting at a `markedDead` position is lifted on restore.
+3. **Scores are unchanged by design.** GoScorer already reconstructs `stonesWithDead` from `deadStonesInfo` at lifted positions, so the territory/prisoner computation sees the identical board whether the dead stones were lifted or not. The change is purely visual (X on an empty intersection, stone in its bucket) and in Replace/Re-arrange bookkeeping (no more double-sourced stones).
+
+(Verified: a 5×5 ring harness — auto-detect lifts all 9 dead white stones while `baseBoard` stays intact, the lifted mark is display-identical to a manual click, the markup seed lifts + still dedupes to 9, the restore self-heal lifts a legacy persisted board, and the `stonesWithDead` reconstruction is byte-identical lifted vs not-lifted; `test_estimate.js` passes; terr_gap harness still reports MSM B10 == JTS B10 MATCH; `node --check` clean.)
 
 ### v0.1.033 — Version-driven script cache-busting (why the YSE fix "didn't take")
 
@@ -287,7 +300,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | File | Lines | Description |
 | --- | --- | --- |
 | `index.html` | 2,588 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 16,330 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), `replayToTerminal()` |
+| `annotation_v4.js` | 16,351 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
@@ -1375,7 +1388,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                            │  frontmatter: version: 0.1.033           │
+                            │  frontmatter: version: 0.1.034           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1388,12 +1401,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.033"?v=0.1.033│                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.034"?v=0.1.034│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.033'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.034'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.033.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.034.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1512,9 +1525,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.033
+version: 0.1.034
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.033`) and script cache-busters (`?v=0.1.033`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.033.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.034`) and script cache-busters (`?v=0.1.034`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.034.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1527,7 +1540,7 @@ version: 0.1.033
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.033`) in the sidebar
+   - Version badge shows the new version (`0.1.034`) in the sidebar
    - Updated content renders cleanly
 
 ---
