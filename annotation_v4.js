@@ -10177,11 +10177,11 @@ function computeScoringPropsFromSession(session) {
     const tb = [];
     const tw = [];
     const ruleMode = (session.ruleMode || 'japanese');
-    // Territory is derived from the CANONICAL board when the session carries one: the final
-    // W+1, saved DD/MA/TB/TW and the blue-panel Run score must never move when the user
-    // re-arranges/replaces stones (those edits live only in session.board). Legacy sessions
-    // without baseBoard fall back to the display board, preserving previous behavior.
-    const boardData = (session.baseBoard && session.baseBoard.length) ? session.baseBoard : (session.board || []);
+    // Territory is derived from the session's CURRENT board: the blue-panel Run score, the
+    // saved DD/MA/TB/TW and the modal's result badge must all reflect the exact board the
+    // user last edited (re-arranged/replaced stones included). baseBoard is deliberately NOT
+    // read here — it is only the untouched-position seed seedAutoDeadMarks uses on first entry.
+    const boardData = (session.board && session.board.length) ? session.board : [];
     const markedDead = session.markedDead || null;
     const deadInfo = session.deadStonesInfo || null;
     const manualTerritory = session.manualTerritory || null;
@@ -10455,14 +10455,14 @@ function resolveScoringInputs() {
                 : v === 2 ? { player: 'W', annotation: null, label: null }
                 : { player: null, annotation: null, label: null }
             ));
-            // SSOT-and-Synced: the modal's FINAL badge (drawBoard) is anchored to
-            // baseCaptures — the game's actual captures, which Replace/capture edits never
-            // move — so the blue panel must read the SAME source. Mirror the modal's
-            // expression verbatim: baseCaptures wins, legacy sessions fall back to the
-            // editable capture fields (blackCaptures/whiteCaptures).
+            // SSOT-and-Synced: the modal's result badge (drawBoard) and its Computing formula
+            // are both computed from the LIVE capture fields (blackCaptures/whiteCaptures),
+            // so the blue panel must read the SAME source. Mirror the modal's expression
+            // verbatim: the session's editable captures win (Replacing a prisoner back onto
+            // the board legitimately reduces the capture count everywhere).
             snapshot.captures = {
-                B: session.baseCaptures ? (session.baseCaptures.B || 0) : (session.blackCaptures || 0),
-                W: session.baseCaptures ? (session.baseCaptures.W || 0) : (session.whiteCaptures || 0)
+                B: (session.blackCaptures || 0),
+                W: (session.whiteCaptures || 0)
             };
             snapshot.komi = (session.komi != null) ? Number(session.komi) : snapshot.komi;
             // The Scoring Modal's displayed formula is territory + dead + captures + komi and
@@ -14869,10 +14869,10 @@ function resetScoringBoardFromState() {
         }
     }
 
-    // Canonical game board: the FINAL (W+1) result is anchored to this board. Re-arranging /
-    // Replacing dead stones only mutates scoringState.board (the display/computing board) and
-    // must NEVER move the game's final result — so we keep an untouched snapshot of the game
-    // position here that rearrange/replace never touch.
+    // Untouched-position snapshot: the ONLY remaining reader is seedAutoDeadMarks, which
+    // auto-detects dead stones from the game's original position on first entry. It is not
+    // read for territory, captures, or the result — those come from the live display board
+    // (scoringState.board) so re-arrange/replace edits move the score everywhere consistently.
     scoringState.baseBoard = scoringState.board.map(r => [...r]);
 
     // 1. Captured stones extraction
@@ -15426,10 +15426,9 @@ function restoreScoringFromSavedData(data) {
     if (elKomiInput) elKomiInput.value = scoringState.komi;
     scoringState.blackCaptures = data.blackCaptures || 0;
     scoringState.whiteCaptures = data.whiteCaptures || 0;
-    // Canonical board for the FINAL result. Re-arrange/replace edits live in data.board (the
-    // display/computing board); baseBoard is the untouched game position the final W+1 and
-    // the saved DD/MA/TB/TW stay anchored to. Legacy sessions predate baseBoard — the final
-    // then falls back to the display board (previous behavior).
+    // Untouched-position snapshot for seedAutoDeadMarks (first-entry auto-detect). The score,
+    // saved markup and blue-panel Run all read the live display board + live captures, so
+    // legacy sessions simply carry no baseBoard without any behavior change.
     scoringState.baseBoard = data.baseBoard ? data.baseBoard.map(r => [...r]) : null;
     scoringState.baseCaptures = data.baseCaptures
         ? { B: data.baseCaptures.B, W: data.baseCaptures.W }
@@ -16288,14 +16287,18 @@ function renderScoringBoardToCtx(ctx) {
         if (elWT) elWT.textContent = `= ${wTotal}`;
     }
 
-    // ── FINAL (W+1) — anchored to the canonical game board ────────────────
-    // Re-arranging / Replacing dead stones may change the per-color Computing above (that is
-    // its educational purpose) but must NEVER move the game's FINAL result. The Final is
-    // computed from scoringState.baseBoard — the untouched game position that rearrange/
-    // replace never mutate — plus mark-derived dead stones and the game's captures. On a
-    // legacy session without baseBoard it falls back to the display board (old behavior).
+    // ── RESULT — always equal to the Computing formula above ─────────────
+    // The result badge must equal the per-color Computing formula (territory + dead + caps +
+    // komi) that is rendered right next to it, or the two displays show arithmetic that
+    // doesn't add up (e.g. a W+6 badge beside a formula whose terms sum to W+4). Both are
+    // computed from the SAME live state: the display board (scoringState.board), the mark
+    // set, and the live capture fields (blackCaptures/whiteCaptures). Re-arranging / Replacing
+    // dead stones legitimately moves the result — that is the point of editing the board, and
+    // every saved consumer (rec.scoringData, the blue panel Run, exported DD/MA/TB/TW) reads
+    // the same live session. baseBoard/baseCaptures are kept only as the untouched-position
+    // seed that seedAutoDeadMarks reads on first entry; they no longer drive the score.
     let fBTotal, fWTotal;
-    const finalBoard = scoringState.baseBoard || scoringState.board;
+    const finalBoard = scoringState.board;
     let finalLocScores = null;
     let finalAreaScores = null;
     if (window.GoScorer && finalBoard) {
@@ -16320,8 +16323,8 @@ function renderScoringBoardToCtx(ctx) {
     const finalTerr = countTerritoryFromScores(scoringState, finalLocScores, finalAreaScores, scoringState.ruleMode);
     const fBDead = countMarkedDeadStones(scoringState, 2);
     const fWDead = countMarkedDeadStones(scoringState, 1);
-    const fBCaps = scoringState.baseCaptures ? (scoringState.baseCaptures.B || 0) : (scoringState.blackCaptures || 0);
-    const fWCaps = scoringState.baseCaptures ? (scoringState.baseCaptures.W || 0) : (scoringState.whiteCaptures || 0);
+    const fBCaps = scoringState.blackCaptures || 0;
+    const fWCaps = scoringState.whiteCaptures || 0;
     if (scoringState.ruleMode === 'japanese') {
         fBTotal = finalTerr.b + fBDead + fBCaps;
         fWTotal = finalTerr.w + fWDead + fWCaps + komi;
