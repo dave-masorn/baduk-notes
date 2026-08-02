@@ -71,12 +71,31 @@ function syncVersion(sitemapContent) {
 
   const indexPath = path.join(ROOT_DIR, 'index.html');
   if (fs.existsSync(indexPath)) {
-    const html = fs.readFileSync(indexPath, 'utf8');
+    let html = fs.readFileSync(indexPath, 'utf8');
+
+    // Script cache-busters tied to the release version (SSOT): rewrite every
+    // <script src="*.js?v=..."> to ?v=<version>. The old hard-coded values
+    // (?v=1.0, ?v=4.3) were never bumped, so a browser HTTP cache could keep
+    // serving a stale body (e.g. annotation_v4.js from before the YSE isolation
+    // fix) long after the file changed. A versioned query forces a fresh fetch
+    // on every release.
+    const scriptTagRe = /(<script src="[^"]*?\.js)\?v=[^"]*"/g;
+    const htmlAfterScripts = html.replace(scriptTagRe, `$1?v=${ver}"`);
+    if (htmlAfterScripts !== html) {
+      html = htmlAfterScripts;
+      console.log(`Synced script cache-busters -> ?v=${ver}`);
+      synced++;
+    }
+
     const patched = html.replace(/tech_log-0\.\d+\.\d+/, label);
     if (patched !== html) {
-      fs.writeFileSync(indexPath, patched, 'utf8');
+      html = patched;
       console.log(`Synced index.html label -> ${label}`);
       synced++;
+    }
+
+    if (html !== fs.readFileSync(indexPath, 'utf8')) {
+      fs.writeFileSync(indexPath, html, 'utf8');
     }
   }
 

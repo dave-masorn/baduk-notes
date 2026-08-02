@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.032
+version: 0.1.033
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,18 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.033 — Version-driven script cache-busting (why the YSE fix "didn't take")
+
+After v0.1.030 isolated the Score Estimate, the yellow panel **still** replayed the recorded `TB`/`TW` on the final move of a saved REC. The source was already correct — the browser was running a **stale copy of the JavaScript**.
+
+1. **The source never feeds territory to YSE anymore.** `runScoreEstimate` passes empty `territoryBlack`/`territoryWhite` into `BoardEstimate.estimate`, which only short-circuits its AI when those arrays are non-empty; `deadstones.guess` is seeded with `Date.now()`, so a fresh YSE genuinely varies per run. The "fixed output matching the recorded markup" symptom is precisely the pre-v0.1.030 behavior.
+2. **The browser HTTP cache kept serving the old script.** Every `<script>` tag in `index.html` carried a hard-coded cache-buster (`annotation_v4.js?v=4.3`, `board-estimate.js?v=1.0`, …) set once in the initial commit and **never bumped** across a dozen releases. The service worker is network-first, but the browser's own HTTP cache can answer `annotation_v4.js?v=4.3` with the pre-fix body it stored — so the page ran the old estimator even though the file on disk had changed. This also explains why the ×12 dead-bucket bug stayed visible after v0.1.032.
+3. **The fix — tie cache-busting to the release version (SSOT).** `sync-docs.js`'s `syncVersion()` now also rewrites every `<script src="*.js?v=…">` to `?v=<version>` from the `SITEMAP.md` frontmatter. Bumping only the `version:` field forces every browser to fetch fresh JavaScript on that release — no stale body can survive a reload. The service worker's network-first fetch then always reaches the current file.
+
+(Verified: `node sync-docs.js` rewrites all nine script `?v=` params to the frontmatter version; `node --check` clean.)
+
+**User action:** reload the page once after this release — the new `?v=0.1.033` URLs guarantee a fresh fetch, and the YSE on the final move will run its own random AI estimation again.
 
 ### v0.1.032 — Scoring Modal buckets no longer double-count dead stones (REC 002)
 
@@ -1363,7 +1375,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                            │  frontmatter: version: 0.1.032           │
+                            │  frontmatter: version: 0.1.033           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1375,20 +1387,20 @@ Every user-facing surface that shows a version or content keeps in sync automati
               version sync                  │      │  content sync
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
-   │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-       │  "tech_log-0.1.032"          │                        │  index.mdx + meta.json            │
+   │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
+   │  "tech_log-0.1.033"?v=0.1.033│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-       │  TECH_LOG_VERSION='0.1.032'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.033'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-       │  tech_log-0.1.032.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.033.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
 
 **Rules for "always in sync":**
 
-1. **Version** — bump only `version:` in the `SITEMAP.md` frontmatter, then run `npm run build-docs` (or `node sync-docs.js`). `sync-docs.js`'s `syncVersion()` patches all three version consumers automatically: the `index.html` header link label (`tech_log-{version}`), `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts` (docs nav badge), and creates the `tech_log-{version}.html` redirect file when missing. Running a second time reports *"Version … already in sync across all consumers."*
+1. **Version** — bump only `version:` in the `SITEMAP.md` frontmatter, then run `npm run build-docs` (or `node sync-docs.js`). `sync-docs.js`'s `syncVersion()` patches all version consumers automatically: the `index.html` header link label (`tech_log-{version}`), every `<script src="*.js?v=…">` cache-buster (rewritten to `?v={version}` so browsers always fetch fresh JS), `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts` (docs nav badge), and creates the `tech_log-{version}.html` redirect file when missing. Running a second time reports *"Version … already in sync across all consumers."*
 2. **Content** — edit only `SITEMAP.md` (or `board-estimate.md` / `liberties.md` / `SGF_COMPLIANCE_UPGRADE_LOG.md`); `sync-docs.js` splits `SITEMAP.md` H2 sections into `.mdx` pages, rebuilds `meta.json` sidebars, and the Next.js static export lands in `tech-log-dist/`.
 3. **Never hand-edit downstream artifacts** — `index.html`'s label, `version.ts`, redirect files, and `tech-log/content/docs/*.mdx` are all generated/patched output. Hand edits are overwritten on the next sync.
 
@@ -1500,9 +1512,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.032
+version: 0.1.033
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.032`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.032.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.033`) and script cache-busters (`?v=0.1.033`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.033.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1515,7 +1527,7 @@ version: 0.1.032
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.032`) in the sidebar
+   - Version badge shows the new version (`0.1.033`) in the sidebar
    - Updated content renders cleanly
 
 ---
