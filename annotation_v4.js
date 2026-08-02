@@ -14944,6 +14944,11 @@ function resetScoringBoardFromState() {
             SgfEngine.expandPointList(list, bw, bh).forEach(pt => {
                 const v = scoringState.board[pt.r] && scoringState.board[pt.r][pt.c];
                 if (!v) return;
+                // Canonical set is markedDead: the same stone can appear in DD/MA AND inside
+                // TB/TW bounds (an opponent stone enclosed by declared territory), so a point
+                // already marked dead must not be pushed into the dead/bucket stacks again —
+                // otherwise the bucket counts (deadWhite.length etc.) double-count it.
+                if (scoringState.markedDead[pt.r][pt.c]) return;
                 if (!isTerritory || v === oppVal) {
                     scoringState.markedDead[pt.r][pt.c] = true;
                     // Recorded marks behave EXACTLY like manually clicked marks: keep the
@@ -15378,8 +15383,21 @@ function restoreScoringFromSavedData(data) {
     scoringState.bucketWhite = [...(data.bucketWhite || [])];
     scoringState.rearrangeBlack = [...(data.rearrangeBlack || [])];
     scoringState.rearrangeWhite = [...(data.rearrangeWhite || [])];
-    scoringState.deadWhite = [...(data.deadWhite || [])];
-    scoringState.deadBlack = [...(data.deadBlack || [])];
+    // Rebuild the dead stacks from the MARKS (canonical set) instead of trusting the persisted
+    // arrays: sessions saved before the seeding dedupe fix could carry double-pushed entries
+    // (a stone present in DD/MA AND inside TB/TW bounds), which inflated deadWhite/deadBlack and
+    // the Black/White "Dead:" bucket pills. Rebuilding from markedDead/deadStonesInfo makes the
+    // buckets mirror the marks exactly and self-heals stale persisted counts.
+    scoringState.deadWhite = [];
+    scoringState.deadBlack = [];
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if (scoringState.markedDead[r][c]) {
+                if (scoringState.deadStonesInfo[r][c] === 1) scoringState.deadBlack.push('B');
+                else if (scoringState.deadStonesInfo[r][c] === 2) scoringState.deadWhite.push('W');
+            }
+        }
+    }
     scoringState.ruleMode = data.ruleMode || 'japanese';
     scoringState.interactionMode = data.interactionMode || 'mark';
     scoringState.komi = data.komi != null ? data.komi : 6.5;
