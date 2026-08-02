@@ -14606,7 +14606,7 @@ function initScoringModal() {
         btnReset.addEventListener('click', () => {
             if (scoringState.frozen) return;
             if (dialogReset) dialogReset.style.display = 'flex';
-            else resetScoringBoardFromState();
+            else resetScoringBoardFromState({ pristine: true });
         });
     }
 
@@ -14614,7 +14614,7 @@ function initScoringModal() {
         btnConfirmReset.addEventListener('click', () => {
             if (scoringState.frozen) return;
             saveScoringStateForUndo();
-            resetScoringBoardFromState();
+            resetScoringBoardFromState({ pristine: true });
             if (dialogReset) dialogReset.style.display = 'none';
         });
     }
@@ -14861,7 +14861,12 @@ function initScoringModal() {
     }
 }
 
-function resetScoringBoardFromState() {
+function resetScoringBoardFromState(options) {
+    // pristine = the "Reset Board" action: rebuild the untouched SGF terminal EXACTLY like
+    // opening the same file on goscorer's test page — every stone present, no dead/territory
+    // marks, only the game's own in-game captures and komi. Non-pristine (first modal open)
+    // keeps the original auto-seed-from-markup behavior.
+    const pristine = !!(options && options.pristine);
     scoringState.board = Array.from({length: 19}, () => Array.from({length: 19}, () => 0));
     scoringState.markedDead = Array.from({length: 19}, () => Array.from({length: 19}, () => false));
     scoringState.deadStonesInfo = Array.from({length: 19}, () => Array.from({length: 19}, () => null));
@@ -14877,17 +14882,29 @@ function resetScoringBoardFromState() {
     scoringFuture = [];
     updateUndoRedoButtonsUI();
 
-    if (state.board) {
+    const toNumeric = (cell) => {
+        if (cell && (cell.player === 'B' || cell.player === 'black' || cell.player === 1)) return 1;
+        if (cell && (cell.player === 'W' || cell.player === 'white' || cell.player === 2)) return 2;
+        return 0;
+    };
+
+    // Reset Board (pristine): the terminal is REPLAYED from the SGF (all moves), independent
+    // of where the user is in the move tree — exactly what goscorer's test page draws after
+    // loading the file. Non-pristine (first open) reads the main app's current position.
+    let pristineCaptures = null;
+    if (pristine) {
+        const terminal = replayToTerminal();
+        const termBoard = terminal.board;
         for (let r = 0; r < 19; r++) {
             for (let c = 0; c < 19; c++) {
-                const cell = state.board[r][c];
-                if (cell && (cell.player === 'B' || cell.player === 'black' || cell.player === 1)) {
-                    scoringState.board[r][c] = 1;
-                } else if (cell && (cell.player === 'W' || cell.player === 'white' || cell.player === 2)) {
-                    scoringState.board[r][c] = 2;
-                } else {
-                    scoringState.board[r][c] = 0;
-                }
+                scoringState.board[r][c] = (termBoard[r] && termBoard[r][c]) ? toNumeric(termBoard[r][c]) : 0;
+            }
+        }
+        pristineCaptures = terminal.captures;
+    } else if (state.board) {
+        for (let r = 0; r < 19; r++) {
+            for (let c = 0; c < 19; c++) {
+                scoringState.board[r][c] = toNumeric(state.board[r][c]);
             }
         }
     }
@@ -14898,10 +14915,14 @@ function resetScoringBoardFromState() {
     // (scoringState.board) so re-arrange/replace edits move the score everywhere consistently.
     scoringState.baseBoard = scoringState.board.map(r => [...r]);
 
-    // 1. Captured stones extraction
+    // 1. Captured stones extraction — pristine reset takes the SGF replay's own in-game
+    //    captures (what goscorer computes from the file); non-pristine reads the live state.
     let bCaps = 0;
     let wCaps = 0;
-    if (state.captures && (typeof state.captures.B === 'number' || typeof state.captures.W === 'number')) {
+    if (pristine && pristineCaptures) {
+        bCaps = pristineCaptures.B;
+        wCaps = pristineCaptures.W;
+    } else if (state.captures && (typeof state.captures.B === 'number' || typeof state.captures.W === 'number')) {
         bCaps = typeof state.captures.B === 'number' ? state.captures.B : 0;
         wCaps = typeof state.captures.W === 'number' ? state.captures.W : 0;
     } else if (state.inGameCaptures) {
@@ -14949,7 +14970,10 @@ function resetScoringBoardFromState() {
     // Algorithmic and game-agnostic: the first markup-bearing node found anywhere in the
     // loaded record (findEndgameMarkup) drives the seed. DD/MA mark dead stones directly;
     // TB/TW mark territory, so opponent stones inside those bounds are treated as dead.
-    const markupMove = findEndgameMarkup();
+    // This is FIRST-ENTRY behavior ONLY: a pristine Reset leaves the board untouched, exactly
+    // like the freshly opened SGF (goscorer parity), so both the markup seed and the dead-stone
+    // heuristic are skipped there.
+    const markupMove = pristine ? null : findEndgameMarkup();
     if (markupMove && scoringState.board.length) {
         const bw = scoringState.board[0].length || 19;
         const bh = scoringState.board.length || 19;
@@ -15006,8 +15030,8 @@ function resetScoringBoardFromState() {
     // First entry per game: when the loaded record carries no endgame markup, seed the modal
     // from the goscorer (Sabaki) dead-stone heuristic so auto-marked dead stones and their
     // auto-derived territory are shown and counted EXACTLY like manual marks (one combined
-    // set for computing).
-    if (!markupMove) {
+    // set for computing). Never run for a pristine Reset.
+    if (!markupMove && !pristine) {
         seedAutoDeadMarks(scoringState);
     }
 
