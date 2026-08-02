@@ -10385,10 +10385,18 @@ function findEndgameMarkup(includeSession) {
 }
 window.findEndgameMarkup = findEndgameMarkup;
 
-// SSOT komi resolver — the ONLY place komi is read from the SGF. Both the Manual Scoring
-// Modal's session init and resolveScoringInputs consume it, so a game with KM[0] is scored
-// with komi 0 on every surface. NOTE: parseFloat() || fallback would turn '0' into the
-// default 6.5 (0 is falsy); the isNaN() guard is what keeps a real 0 komi as 0.
+// Single named komi default — the ONLY 6.5 literal in the scoring paths. Every other komi
+// default (extractSgfKomi fallback, scoringState initial value, YSE panel, legacy-session
+// restore) references this constant or the resolver below, so the default can change in
+// exactly one place.
+const DEFAULT_KOMI = 6.5;
+
+// SSOT komi resolver — the ONLY place komi is read from the SGF. The Manual Scoring Modal's
+// session init, the legacy-session restore, the YSE estimate panel, and resolveScoringInputs
+// all consume it, so a game with KM[0] is scored with komi 0 on every surface. NOTE:
+// parseFloat() || fallback would turn '0' into the default (0 is falsy); the isNaN() guard
+// is what keeps a real 0 komi as 0. Only a missing/unparsable value falls back to
+// DEFAULT_KOMI.
 function extractSgfKomi() {
     let rawKomi = null;
     if (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null && state.sgfMetadata.km !== '') {
@@ -10401,7 +10409,7 @@ function extractSgfKomi() {
         rawKomi = state.gameInfo.komi;
     }
     const parsedKomi = parseFloat(rawKomi);
-    return isNaN(parsedKomi) ? 6.5 : parsedKomi;
+    return isNaN(parsedKomi) ? DEFAULT_KOMI : parsedKomi;
 }
 window.extractSgfKomi = extractSgfKomi;
 
@@ -10807,13 +10815,9 @@ function goToMove(index) {
         let territoryBlack = [];
         let territoryWhite = [];
 
-        let komi = 6.5;
-        if (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null) {
-            const parsedKomi = parseFloat(state.sgfMetadata.km);
-            if (!isNaN(parsedKomi)) {
-                komi = parsedKomi;
-            }
-        }
+        // YSE reads komi through the same SSOT resolver as the modal and the blue panel, so a
+        // game with KM[0] shows komi 0 here too (a third inline reader was a drift risk).
+        const komi = extractSgfKomi();
         const handicap = parseInt(state.sgfMetadata.ha, 10) || 0;
         const rules = state.sgfMetadata.ru || 'Japanese';
         const inGameCaptures = state.captures ? { B: state.captures.B, W: state.captures.W } : { B: 0, W: 0 };
@@ -14383,7 +14387,7 @@ window.scoringState = {
     showTerritory: true,
     showDead: true,
     showCoords: true,
-    komi: 6.5,
+    komi: DEFAULT_KOMI,
     pendingClick: null,
     blackCaptures: 0,
     whiteCaptures: 0,
@@ -14927,7 +14931,8 @@ function resetScoringBoardFromState() {
 
     // 2. Komi extraction from SGF metadata — shared SSOT resolver, so the modal's session
     //    and the blue-panel Run snapshot can never disagree on komi (a game with KM[0] is
-    //    scored with komi 0 everywhere; only a missing/unparsable value falls back to 6.5).
+    //    scored with komi 0 everywhere; only a missing/unparsable value falls back to
+    //    DEFAULT_KOMI).
     const parsedKomi = extractSgfKomi();
 
     scoringState.komi = parsedKomi;
@@ -15430,7 +15435,9 @@ function restoreScoringFromSavedData(data) {
     }
     scoringState.ruleMode = data.ruleMode || 'japanese';
     scoringState.interactionMode = data.interactionMode || 'mark';
-    scoringState.komi = data.komi != null ? data.komi : 6.5;
+    // Legacy sessions saved without a komi field fall back to the SGF's real komi (via the
+    // SSOT resolver) — never a hardcoded default — so a KM[0] game stays 0 here too.
+    scoringState.komi = data.komi != null ? data.komi : extractSgfKomi();
     const elKomiInput = document.getElementById('scoring-komi-val');
     if (elKomiInput) elKomiInput.value = scoringState.komi;
     scoringState.blackCaptures = data.blackCaptures || 0;
