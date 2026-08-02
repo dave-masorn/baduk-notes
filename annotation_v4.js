@@ -10564,6 +10564,18 @@ function resolveScoringInputs() {
 }
 window.resolveScoringInputs = resolveScoringInputs;
 
+// Incomplete-Markup Warning: which endgame-markup elements were NOT defined for the scorer.
+// Each is paired with the implication the deterministic scorer fell back to, so the JTS panel
+// can tell the user exactly what to define (via the Manual Scoring Modal) to lock the score.
+function buildScoringMarkupWarnings(snapshot) {
+    const warnings = [];
+    if (snapshot.deadStones.length === 0) warnings.push({ label: 'Dead stones (DD/MA)', why: 'no stone is treated as dead, so dead prisoners are not counted' });
+    if (snapshot.tbPoints.length === 0) warnings.push({ label: 'Black territory (TB)', why: 'black territory is computed by flood-fill instead of explicit markup' });
+    if (snapshot.twPoints.length === 0) warnings.push({ label: 'White territory (TW)', why: 'white territory is computed by flood-fill instead of explicit markup' });
+    return warnings;
+}
+window.buildScoringMarkupWarnings = buildScoringMarkupWarnings;
+
 function goToMove(index) {
     if (state.whatIfMode) {
         state.whatIfMode = false;
@@ -11014,6 +11026,12 @@ function goToMove(index) {
             const compTwPoints = snapshot.twPoints;
             const hasSgfMarkup = snapshot.hasMarkup;
 
+            // Incomplete-Markup Warning: the score is deterministic, but when ANY of
+            // DD/MA/TB/TW was not defined for the scorer (no dead stones declared, or
+            // territory derived by flood-fill because TB/TW is absent), surface it and let
+            // the user define the missing elements in the Manual Scoring Modal.
+            const markupWarnings = buildScoringMarkupWarnings(snapshot);
+
             const rawBoardData = BoardEstimate.fromBoard(compBoard);
             const bHeight = rawBoardData.length;
             const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
@@ -11099,6 +11117,16 @@ function goToMove(index) {
                         <span style="color: #93c5fd; font-weight: 600;">Japanese Territory Computation:</span> Black Total = ${compResult.bTerritory} + ${compResult.bPrisoners} = <strong>${compResult.bTotal}</strong> | White Total = ${compResult.wTerritory} + ${compResult.wPrisoners} + ${snapshot.komi} = <strong>${compResult.wTotal}</strong>
                     </div>
 
+                    ${markupWarnings.length ? `
+                    <div style="margin-top: 12px; background: rgba(120, 53, 15, 0.22); border: 1px solid #fbbf24; border-radius: 10px; padding: 12px 14px;">
+                        <div style="color: #fcd34d; font-weight: 800; font-size: 0.78rem; text-transform: uppercase; margin-bottom: 6px;">Incomplete Endgame Markup — Not Defined in the SGF</div>
+                        <div style="color: #fef3c7; font-size: 0.78rem; line-height: 1.5; margin-bottom: 4px;">The following endgame markup is not defined in this SGF:</div>
+                        ${markupWarnings.map(w => `<div style="color: #fef3c7; font-size: 0.78rem; line-height: 1.5;">• <strong>${w.label}</strong> — ${w.why}</div>`).join('')}
+                        <div style="color: #fef3c7; font-size: 0.78rem; line-height: 1.5; margin-top: 6px;">Define it to lock the exact score, then re-run:</div>
+                        <button id="btn-define-scoring-markup" type="button" style="margin-top: 10px; padding: 8px 18px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer; background: #10b981; color: #ffffff; border: 1px solid rgba(255,255,255,0.3); font-family: inherit;">Define in Manual Scoring Modal</button>
+                    </div>
+                    ` : ''}
+
                     <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.3); padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15);">
                         <div>
                             <div style="color: #93c5fd; font-weight: 600; font-size: 0.75rem; text-transform: uppercase;">4 & 5. Final Territory Output</div>
@@ -11111,6 +11139,15 @@ function goToMove(index) {
                         </div>
                     </div>
             `;
+
+            if (markupWarnings.length) {
+                const defineBtn = document.getElementById('btn-define-scoring-markup');
+                if (defineBtn) {
+                    defineBtn.addEventListener('click', () => {
+                        if (typeof window.openScoringModal === 'function') window.openScoringModal();
+                    });
+                }
+            }
             } catch (err) {
                 console.error('Computational Method failed', err);
                 if (resultEl) {

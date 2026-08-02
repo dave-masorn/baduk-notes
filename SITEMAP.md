@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.038
+version: 0.1.039
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,16 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.039 — JTS warns when any DD/MA/TB/TW is missing and offers to define it in the MSM
+
+The blue Computational Method panel computes a deterministic score from whatever endgame markup the SGF declares — but when the SGF declares only PART of it, the missing pieces are silently assumed. Example (the reported game): SGF had `TB`/`TW` but no `DD`/`MA`, so every stone was treated as alive and zero dead prisoners were added (`Scrubbed Dead: 0/0`); the score was still computed because the No-Markup Gate only fires when NONE of DD/MA/TB/TW exists. Now, whenever the scorer runs with any of the four missing, the panel appends an amber **"Incomplete Endgame Markup — Not Defined in the SGF"** warning listing exactly which elements are missing and the implication the scorer assumed:
+
+- `Dead stones (DD/MA)` — no stone is treated as dead, so dead prisoners are not counted
+- `Black territory (TB)` — computed by flood-fill instead of explicit markup
+- `White territory (TW)` — computed by flood-fill instead of explicit markup
+
+A **"Define in Manual Scoring Modal"** button opens the MSM so the user can mark the missing elements (dead stones with the X tool, territory via click) and re-run — turning an assumed score into the locked, exact Japanese score. The all-missing case still short-circuits in the existing No-Markup Gate (no score rendered at all); this warning only appears alongside a computed result. Verified headlessly: the real `buildScoringMarkupWarnings(snapshot)` covers TB/TW-only (warns DD/MA), DD/MA-only (warns TB+TW), complete (none), and empty (all three); source audit confirms the warning card, button id, and `openScoringModal` wiring; all prior harnesses + `test_estimate.js` still pass; `node --check` clean.
 
 ### v0.1.038 — MSM "Reset Board" now rebuilds the pristine SGF terminal, exactly like opening the file in goscorer
 
@@ -342,7 +352,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | File | Lines | Description |
 | --- | --- | --- |
 | `index.html` | 2,588 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 16,394 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), SSOT komi (`DEFAULT_KOMI` is the only 6.5 literal; `extractSgfKomi` reads the SGF with an `isNaN` guard so `KM[0]` stays 0 — shared by the modal session init, legacy restore, YSE panel, and blue-panel snapshot), "Reset Board" rebuilds the PRISTINE SGF terminal (`replayToTerminal()`, all stones present, zero dead/territory marks, replay captures + SGF komi — the computed territory overlay then renders from `territoryScoring(terminal, all-false)`, the exact inputs and shading of goscorer's test page after `Last`) — dead-mark/heuristic seeding stays a first-open-only behavior, `replayToTerminal()` |
+| `annotation_v4.js` | 16,431 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; incomplete markup → amber "Incomplete Endgame Markup — Not Defined in the SGF" warning via `buildScoringMarkupWarnings(snapshot)` listing which of `DD`/`MA`/`TB`/`TW` the scorer assumed, with a "Define in Manual Scoring Modal" button that opens the MSM; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), SSOT komi (`DEFAULT_KOMI` is the only 6.5 literal; `extractSgfKomi` reads the SGF with an `isNaN` guard so `KM[0]` stays 0 — shared by the modal session init, legacy restore, YSE panel, and blue-panel snapshot), "Reset Board" rebuilds the PRISTINE SGF terminal (`replayToTerminal()`, all stones present, zero dead/territory marks, replay captures + SGF komi — the computed territory overlay then renders from `territoryScoring(terminal, all-false)`, the exact inputs and shading of goscorer's test page after `Last`) — dead-mark/heuristic seeding stays a first-open-only behavior, `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
@@ -1430,7 +1440,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                            │  frontmatter: version: 0.1.038           │
+                            │  frontmatter: version: 0.1.039           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1443,12 +1453,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.038"?v=0.1.038│                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.039"?v=0.1.039│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.038'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.039'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.038.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.039.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1567,9 +1577,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.038
+version: 0.1.039
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.038`) and script cache-busters (`?v=0.1.038`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.038.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.039`) and script cache-busters (`?v=0.1.039`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.039.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1582,7 +1592,7 @@ version: 0.1.038
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.038`) in the sidebar
+   - Version badge shows the new version (`0.1.039`) in the sidebar
    - Updated content renders cleanly
 
 ---
