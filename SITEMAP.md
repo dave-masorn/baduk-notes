@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.029
+version: 0.1.030
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -47,7 +47,8 @@ How the application files interact — UI shell, script load order, scoring pipe
         │  window.state · event listeners · canvas draw · exports  │
         │                                                            │
         │  loadSGF ───────────▶ SgfEngine.parseSgf / extractMainLine │
-        │  runScoreEstimate ──▶ yellow panel (AI dead-map + tables) │
+        │  runScoreEstimate ──▶ yellow panel (own AI + influence;  │
+        │      never consumes recorded TB/TW markup)               │
         │      └─ Computational Method: blue panel + "Run / Compute >" at Game End │
         │           └─ markup DD/MA/TB/TW ──▶ explicit TB/TW card   │
         │           └─ no markup ──▶ amber warn → Manual Scoring    │
@@ -76,6 +77,20 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.030 — Score Estimate ⇄ Computational Method: YSE now always runs its own estimation
+
+The yellow Score Estimate (YSE) and the blue Computational Method (JTS) must always compute **separately** — JTS scores recorded markup, YSE estimates on its own. They were not: on the last move of a saved study record, YSE silently stopped estimating and replayed JTS's recorded territory as a fixed value. This version breaks that link at the one point where it could form.
+
+1. **YSE varies per run because its AI is seeded randomly.** `deadstones.guess` seeds its Monte Carlo search with `Date.now()` (deadstones.bundle.js), so every Estimate gets a different dead-stone map — that is the "gives a different estimation each time" behavior. `board-estimate.js` has no randomness of its own, so a **fixed** YSE output can only mean the AI never ran.
+2. **On the last move, YSE stopped estimating and replayed recorded territory.** `runScoreEstimate` read the last move's `territory` (`TB`/`TW`) from `state.sgfMoves[last]`, and `BoardEstimate.estimate` short-circuits the whole AI whenever `territoryBlack`/`territoryWhite` are non-empty — it builds the map purely from those recorded points. Deterministic. Fixed.
+3. **That recorded territory IS the JTS source.** Since v0.1.026, `saveScoringResult` writes the scoring session's `DD`/`MA`/`TB`/`TW` into `rec.workingSgf`; on resume, `loadSGF` parses them back into the last move's `.territory`. The "fixed" last-move value was literally the markup JTS produced — JTS writes, YSE consumes. The recorded-territory read itself is ancient (initial commit) but stayed dormant while saved games carried no `TB`/`TW`; it activated once saves began writing territory into the SGF, which is why the interference only appeared recently.
+
+**Not a culprit:** `DD`/`MA` never reach `estimate()` — only `TB`/`TW` can short-circuit it. So the fix needed to stop feeding recorded territory, and nothing else.
+
+**The fix — isolation at the single feed point:** `runScoreEstimate` no longer passes recorded `baselineTerritory`/`move.territory` into `estimate()` — `territoryBlack`/`territoryWhite` are always empty, so YSE **always runs its own AI + influence estimation**, regardless of any `TB`/`TW` in the SGF or saved by a scoring session. `BoardEstimate.estimate` has exactly one caller, so no other surface changes behavior.
+
+(Verified: `node --check` clean; `test_estimate.js` passes; with empty territory `estimate()` runs the AI path.)
 
 ### v0.1.029 — Blue-panel ⇄ Modal-final capture parity (REC 002)
 
@@ -230,17 +245,17 @@ baduk-notes is a single-page web application for Go players and annotators.
 
 ## Application Files
 
-### Core (~22,000 lines total)
+### Core (~25,000 lines total)
 
 | File | Lines | Description |
 | --- | --- | --- |
-| `index.html` | 2,561 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 15,655 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, `replayToTerminal()` |
+| `index.html` | 2,588 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
+| `annotation_v4.js` | 16,312 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; no markup → amber warn to use Manual Scoring Modal; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
 | `sgf-parser.js` | 800 | `SgfEngine` namespace — SGF parsing, board size, setup properties, markup, cloneTree, extractMainLine |
-| `board-estimate.js` | 682 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal; uses `deadstones.bundle.js` for the AI pass) |
+| `board-estimate.js` | 682 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal) and `estimate` (the YSE path — when called from `runScoreEstimate` with empty territory it always runs its own AI dead-map + influence computation, never short-circuited by recorded `TB`/`TW`; uses `deadstones.bundle.js` for the AI pass) |
 | `goscorer.js` | 1,504 | `GoScorer` namespace — scoring-modal territory counting, `finalTerritoryScore()`, komi/captures tally |
 | `deadstones.bundle.js` | — | WASM bundle — dead stone detection (`@sabaki/deadstones`, esbuild build) |
 | `deadstones_bg.wasm` | — | WASM binary for dead stones |
@@ -1323,7 +1338,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                           │  frontmatter: version: 0.1.029           │
+                           │  frontmatter: version: 0.1.030           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1336,12 +1351,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.029"          │                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.030"          │                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.029'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.030'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.029.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.030.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1460,9 +1475,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.029
+version: 0.1.030
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.029`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.029.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.030`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.030.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1475,7 +1490,7 @@ version: 0.1.029
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.029`) in the sidebar
+   - Version badge shows the new version (`0.1.030`) in the sidebar
    - Updated content renders cleanly
 
 ---

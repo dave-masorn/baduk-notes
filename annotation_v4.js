@@ -10782,19 +10782,11 @@ function goToMove(index) {
             }
         }
         
+        // Isolation: YSE always runs its own estimation. Never feed recorded
+        // TB/TW markup (or baselineTerritory) into estimate() — doing so would
+        // short-circuit the AI and replay JTS-derived territory instead.
         let territoryBlack = [];
         let territoryWhite = [];
-        
-        if (state.currentMoveIndex === -1 && state.baselineTerritory) {
-            territoryBlack = state.baselineTerritory.black || [];
-            territoryWhite = state.baselineTerritory.white || [];
-        } else if (state.currentMoveIndex >= 0 && state.sgfMoves[state.currentMoveIndex]) {
-            const t = state.sgfMoves[state.currentMoveIndex].territory;
-            if (t) {
-                territoryBlack = t.black || [];
-                territoryWhite = t.white || [];
-            }
-        }
 
         let komi = 6.5;
         if (state.sgfMetadata && state.sgfMetadata.km !== undefined && state.sgfMetadata.km !== null) {
