@@ -14745,6 +14745,7 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadBlack.pop();
                         scoringState.bucketWhite.pop();
+                        consumeDeadMarkFromState(scoringState, 1);
                     } else if (src.type === 'cap') {
                         scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
                     }
@@ -14755,6 +14756,7 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadWhite.pop();
                         scoringState.bucketBlack.pop();
+                        consumeDeadMarkFromState(scoringState, 2);
                     } else if (src.type === 'cap') {
                         scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     }
@@ -14796,6 +14798,7 @@ function initScoringModal() {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
+                consumeDeadMarkFromState(scoringState, 1);
             } else if (mode === 'replace' && (scoringState.whiteCaptures || 0) > 0) {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             } else if (scoringState.rearrangeBlack.length > 0) {
@@ -14818,6 +14821,7 @@ function initScoringModal() {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+                consumeDeadMarkFromState(scoringState, 2);
             } else if (mode === 'replace' && (scoringState.blackCaptures || 0) > 0) {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             } else if (scoringState.rearrangeWhite.length > 0) {
@@ -15156,6 +15160,33 @@ function countMarkedDeadStones(ss, colorVal) {
         }
     }
     return n;
+}
+
+// Consume ONE dead stone of the given color from the true mark set: clear its
+// markedDead/deadStonesInfo entry (its lifted cell stays empty, so the freed point
+// remains territory). This is the counterpart of popping the dead-color bucket during
+// "Replacing Dead Stones": the bucket is only a counter, while the formulas read the
+// MARKS — a pop without this clearing made the dead term stay put, so a prisoner fill
+// dropped only the filler's territory and the final margin drifted by 1 per replace.
+// The last mark in traversal is cleared to pair with the bucket's LIFO pop. Returns
+// true when a mark was cleared (callers fall back to consuming a capture otherwise).
+function consumeDeadMarkFromState(ss, colorVal) {
+    const md = ss.markedDead;
+    const info = ss.deadStonesInfo;
+    if (!md || !info) return false;
+    for (let r = 18; r >= 0; r--) {
+        const mdRow = md[r];
+        const infoRow = info[r];
+        if (!mdRow || !infoRow) continue;
+        for (let c = 18; c >= 0; c--) {
+            if (mdRow[c] && infoRow[c] === colorVal) {
+                mdRow[c] = false;
+                infoRow[c] = null;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Count territory/area cells for a given GoScorer score grid, with explicit manualTerritory
@@ -15831,6 +15862,10 @@ function handleScoringBoardClick(e) {
     } else if (scoringState.interactionMode === 'replace') {
         const currentVal = scoringState.board[row][col];
         if (currentVal !== 0) return;
+        // The lifted dead stone's own cell stays EMPTY: its freed point is already counted
+        // as territory through the marks. Do not fill onto a dead X — that would re-place
+        // the stone and both overcount territory and misalign the bucket/mark pairing.
+        if (scoringState.markedDead[row][col]) return;
         const stonesWithDead = scoringState.board.map((r, ri) =>
             r.map((val, ci) => {
                 if (scoringState.markedDead[ri][ci] && val === 0) {
@@ -15868,6 +15903,7 @@ function handleScoringBoardClick(e) {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
+                consumeDeadMarkFromState(scoringState, 1);
             } else {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             }
@@ -15884,31 +15920,17 @@ function handleScoringBoardClick(e) {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+                consumeDeadMarkFromState(scoringState, 2);
             } else {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             }
             updateScoringUI();
             drawBoard();
         } else {
-            const bAvail = scoringState.deadBlack.length > 0 || (scoringState.whiteCaptures || 0) > 0;
-            const wAvail = scoringState.deadWhite.length > 0 || (scoringState.blackCaptures || 0) > 0;
-            if (!bAvail && !wAvail) return;
-            scoringState.pendingClick = { r: row, c: col };
-            const dialog = document.getElementById('scoring-color-picker-dialog');
-            if (!dialog) return;
-            const canvasViewport = document.getElementById('scoring-board-viewport');
-            const vRect = canvasViewport ? canvasViewport.getBoundingClientRect() : rect;
-            dialog.style.left = `${Math.min(vRect.width - 260, Math.max(10, clickX - 120))}px`;
-            dialog.style.top  = `${Math.min(vRect.height - 160, Math.max(10, clickY - 40))}px`;
-            const s1 = document.getElementById('scoring-picker-step1');
-            const s2 = document.getElementById('scoring-picker-step2');
-            if (s1) s1.style.display = '';
-            if (s2) s2.style.display = 'none';
-            const btnB = document.getElementById('btn-place-black-stone');
-            const btnW = document.getElementById('btn-place-white-stone');
-            if (btnB) btnB.style.display = bAvail ? '' : 'none';
-            if (btnW) btnW.style.display = wAvail ? '' : 'none';
-            dialog.style.display = 'block';
+            // Dame is neutral ground — filling it costs only the prisoner's side (a single
+            // -1), so the final margin would drift. The physical count never fills dame.
+            // Block it here to keep the margin invariant under every replace fill.
+            return;
         }
     } else if (scoringState.interactionMode === 'rearrange') {
         const currentVal = scoringState.board[row][col];
