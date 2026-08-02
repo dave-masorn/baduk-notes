@@ -10455,7 +10455,15 @@ function resolveScoringInputs() {
                 : v === 2 ? { player: 'W', annotation: null, label: null }
                 : { player: null, annotation: null, label: null }
             ));
-            snapshot.captures = { B: session.blackCaptures || 0, W: session.whiteCaptures || 0 };
+            // SSOT-and-Synced: the modal's FINAL badge (drawBoard) is anchored to
+            // baseCaptures — the game's actual captures, which Replace/capture edits never
+            // move — so the blue panel must read the SAME source. Mirror the modal's
+            // expression verbatim: baseCaptures wins, legacy sessions fall back to the
+            // editable capture fields (blackCaptures/whiteCaptures).
+            snapshot.captures = {
+                B: session.baseCaptures ? (session.baseCaptures.B || 0) : (session.blackCaptures || 0),
+                W: session.baseCaptures ? (session.baseCaptures.W || 0) : (session.whiteCaptures || 0)
+            };
             snapshot.komi = (session.komi != null) ? Number(session.komi) : snapshot.komi;
             // The Scoring Modal's displayed formula is territory + dead + captures + komi and
             // never adds a handicap term — reproduce it verbatim so blue panel == modal.

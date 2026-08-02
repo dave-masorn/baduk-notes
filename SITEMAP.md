@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.028
+version: 0.1.029
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -76,6 +76,14 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.029 — Blue-panel ⇄ Modal-final capture parity (REC 002)
+
+Closes the last parity gap between the blue "Computational Method" Run score and the Manual Scoring Modal's FINAL badge. When a saved scoring session exists, the blue panel and the modal's Final now derive from the **same canonical captures**:
+
+1. **The blue panel reads `baseCaptures`, not the editable capture fields.** The modal's FINAL badge (`scoring-result-display`) is anchored to `baseCaptures` — the game's actual captures, which Replace/capture edits (`blackCaptures`/`whiteCaptures`) never move. `resolveScoringInputs` previously fed the session's editable `blackCaptures`/`whiteCaptures` into `BoardEstimate.evaluateJapaneseTerritory`, so after the user replaced captured stones the blue panel showed a different total than the modal's Final (e.g. `W+7.5` vs `W+6.5`). The resolver now mirrors the Final's expression verbatim: `baseCaptures` wins, legacy sessions without `baseCaptures` fall back to `blackCaptures`/`whiteCaptures` (identical to `restoreScoringFromSavedData`'s fallback), so the two surfaces can never drift on the captures term.
+
+(Headless-verified: 23 harness scenarios — the new scenario W asserts a saved session carrying both `baseCaptures: {0,0}` and editable `blackCaptures: 3 / whiteCaptures: 4` feeds the scorer `0/0` — plus 10 regression probes; Probe J reverts the resolver to the editable fields and W fails.)
 
 ### v0.1.028 — Manual Scoring Modal: goscorer auto-dead seeding + canonical Final anchor
 
@@ -1315,7 +1323,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                           │  frontmatter: version: 0.1.028           │
+                           │  frontmatter: version: 0.1.029           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1328,12 +1336,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html  header label    │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.028"          │                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.029"          │                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.028'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.029'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.028.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.029.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1452,9 +1460,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-     version: 0.1.028
+version: 0.1.029
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.028`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.028.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.029`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.029.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1467,7 +1475,7 @@ SITEMAP.md (source of truth)
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.028`) in the sidebar
+   - Version badge shows the new version (`0.1.029`) in the sidebar
    - Updated content renders cleanly
 
 ---
