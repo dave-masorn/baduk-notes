@@ -11026,10 +11026,10 @@ function goToMove(index) {
             const compTwPoints = snapshot.twPoints;
             const hasSgfMarkup = snapshot.hasMarkup;
 
-            // Incomplete-Markup Warning: the score is deterministic, but when ANY of
-            // DD/MA/TB/TW was not defined for the scorer (no dead stones declared, or
-            // territory derived by flood-fill because TB/TW is absent), surface it and let
-            // the user define the missing elements in the Manual Scoring Modal.
+            // Incomplete-Markup Warning: the score is deterministic, but when territory
+            // (TB/TW) was not defined for the scorer and derived by flood-fill instead,
+            // surface it and let the user declare it explicitly in the Manual Scoring Modal.
+            // (Dead stones are handled by the Dead-Stone Gate below — their absence refuses.)
             const markupWarnings = buildScoringMarkupWarnings(snapshot);
 
             const rawBoardData = BoardEstimate.fromBoard(compBoard);
@@ -11037,18 +11037,29 @@ function goToMove(index) {
             const bWidth = bHeight > 0 ? rawBoardData[0].length : 0;
             const totalIntersections = bHeight * bWidth;
 
-            // No-Markup Gate: without DD/MA/TB/TW anywhere, do NOT approximate. Warn the user
-            // and direct them to the Manual Scoring Modal to mark dead stones, save, re-run.
-            if (!hasSgfMarkup) {
+            // Dead-Stone Gate: the deterministic Japanese territory scorer REQUIRES resolved
+            // dead stones (DD/MA) before counting — that is the hard prerequisite for a correct
+            // Japanese score. Refuse (not just warn) whenever no dead stones are resolved: both
+            // when NO endgame markup exists at all and when only TB/TW is declared (dead stones
+            // absent), so a score is never silently rendered with every stone assumed alive.
+            // Direct the user to the Manual Scoring Modal to resolve dead stones, save, re-run.
+            if (!hasSgfMarkup || snapshot.deadStones.length === 0) {
+                const noMarkupAtAll = !hasSgfMarkup;
+                const gateTitle = noMarkupAtAll
+                    ? 'No DD/MA/TB/TW Endgame Markup Found'
+                    : 'No DD/MA Dead-Stone Resolution Found';
+                const gateBody = noMarkupAtAll
+                    ? 'The deterministic Japanese territory scorer requires resolved dead stones before counting. This game has no explicit endgame markup (DD/MA/TB/TW) anywhere, so no approximate score is rendered.'
+                    : 'The deterministic Japanese territory scorer requires resolved dead stones (DD/MA) before counting. This game declares TB/TW territory but no dead stones, so every stone would be assumed alive — no score is rendered for an unresolved Life &amp; Death state.';
                 resultEl.innerHTML = `
                     <div id="computational-estimate-warning" style="margin-top: 2px; background: linear-gradient(135deg, #78350f 0%, #92400e 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
                         <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
                             Computational Method (Japanese Territory Rules)
                         </div>
                         <div style="background: rgba(0, 0, 0, 0.3); padding: 14px; border-radius: 8px; border: 1px solid #fbbf24; text-align: center;">
-                            <div style="color: #fcd34d; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 6px;">No DD/MA/TB/TW Endgame Markup Found</div>
+                            <div style="color: #fcd34d; font-weight: 800; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 6px;">${gateTitle}</div>
                             <div style="color: #fef3c7; font-size: 0.8rem; line-height: 1.4;">
-                                The deterministic Japanese territory scorer requires resolved dead stones before counting. This game has no explicit endgame markup (DD/MA/TB/TW) anywhere, so no approximate score is rendered.<br><br><strong>Action Required:</strong> Mark dead stones with the X tool in the Manual Scoring Modal, then save and run again.
+                                ${gateBody}<br><br><strong>Action Required:</strong> Mark dead stones with the X tool in the Manual Scoring Modal, then save and run again.
                             </div>
                             <button id="btn-open-manual-scoring" type="button" style="margin-top: 12px; padding: 8px 18px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer; background: #10b981; color: #ffffff; border: 1px solid rgba(255,255,255,0.3); font-family: inherit;">Open Manual Scoring Modal</button>
                         </div>
