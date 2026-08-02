@@ -642,17 +642,24 @@ BoardEstimate.evaluateJapaneseTerritory = function(board, {deadStones = [], tbPo
         bTerritory = tbOnBoard.length;
         wTerritory = twOnBoard.length;
 
-        // Dead-stone freed points are NOT in the TB/TW lists (that markup only marks
-        // empty intersections), but under Japanese rules a scrubbed dead stone's point
-        // is territory for its capturer when enclosed. Add each freed point by its
-        // flood-fill owner so the blue panel matches the Scoring Modal (GoScorer counts
-        // those cells as territory too). A freed point in a dame region stays uncounted.
+        // Dead-stone freed points: under Japanese rules a scrubbed dead stone's point is
+        // territory for its capturer when enclosed. When the TB/TW lists come from the
+        // Manual Scoring session (computeScoringPropsFromSession) they ALREADY include the
+        // freed points (GoScorer counts dead stones as transparent, so the freed point is
+        // territory in its locScores) — re-adding them there would double-count, drifting
+        // the blue panel off the Scoring Modal. When the lists come from raw SGF markup,
+        // TB/TW only marks empty intersections, so the freed points are genuinely absent
+        // and must be added once by their flood-fill owner. Skip any freed point already
+        // present in the explicit lists; a freed point in a dame region stays uncounted.
+        const tbSet = new Set(tbOnBoard.map(p => `${p.r},${p.c}`));
+        const twSet = new Set(twOnBoard.map(p => `${p.r},${p.c}`));
         for (let pt of deadStones) {
             if (!pt) continue;
             const {r, c} = pt;
             if (r >= 0 && r < height && c >= 0 && c < width) {
-                if (ownerMap[r][c] === 1) bTerritory++;
-                else if (ownerMap[r][c] === -1) wTerritory++;
+                const key = `${r},${c}`;
+                if (ownerMap[r][c] === 1) { if (!tbSet.has(key)) bTerritory++; }
+                else if (ownerMap[r][c] === -1) { if (!twSet.has(key)) wTerritory++; }
             }
         }
     } else {

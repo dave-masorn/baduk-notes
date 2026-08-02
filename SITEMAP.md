@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.040
+version: 0.1.041
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,17 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.041 — JTS blue panel no longer double-counts dead-stone freed points (B+3 → B+2 parity with the MSM)
+
+Same game, same saved session, two answers: the Manual Scoring Modal said **B+2** (territory 68/69) but the blue Computational Method panel said **B+3** (territory 73/73). Investigation proved the dead-stone *freed points* were counted **twice** in the blue panel's session path:
+
+- `computeScoringPropsFromSession` derives the `TB`/`TW` lists from GoScorer, which treats marked-dead stones as transparent during flood-fill (goscorer.js:1416-1423) — so a dead stone's freed point is already territory and enters the `TB` list (dead *white* stones → Black territory) / `TW` list (dead *black* stones → White territory).
+- `evaluateJapaneseTerritory` then counted `tbOnBoard.length`/`twOnBoard.length` (which already contained those 9 points) **and** re-added every dead stone's freed point by flood-fill owner (board-estimate.js:650-657). That loop was written for the SGF-markup path, where `TB`/`TW` only mark empty intersections and the freed points genuinely are absent from the lists.
+
+The math matched the report exactly: 73 = 68 + 5 (five dead white stones) and 73 = 69 + 4 (four dead black stones) — a +9 territory over-count, all of it the 9 dead stones' freed points — which flipped the margin B+2 → B+3. The modal's 68/69 is the correct Japanese count (a dead stone counts once as a prisoner *and* its enclosed point counts once as territory).
+
+Fix: the freed-point loop now skips any point already present in the explicit `TB`/`TW` lists. The SGF-markup path is unchanged (freed points still added exactly once), the flood-fill fallback is unchanged, and session-path territory now equals the modal exactly. Headless-verified: a synthetic board (6 dead white inside a black enclosure, 4 dead black inside a white enclosure) reproduces the pre-fix double count (JTS territory = modal + 6/+4) and, post-fix, JTS territory == modal territory on all three paths (session lists, SGF-style lists, flood-fill fallback); all prior harnesses + `test_estimate.js` pass; `node --check` clean.
 
 ### v0.1.040 — Missing DD/MA now REFUSES the JTS score (hard prerequisite), not just warns
 
@@ -366,7 +377,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
 | `sgf-parser.js` | 800 | `SgfEngine` namespace — SGF parsing, board size, setup properties, markup, cloneTree, extractMainLine |
-| `board-estimate.js` | 702 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the explicit path additionally flood-fills the scrubbed grid and counts each dead stone's freed point as territory for its capturer, matching the Scoring Modal; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal) and `estimate` (the YSE path — when called from `runScoreEstimate` with empty territory it always runs its own AI dead-map + influence computation, never short-circuited by recorded `TB`/`TW`; uses `deadstones.bundle.js` for the AI pass) |
+| `board-estimate.js` | 709 | Score estimation engine — `evaluateJapaneseTerritory` (explicit `DD`/`MA`/`TB`/`TW` scoring; the explicit path additionally flood-fills the scrubbed grid and counts each dead stone's freed point as territory for its capturer — but only when that point is NOT already in the explicit `TB`/`TW` lists, because session-derived lists already contain the freed points via GoScorer's transparent dead stones, so re-adding them would double-count and drift the blue panel off the Scoring Modal; the flood-fill fallback is retained internally but is no longer surfaced by the Computational Method, which instead warns the user to mark dead stones in the Manual Scoring Modal) and `estimate` (the YSE path — when called from `runScoreEstimate` with empty territory it always runs its own AI dead-map + influence computation, never short-circuited by recorded `TB`/`TW`; uses `deadstones.bundle.js` for the AI pass) |
 | `goscorer.js` | 1,504 | `GoScorer` namespace — scoring-modal territory counting, `finalTerritoryScore()`, komi/captures tally |
 | `deadstones.bundle.js` | — | WASM bundle — dead stone detection (`@sabaki/deadstones`, esbuild build) |
 | `deadstones_bg.wasm` | — | WASM binary for dead stones |
@@ -1449,7 +1460,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                            │  frontmatter: version: 0.1.040           │
+                            │  frontmatter: version: 0.1.041           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1462,12 +1473,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.040"?v=0.1.040│                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.041"?v=0.1.041│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.040'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.041'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.040.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.041.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1586,9 +1597,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.040
+version: 0.1.041
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.040`) and script cache-busters (`?v=0.1.040`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.040.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.041`) and script cache-busters (`?v=0.1.041`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.041.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1601,7 +1612,7 @@ version: 0.1.040
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.040`) in the sidebar
+   - Version badge shows the new version (`0.1.041`) in the sidebar
    - Updated content renders cleanly
 
 ---
