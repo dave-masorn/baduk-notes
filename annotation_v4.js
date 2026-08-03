@@ -32,6 +32,11 @@ var customPanelState = {
 const state = {
     activeStudyId: null,
     pendingStudySgf: null,
+    // Style used to render the main board while a study session (Rec game) is active.
+    // The empty page-load board always renders with initialBoardStyle; during an active
+    // session the game board renders with this session style instead, so the two stay
+    // independent. null when no session is active.
+    gameBoardStyle: null,
     // Initial Board Style Settings
     initialBoardStyle: {
         stoneSet: null,
@@ -1826,8 +1831,10 @@ function setupEventListeners() {
         const countbackEl = document.getElementById('toggle-countback');
         const isFlipped = !!(state.isFlippedPov || state.isPovFlipped || state.boardFlipped);
 
+        const effectiveInitialStyle = getEffectiveInitialStyle();
+
         return {
-            initialBoardStyle: state.initialBoardStyle ? JSON.parse(JSON.stringify(state.initialBoardStyle)) : null,
+            initialBoardStyle: effectiveInitialStyle ? JSON.parse(JSON.stringify(effectiveInitialStyle)) : null,
             studyBoardStyle: state.studyBoardStyle ? JSON.parse(JSON.stringify(state.studyBoardStyle)) : null,
             exportBoardStyle: state.exportBoardStyle ? JSON.parse(JSON.stringify(state.exportBoardStyle)) : null,
             replayer: {
@@ -1841,6 +1848,10 @@ function setupEventListeners() {
             }
         };
     }
+
+    // Expose so top-level style helpers (saveStyleAndRedraw / captureActiveRecSettings) can
+    // snapshot the current settings into the active rec while a study session is open.
+    window.captureCurrentAppSettings = captureCurrentAppSettings;
 
     function applyAppSettings(settings) {
         if (!settings) return;
@@ -2174,7 +2185,10 @@ function setupEventListeners() {
                 const rec = StudyRecordDB.getRecord(id);
                 if (rec && confirm(`Delete study session ${rec.recNo} (${rec.fileNm})?`)) {
                     StudyRecordDB.deleteRecord(id);
-                    if (state.activeStudyId === id) state.activeStudyId = null;
+                    if (state.activeStudyId === id) {
+                        state.activeStudyId = null;
+                        state.gameBoardStyle = null;
+                    }
                     renderResumeStudyTable(elements.kifuSearchInput ? elements.kifuSearchInput.value : '');
                 }
             });
@@ -2997,6 +3011,15 @@ function setupEventListeners() {
         loadSGF(rec.workingSgf);
         state.isSgfLoading = false;
 
+        // The game board renders with THIS session's own captured style while it is active;
+        // the empty page-load board keeps its own setting, so do NOT write this to localStorage.
+        state.gameBoardStyle = (savedSettings && savedSettings.initialBoardStyle)
+            ? JSON.parse(JSON.stringify(savedSettings.initialBoardStyle))
+            : null;
+        if (state.gameBoardStyle && state.gameBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
+            updateBoardWrapperSize('#go-board-canvas-initial', state.gameBoardStyle.board.size);
+        }
+
         // Update totalMoves with actual parsed move count after loadSGF
         if (state.allSgfMoves && state.allSgfMoves.length > 0) {
             rec.totalMoves = state.allSgfMoves.length;
@@ -3148,6 +3171,16 @@ function setupEventListeners() {
 
             loadSGF(pending.sgfString);
 
+            // Newly recorded session uses its own captured style for the game board, exactly
+            // like a resumed session, so in-session customizations never touch the page-load
+            // initial-board setting.
+            state.gameBoardStyle = newRec.settings && newRec.settings.initialBoardStyle
+                ? JSON.parse(JSON.stringify(newRec.settings.initialBoardStyle))
+                : null;
+            if (state.gameBoardStyle && state.gameBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
+                updateBoardWrapperSize('#go-board-canvas-initial', state.gameBoardStyle.board.size);
+            }
+
             // Update totalMoves with actual parsed move count after loadSGF
             const updatedRec = StudyRecordDB.getRecord(newRec.id);
             if (updatedRec && state.allSgfMoves && state.allSgfMoves.length > 0) {
@@ -3255,6 +3288,8 @@ function setupEventListeners() {
                 const text = await navigator.clipboard.readText();
                 elements.sgfPasteArea.value = text;
                 if (text.trim()) {
+                    state.activeStudyId = null;
+                    state.gameBoardStyle = null;
                     loadSGF(text);
                 }
             } catch (err) {
@@ -3268,6 +3303,8 @@ function setupEventListeners() {
         elements.sgfPasteArea.addEventListener('input', () => {
             const text = elements.sgfPasteArea.value.trim();
             if (text) {
+                state.activeStudyId = null;
+                state.gameBoardStyle = null;
                 loadSGF(text);
             }
         });
@@ -3277,6 +3314,8 @@ function setupEventListeners() {
         elements.btnLoadSample.addEventListener('click', () => {
             const sampleSgf = "(;SZ[19]KM[6.5]PB[Black]PW[White]RE[B+R]DT[2024-01-01];B[pd];W[dp];B[pq];W[dd];B[qk];W[nc];B[pf];W[pb];B[qc];W[kc];B[fq];W[cn];B[jp];W[qn];B[qp];W[pj];B[qj];W[pi];B[qh];W[pm];B[ok];W[nk];B[nj];W[oj];B[nl];W[mk];B[ml];W[ll];B[ol];W[mj];B[ni];W[mi];B[nh];W[mh])";
             elements.sgfPasteArea.value = sampleSgf;
+            state.activeStudyId = null;
+            state.gameBoardStyle = null;
             loadSGF(sampleSgf);
         });
     }
@@ -4872,7 +4911,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
     try {
         let style = null;
         if (isInitialCanvas) {
-            style = state.initialBoardStyle;
+            style = getEffectiveInitialStyle();
         } else if (isStudyMode) {
             style = state.studyBoardStyle;
         }
@@ -5467,12 +5506,13 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                         }
                         
                         // Default coloring
-                        if (isInitialCanvas && state.initialBoardStyle) {
-                            const blackStoneFg = state.initialBoardStyle.blackStone?.fg || '#ffffff';
-                            const whiteStoneFg = state.initialBoardStyle.whiteStone?.fg || '#111827';
+                        const effInitialCanvasStyle = getEffectiveInitialStyle();
+                        if (isInitialCanvas && effInitialCanvasStyle) {
+                            const blackStoneFg = effInitialCanvasStyle.blackStone?.fg || '#ffffff';
+                            const whiteStoneFg = effInitialCanvasStyle.whiteStone?.fg || '#111827';
                             ctx.fillStyle = cell.player === 'B' ? blackStoneFg : whiteStoneFg;
                             
-                            const fgSizeVal = cell.player === 'B' ? state.initialBoardStyle.blackStone?.fgSize : state.initialBoardStyle.whiteStone?.fgSize;
+                            const fgSizeVal = cell.player === 'B' ? effInitialCanvasStyle.blackStone?.fgSize : effInitialCanvasStyle.whiteStone?.fgSize;
                             const fgSize = parseFloat(fgSizeVal);
                             if (!isNaN(fgSize) && fgSize !== null) {
                                 fontSize = fgSize;
@@ -5621,7 +5661,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             
             const pCell = { player: p, annotation: null, label: null };
             const { cx, cy } = getAnimatedPos(tgt.r, tgt.c, undefined);
-            const styleObj = document.body.classList.contains('study-mode-active') ? state.studyBoardStyle : state.initialBoardStyle;
+            const styleObj = document.body.classList.contains('study-mode-active') ? state.studyBoardStyle : getEffectiveInitialStyle();
             
             ctx.save();
             ctx.globalAlpha = isHover ? 0.4 : 0.6;
@@ -5867,7 +5907,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
     const isScoringCanvas = (targetCtx.canvas && targetCtx.canvas.id === 'go-board-canvas-scoring');
     
     if (isInitialCanvas) {
-        style = state.initialBoardStyle;
+        style = getEffectiveInitialStyle();
     } else if (isStudyCanvas) {
         style = state.studyBoardStyle;
     } else if (isScoringCanvas) {
@@ -9385,7 +9425,8 @@ function drawCommentCoordHighlights(cells) {
 
     const ctxs = [];
     if (elements.canvasInitial) {
-        const size = (state.initialBoardStyle && state.initialBoardStyle.board && state.initialBoardStyle.board.size) ? state.initialBoardStyle.board.size : 600;
+        const effInitialStyleForHighlights = getEffectiveInitialStyle();
+        const size = (effInitialStyleForHighlights && effInitialStyleForHighlights.board && effInitialStyleForHighlights.board.size) ? effInitialStyleForHighlights.board.size : 600;
         ctxs.push({ ctx: elements.canvasInitial.getContext('2d'), scale: size / 600 });
     }
     if (elements.canvasStudy) {
@@ -11699,6 +11740,13 @@ function loadSGF(sgfString) {
     if (!sgfString || typeof sgfString !== 'string') return;
     saveHistoryState('load-sgf');
 
+    // A freshly loaded game is not tied to a study session, so drop the active-session
+    // game style and reset the main board to the page-load initial style/size.
+    state.gameBoardStyle = null;
+    if (state.initialBoardStyle && state.initialBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
+        updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
+    }
+
     state.board = Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => ({
         player: null,
         annotation: null,
@@ -12472,9 +12520,8 @@ function initFloatingToolbar() {
             const activeStyle = getActiveStyleObject();
             if (activeStyle) {
                 activeStyle.stoneSet = wasActive ? null : opt.dataset.set;
-                localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
-                localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
-                localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+                persistBoardStyles();
+                captureActiveRecSettings();
             }
             syncCustomStonesSection();
             drawBoard();
@@ -12927,7 +12974,57 @@ function getActiveStyleObject() {
     } else if (view === '#go-board-canvas-study') {
         return state.studyBoardStyle;
     } else {
-        return state.initialBoardStyle;
+        return getEffectiveInitialStyle();
+    }
+}
+
+// The style the main board actually renders with: the active session's own style while
+// a Rec game is open, otherwise the page-load initial-board setting. This keeps the two
+// boards fully independent.
+function getEffectiveInitialStyle() {
+    if (state.activeStudyId && state.gameBoardStyle) return state.gameBoardStyle;
+    return state.initialBoardStyle;
+}
+
+// Route an assignment to the main-board style: while a session is active it belongs to the
+// session (rec.settings), otherwise it updates the page-load initial-board setting.
+function setEffectiveInitialStyle(style) {
+    if (state.activeStudyId) {
+        state.gameBoardStyle = style;
+    } else {
+        state.initialBoardStyle = style;
+    }
+}
+
+// Persist the current style state. While a session is active, in-session changes belong to
+// that session and MUST NOT overwrite the empty page-load initial-board setting; they are
+// captured into the rec by captureActiveRecSettings() instead.
+function persistBoardStyles() {
+    if (state.activeStudyId) {
+        localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
+        if (state.scoringBoardStyle) {
+            localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
+        }
+        localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+    } else {
+        localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
+        localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
+        if (state.scoringBoardStyle) {
+            localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
+        }
+        localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+    }
+}
+
+// Snapshot the current style state into the active rec's settings (same logic saveStyleAndRedraw
+// used to inline). captureCurrentAppSettings is exposed on window from inside the init handler.
+function captureActiveRecSettings() {
+    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined' && typeof window.captureCurrentAppSettings === 'function') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec) {
+            rec.settings = window.captureCurrentAppSettings();
+            StudyRecordDB.saveRecord(rec);
+        }
     }
 }
 
@@ -13409,7 +13506,7 @@ function bindStyleInputsEvents() {
                 window.studyBStoneBgImage = null;
                 window.studyWStoneBgImage = null;
             } else {
-                state.initialBoardStyle = defaultStyle;
+                setEffectiveInitialStyle(defaultStyle);
                 window.initialBoardBgImage = null;
                 window.initialBStoneBgImage = null;
                 window.initialWStoneBgImage = null;
@@ -13459,7 +13556,7 @@ function bindStyleInputsEvents() {
                 window.studyBStoneBgImage = null;
                 window.studyWStoneBgImage = null;
             } else {
-                state.initialBoardStyle = sourceStyle;
+                setEffectiveInitialStyle(sourceStyle);
                 window.initialBoardBgImage = null;
                 window.initialBStoneBgImage = null;
                 window.initialWStoneBgImage = null;
@@ -13532,20 +13629,8 @@ function updateBoardWrapperSize(view, size) {
 }
 
 function saveStyleAndRedraw() {
-    localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
-    localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
-    if (state.scoringBoardStyle) {
-        localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
-    }
-    localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
-    
-    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined' && typeof captureCurrentAppSettings === 'function') {
-        const rec = StudyRecordDB.getRecord(state.activeStudyId);
-        if (rec) {
-            rec.settings = captureCurrentAppSettings();
-            StudyRecordDB.saveRecord(rec);
-        }
-    }
+    persistBoardStyles();
+    captureActiveRecSettings();
 
     if (typeof drawBoard === 'function') drawBoard();
     
