@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.044
+version: 0.1.045
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,14 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.045 — The initial page-load board keeps its own board style: selecting a Rec Game no longer clobbers it
+
+Setting the board style on the empty page-load board (via the floating panel), then selecting a Rec Game, then hard-refreshing showed the **game's** board style on the initial board instead of the setting made on page load. Root cause: every Resume applies `applyAppSettings(rec.settings)`, and that function **overwrote** `state.initialBoardStyle` from the rec's snapshot — the initial style captured during the rec's last play session, i.e. the "game play setting" — and **re-persisted** it to `baduk_initial_board_style`. So the moment a Rec Game was selected, the user's page-load initial setting was replaced (and written back to localStorage), and after a refresh the empty board showed the stale game-era style.
+
+Fix in `applyAppSettings` (annotation_v4.js:1845): the initial board style is no longer restored from the rec snapshot — the initial page-load board (no game) always keeps the user's own persisted `initialBoardStyle`. The game-specific restores are untouched: `studyBoardStyle` (the study/game board appearance), `exportBoardStyle`, and the SGF replayer options are still applied so a resumed session looks exactly as the user left it. Behavior is unchanged for the common case where the persisted initial style already equals the snapshot's value (main-board styling writes to the same persisted key), so nothing that used to work regresses — only the stale-snapshot clobber is gone.
+
+Browser-verified (puppeteer against the repo): set initial board color `#aa1111` on page load → seed a Rec whose snapshot carries initial `#333333` / study `#4444ff` / export `#00ff00` / replayer `showMoveNumbers:false` → select the Rec → hard refresh. Pre-fix: after selecting the Rec the persisted initial color became `#333333` and stayed after refresh (bug). Post-fix: `#aa1111` survives selection AND refresh, while study `#4444ff`, export `#00ff00`, and replayer options are still restored. `test_estimate.js` passes; `node --check` clean.
 
 ### v0.1.044 — Floating panel: unselecting a Stone Set now auto-expands the Custom Stones section even while the Stones accordion is open
 
@@ -407,7 +415,7 @@ baduk-notes is a single-page web application for Go players and annotators.
 | File | Lines | Description |
 | --- | --- | --- |
 | `index.html` | 2,588 | Main HTML — all UI layout, floating panels, study modal, canvas elements, game tree, ref-Area/ref-Point buttons |
-| `annotation_v4.js` | 16,499 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; DEAD-STONE GATE: refuses a score — not merely warns — whenever no dead stones are resolved, both for no markup at all *"No DD/MA/TB/TW Endgame Markup Found"* and for TB/TW-only *"No DD/MA Dead-Stone Resolution Found"*, each with an Open Manual Scoring Modal button; with DD/MA resolved, territory missing TB/TW renders via flood-fill plus the amber "Incomplete Endgame Markup — Not Defined in the SGF" card from `buildScoringMarkupWarnings(snapshot)` with a Define-in-MSM button; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, **Replacing Dead Stones is margin-invariant** (consuming a dead stone clears one matching dead mark via `consumeDeadMarkFromState` so the dead term drops with the fill; a fill on a dead-marked cell is allowed — the lifted cell reads as territory and the stone that was there is relocated `mark → capture` so BOTH players still drop by exactly 1; dame/seki with undefined territory and cells with no prisoner of the territory's color are PROHIBITED, so the final margin never moves), undo snapshots now capture `blackCaptures`/`whiteCaptures` too, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), SSOT komi (`DEFAULT_KOMI` is the only 6.5 literal; `extractSgfKomi` reads the SGF with an `isNaN` guard so `KM[0]` stays 0 — shared by the modal session init, legacy restore, YSE panel, and blue-panel snapshot), "Reset Board" rebuilds the PRISTINE SGF terminal (`replayToTerminal()`, all stones present, zero dead/territory marks, replay captures + SGF komi — the computed territory overlay then renders from `territoryScoring(terminal, all-false)`, the exact inputs and shading of goscorer's test page after `Last`) — dead-mark/heuristic seeding stays a first-open-only behavior, `replayToTerminal()` |
+| `annotation_v4.js` | 16,503 | Main app — state, SGF parsing, board rendering, canvas drawing, event listeners, export, capture animation, comment coord highlights, hoshi highlights, ref-Area/ref-Point modes, SGF comments toggle, study-record resume (loads `workingSgf` as-is via `loadSGF`), algorithmic endgame-markup resolution (`findEndgameMarkup` searches current move → full/filtered sequences → root props → raw main line → saved scoring session), unified scoring-input resolution (`resolveScoringInputs`: live session → saved `rec.scoringData` → SGF markup; consumed identically by the Run panel and the modal for exact blue-panel ⇄ modal parity), score-estimate isolation (`runScoreEstimate` never feeds recorded `TB`/`TW` territory into `estimate()`, so YSE always runs its own AI + influence estimation), terminal-markup fold over all annotation-only nodes after the last move, Computational Method blue panel with "Run / Compute >" control (shown only at Game End; DEAD-STONE GATE: refuses a score — not merely warns — whenever no dead stones are resolved, both for no markup at all *"No DD/MA/TB/TW Endgame Markup Found"* and for TB/TW-only *"No DD/MA Dead-Stone Resolution Found"*, each with an Open Manual Scoring Modal button; with DD/MA resolved, territory missing TB/TW renders via flood-fill plus the amber "Incomplete Endgame Markup — Not Defined in the SGF" card from `buildScoringMarkupWarnings(snapshot)` with a Define-in-MSM button; the modal restores the latest persisted/saved session and seeds dead stones from `DD`/`MA`/`TB`/`TW`), explicit `DD`/`MA`/`TB`/`TW` scoring, dead-bucket dedupe in markup seeding + restore-time rebuild from marks (buckets always mirror the canonical `markedDead` set), dead marks LIFT the stone off the display board in every seed path — auto-detect, markup seed, and restore self-heal — exactly like a manual click, so Replace/Re-arrange never see the same stone on the board and in its bucket, **Replacing Dead Stones is margin-invariant** (consuming a dead stone clears one matching dead mark via `consumeDeadMarkFromState` so the dead term drops with the fill; a fill on a dead-marked cell is allowed — the lifted cell reads as territory and the stone that was there is relocated `mark → capture` so BOTH players still drop by exactly 1; dame/seki with undefined territory and cells with no prisoner of the territory's color are PROHIBITED, so the final margin never moves), undo snapshots now capture `blackCaptures`/`whiteCaptures` too, result badge computed from the SAME live state as the Computing formula (display board + live captures; `baseBoard`/`baseCaptures` only seed the first-entry auto-detect), SSOT komi (`DEFAULT_KOMI` is the only 6.5 literal; `extractSgfKomi` reads the SGF with an `isNaN` guard so `KM[0]` stays 0 — shared by the modal session init, legacy restore, YSE panel, and blue-panel snapshot), "Reset Board" rebuilds the PRISTINE SGF terminal (`replayToTerminal()`, all stones present, zero dead/territory marks, replay captures + SGF komi — the computed territory overlay then renders from `territoryScoring(terminal, all-false)`, the exact inputs and shading of goscorer's test page after `Last`) — dead-mark/heuristic seeding stays a first-open-only behavior, `replayToTerminal()` |
 | `annotation.css` | — | All styles — board canvases, floating panels, badges, progress bar, responsive layout |
 | `move-term-detector.js` | 1,237 | Move-term system — Sabaki pattern matching, Tenuki/Sente/Gote detection, `_termHL` highlight object, badge UI, hover/leave handlers, polling, CSS injection |
 | `game-tree.js` | 1,003 | Game tree rendering — main tree + footer tree, node properties, branch paths, wheel navigation, polling, `refreshGameTree()` |
@@ -1495,7 +1503,7 @@ Every user-facing surface that shows a version or content keeps in sync automati
 ```
                            ┌──────────────────────────────────────────┐
                            │        SITEMAP.md  (source of truth)     │
-                             │  frontmatter: version: 0.1.044           │
+                             │  frontmatter: version: 0.1.045           │
                            │  H2/H3 headings + body text              │
                            └───────────────────┬──────────────────────┘
                                                │  node sync-docs.js
@@ -1508,12 +1516,12 @@ Every user-facing surface that shows a version or content keeps in sync automati
               (syncVersion)                 │      │  (H2 → MDX pages)
    ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
    │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.044"?v=0.1.044│                        │  index.mdx + meta.json            │
+   │  "tech_log-0.1.045"?v=0.1.045│                        │  index.mdx + meta.json            │
    ├──────────────────────────────┤                        └───────────────┬──────────────────┘
    │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.044'  │                                        ▼
+   │  TECH_LOG_VERSION='0.1.045'  │                                        ▼
    ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.044.html       │                        │  tech-log/out/  →  tech-log-dist/ │
+   │  tech_log-0.1.045.html       │                        │  tech-log/out/  →  tech-log-dist/ │
    │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
    └──────────────────────────────┘                        └──────────────────────────────────┘
 ```
@@ -1632,9 +1640,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.044
+version: 0.1.045
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.044`) and script cache-busters (`?v=0.1.044`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.044.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.045`) and script cache-busters (`?v=0.1.045`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.045.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -1647,7 +1655,7 @@ version: 0.1.044
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.044`) in the sidebar
+   - Version badge shows the new version (`0.1.045`) in the sidebar
    - Updated content renders cleanly
 
 ---

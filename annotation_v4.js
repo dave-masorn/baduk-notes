@@ -1845,11 +1845,15 @@ function setupEventListeners() {
     function applyAppSettings(settings) {
         if (!settings) return;
 
-        // 1. Restore floating panel style settings
-        if (settings.initialBoardStyle) {
-            state.initialBoardStyle = JSON.parse(JSON.stringify(settings.initialBoardStyle));
-            localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
-        }
+        // 1. Restore floating panel style settings.
+        //    NOTE: the INITIAL board style is deliberately NOT restored from the rec snapshot.
+        //    The initial page-load board (no game) must always keep the user's own persisted
+        //    initial-board setting; restoring it here clobbered that setting on every resume
+        //    (a rec's snapshot carries the initial style captured during its last play, i.e. the
+        //    "game play setting") and re-persisted it, so after a hard refresh the empty board
+        //    showed the game's style instead of the style the user set on page load. Study (game
+        //    board), export, and replayer options are still restored so a resumed session looks
+        //    as the user left it.
         if (settings.studyBoardStyle) {
             state.studyBoardStyle = JSON.parse(JSON.stringify(settings.studyBoardStyle));
             localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
