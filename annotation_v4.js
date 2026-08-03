@@ -1179,6 +1179,7 @@ function recordMoveAt(r, c, color, toolName) {
     state.currentMoveIndex = state.sgfMoves.length - 1;
     state.isSgfDirty = true;
     state.popupShownForCurrentChange = false;
+    playSfx(stoneSound);
 
     if (toolName === 'play-b' || toolName === 'play-w') {
         state.playSeq.currentColor = color === 'B' ? 'W' : 'B';
@@ -1212,6 +1213,7 @@ function removeLastMove() {
     state.currentMoveIndex = state.sgfMoves.length - 1;
     state.isSgfDirty = true;
     state.popupShownForCurrentChange = false;
+    playSfx(removeSound);
 
     state.isSgfDirty = false;
     goToMove(state.currentMoveIndex);
