@@ -99,6 +99,7 @@ const state = {
             size: 600
         },
         border: {
+            override: true,
             color: '#dcb35c',
             size: 100
         },
@@ -153,6 +154,7 @@ const state = {
             size: 600
         },
         border: {
+            override: true,
             color: '#dcb35c',
             size: 100
         },
@@ -212,6 +214,7 @@ const state = {
             size: 600
         },
         border: {
+            override: true,
             color: '#dcb35c',
             size: 100
         },
@@ -5042,13 +5045,15 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         let currentBorderLineColor = isPlayerMode ? '#1C1917' : '#000000';
         let currentBorderWidth = isPlayerMode ? 1 : 1.5;
         let borderScale = 1;
+        let borderOverrideOn = true;
         
         let boardImage = null;
         
         if (style) {
             currentBoardBg = (style.board && style.board.useColor) ? style.board.color : '#dcb35c';
             currentBorderMarginColor = style.border ? style.border.color : '#dcb35c';
-            borderScale = (style.border && style.border.size !== undefined) ? (parseFloat(style.border.size) / 100) : 1;
+            borderScale = (style.border && style.border.size !== undefined) ? Math.min(1, parseFloat(style.border.size) / 100) : 1;
+            borderOverrideOn = !style.border || style.border.override !== false;
             
             if (style.board && !style.board.useColor && style.board.imgSrc) {
                 const cacheKey = isInitialCanvas ? 'initialBoardBgImage' : 'studyBoardBgImage';
@@ -5075,11 +5080,14 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         const woodW = 18 * CELL_SIZE + 2 * marginSize;
         const woodH = 18 * CELL_SIZE + 2 * marginSize;
 
-        // Fill the outer wood area (margin) with the Border Color
-        ctx.fillStyle = currentBorderMarginColor;
+        // Fill the outer wood area (margin). With Override ON (default) the margin is the
+        // picked border color; with Override OFF it takes the board bg color instead.
+        ctx.fillStyle = borderOverrideOn ? currentBorderMarginColor : currentBoardBg;
         ctx.fillRect(woodX, woodY, woodW, woodH);
 
-        // Then fill the inner grid area with the Board Color or Image
+        // Then fill the inner grid area with the Board Color or Image.
+        // With Override ON the board image must never spill over the border margin,
+        // so it is clipped to the 19x19 grid area; with Override OFF it fills the whole wood.
         if (boardImage) {
             let imgZoom = 1.0;
             let imgOffsetX = 0;
@@ -5094,6 +5102,11 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 imgOffsetY = parseFloat(style.board.imgOffsetY);
             }
 
+            const imgRectX = borderOverrideOn ? PADDING : woodX;
+            const imgRectY = borderOverrideOn ? PADDING : woodY;
+            const imgRectW = borderOverrideOn ? 18 * CELL_SIZE : woodW;
+            const imgRectH = borderOverrideOn ? 18 * CELL_SIZE : woodH;
+
             if (style && style.board && style.board.imgRepeat) {
                 ctx.save();
                 ctx.translate(woodX, woodY);
@@ -5104,16 +5117,16 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                         pattern.setTransform(matrix);
                     }
                     ctx.fillStyle = pattern;
-                    ctx.fillRect(0, 0, woodW, woodH);
+                    ctx.fillRect(imgRectX - woodX, imgRectY - woodY, imgRectW, imgRectH);
                 } catch (e) {
                     ctx.fillStyle = currentBoardBg;
-                    ctx.fillRect(0, 0, woodW, woodH);
+                    ctx.fillRect(imgRectX - woodX, imgRectY - woodY, imgRectW, imgRectH);
                 }
                 ctx.restore();
             } else {
                 ctx.save();
                 ctx.beginPath();
-                ctx.rect(woodX, woodY, woodW, woodH);
+                ctx.rect(imgRectX, imgRectY, imgRectW, imgRectH);
                 ctx.clip();
                 
                 const scaledW = woodW * imgZoom;
@@ -5124,7 +5137,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 
                 ctx.restore();
             }
-        } else {
+        } else if (borderOverrideOn) {
             ctx.fillStyle = currentBoardBg;
             ctx.fillRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
         }
@@ -5972,7 +5985,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 woodW = fullBoardRect.w;
                 woodH = fullBoardRect.h;
             } else {
-                const borderScale = parseFloat(style.border.size) / 100 || 1;
+                const borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
                 const marginSize = (cellSize / 2) * borderScale;
                 woodX = PADDING - marginSize;
                 woodY = PADDING - marginSize;
@@ -6137,7 +6150,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         
         if (boardImage) {
             targetCtx.clip();
-            const borderScale = parseFloat(style.border.size) / 100 || 1;
+            const borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
             const marginSize = (cellSize / 2) * borderScale;
             let woodX, woodY, woodW, woodH;
             
@@ -6862,9 +6875,9 @@ async function generateDiagramDataURL() {
     try {
         let borderScale = 1.0;
         if (state.exportBoardStyle && state.exportBoardStyle.border && state.exportBoardStyle.border.size !== undefined) {
-            borderScale = state.exportBoardStyle.border.size / 100;
+            borderScale = Math.min(1, state.exportBoardStyle.border.size / 100);
         } else if (state.exportText.borderSize !== undefined) {
-            borderScale = state.exportText.borderSize / 100;
+            borderScale = Math.min(1, state.exportText.borderSize / 100);
         }
         const borderMargin = 0.5 * borderScale;
         const coordMargin = 0.9;
@@ -7440,13 +7453,15 @@ async function generateDiagramDataURL() {
                 let currentBgColor = '#DCB35C';
                 let currentBoardColor = '#DCB35C';
                 let borderScale = 1;
+                let borderOverrideOn = true;
                 let boardImage = null;
                 
                 if (state.exportBoardStyle) {
                     const style = state.exportBoardStyle;
                     currentBoardColor = style.board.useColor ? style.board.color : '#DCB35C';
                     currentBgColor = style.border.color;
-                    borderScale = parseFloat(style.border.size) / 100 || 1;
+                    borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
+                    borderOverrideOn = !style.border || style.border.override !== false;
                     
                     if (!style.board.useColor && style.board.imgSrc) {
                         if (!window.exportBoardBgImage) {
@@ -7461,11 +7476,14 @@ async function generateDiagramDataURL() {
                     }
                 }
                 
-                // Fill the whole background with the border margin color
-                exportCtx.fillStyle = currentBgColor;
+                // Fill the whole background: the border margin color with Override ON,
+                // otherwise the board bg color (image covers it below when OFF).
+                exportCtx.fillStyle = borderOverrideOn ? currentBgColor : currentBoardColor;
                 exportCtx.fillRect(woodLeft, woodTop, woodRight - woodLeft, woodBottom - woodTop);
                 
-                // Then paint the inner board area with the regular board color or image
+                // Then paint the inner board area with the regular board color or image.
+                // With Override ON the image is clipped to the grid so it never covers the
+                // border margin; with Override OFF it fills the whole wood area instead.
                 if (boardImage) {
                     exportCtx.save();
                     let imgZoom = 1.0;
@@ -7481,8 +7499,13 @@ async function generateDiagramDataURL() {
                         imgOffsetY = parseFloat(state.exportBoardStyle.board.imgOffsetY);
                     }
                     
+                    const imgLeft = borderOverrideOn ? gridLeft : woodLeft;
+                    const imgTop = borderOverrideOn ? gridTop : woodTop;
+                    const imgRight = borderOverrideOn ? gridRight : woodRight;
+                    const imgBottom = borderOverrideOn ? gridBottom : woodBottom;
+                    
                     exportCtx.beginPath();
-                    exportCtx.rect(woodLeft, woodTop, woodRight - woodLeft, woodBottom - woodTop);
+                    exportCtx.rect(imgLeft, imgTop, imgRight - imgLeft, imgBottom - imgTop);
                     exportCtx.clip();
 
                     if (state.exportBoardStyle.board.imgRepeat) {
@@ -7492,10 +7515,10 @@ async function generateDiagramDataURL() {
                                 pattern.setTransform(new DOMMatrix().translate(fullBoardRect.x + imgOffsetX, fullBoardRect.y + imgOffsetY).scale(imgZoom, imgZoom));
                             }
                             exportCtx.fillStyle = pattern;
-                            exportCtx.fillRect(woodLeft, woodTop, woodRight - woodLeft, woodBottom - woodTop);
+                            exportCtx.fillRect(imgLeft, imgTop, imgRight - imgLeft, imgBottom - imgTop);
                         } catch (e) {
                             exportCtx.fillStyle = currentBoardColor;
-                            exportCtx.fillRect(woodLeft, woodTop, woodRight - woodLeft, woodBottom - woodTop);
+                            exportCtx.fillRect(imgLeft, imgTop, imgRight - imgLeft, imgBottom - imgTop);
                         }
                     } else {
                         const scaledW = fullBoardRect.w * imgZoom;
@@ -7505,7 +7528,7 @@ async function generateDiagramDataURL() {
                         exportCtx.drawImage(boardImage, dx, dy, scaledW, scaledH);
                     }
                     exportCtx.restore();
-                } else {
+                } else if (borderOverrideOn) {
                     exportCtx.fillStyle = currentBoardColor;
                     exportCtx.fillRect(gridLeft, gridTop, gridRight - gridLeft, gridBottom - gridTop);
                 }
@@ -12975,6 +12998,7 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         size: 720
     },
     border: {
+        override: true,
         color: '#dcb35c',
         size: 100
     },
@@ -13136,6 +13160,8 @@ function populateStyleInputs() {
     // Board BDC (Border)
     setInputVal('ib-border-color', style.border.color);
     setInputVal('ib-border-size', style.border.size);
+    setInputVal('ib-border-override', style.border.override !== false, true);
+    updateBorderOverrideUI();
     
     // Grids
     setInputVal('ib-grid-line-color', style.grid.lineColor);
@@ -13175,6 +13201,22 @@ function populateStyleInputs() {
     setInputVal('ib-coord-move-marker-color', style.marker.color);
     state.showMoveMarker = !!style.marker.show;
     state.moveMarkerColor = style.marker.color || '#ff3b30';
+}
+
+// Reflect the Border Override toggle state in the UI: ON shows the picked border color
+// (color controls active), OFF means the border takes the board bg/image (color dimmed).
+function updateBorderOverrideUI() {
+    const el = document.getElementById('ib-border-override');
+    const on = el ? el.checked : true;
+    const label = document.getElementById('ib-border-override-label');
+    if (label) {
+        label.textContent = on ? 'ON' : 'OFF';
+        label.style.color = on ? '#34d399' : '#f87171';
+    }
+    const wrap = document.getElementById('ib-border-color-wrap');
+    if (wrap) wrap.style.opacity = on ? '1' : '0.35';
+    const valBadge = document.getElementById('ib-border-color-val');
+    if (valBadge) valBadge.style.opacity = on ? '1' : '0.35';
 }
 
 function setInputVal(id, val, isCheckbox = false) {
@@ -13228,6 +13270,7 @@ function bindStyleInputsEvents() {
         
         { id: 'ib-border-color', section: 'border', key: 'color' },
         { id: 'ib-border-size', section: 'border', key: 'size', isNum: true },
+        { id: 'ib-border-override', section: 'border', key: 'override', isCheckbox: true },
         
         { id: 'ib-grid-line-color', section: 'grid', key: 'lineColor' },
         { id: 'ib-grid-line-size', section: 'grid', key: 'lineSize', isNum: true },
@@ -13295,6 +13338,12 @@ function bindStyleInputsEvents() {
                 val = el.value;
             }
             
+            // Border size is capped at 100% (max size), regardless of typed input
+            if (item.id === 'ib-border-size') {
+                val = Math.max(0, Math.min(100, val));
+                el.value = val;
+            }
+            
             if (slider) slider.value = val;
             
             // Update color code span if it exists (uupm.cc style)
@@ -13308,6 +13357,11 @@ function bindStyleInputsEvents() {
         
         el.addEventListener('input', handler);
         el.addEventListener('change', handler);
+        
+        if (item.id === 'ib-border-override') {
+            el.addEventListener('input', updateBorderOverrideUI);
+            el.addEventListener('change', updateBorderOverrideUI);
+        }
         
         const attachSliderReset = (targetElement) => {
             targetElement.addEventListener('dblclick', () => {
