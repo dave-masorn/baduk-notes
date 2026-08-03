@@ -14456,7 +14456,9 @@ function getScoringSnapshot() {
         rearrangeBlack: [...scoringState.rearrangeBlack],
         rearrangeWhite: [...scoringState.rearrangeWhite],
         deadWhite: [...scoringState.deadWhite],
-        deadBlack: [...scoringState.deadBlack]
+        deadBlack: [...scoringState.deadBlack],
+        blackCaptures: scoringState.blackCaptures || 0,
+        whiteCaptures: scoringState.whiteCaptures || 0
     };
 }
 
@@ -14482,6 +14484,8 @@ function restoreScoringSnapshot(snap) {
     scoringState.rearrangeWhite = [...(snap.rearrangeWhite || [])];
     scoringState.deadWhite = [...(snap.deadWhite || [])];
     scoringState.deadBlack = [...(snap.deadBlack || [])];
+    scoringState.blackCaptures = snap.blackCaptures !== undefined ? snap.blackCaptures : (scoringState.blackCaptures || 0);
+    scoringState.whiteCaptures = snap.whiteCaptures !== undefined ? snap.whiteCaptures : (scoringState.whiteCaptures || 0);
     updateScoringUI();
     drawBoard();
 }
@@ -15862,10 +15866,12 @@ function handleScoringBoardClick(e) {
     } else if (scoringState.interactionMode === 'replace') {
         const currentVal = scoringState.board[row][col];
         if (currentVal !== 0) return;
-        // The lifted dead stone's own cell stays EMPTY: its freed point is already counted
-        // as territory through the marks. Do not fill onto a dead X — that would re-place
-        // the stone and both overcount territory and misalign the bucket/mark pairing.
-        if (scoringState.markedDead[row][col]) return;
+        // A dead-marked cell behaves EXACTLY like any other territory point here: the dead
+        // stone was lifted, so the intersection reads as territory (the freed point) and a
+        // prisoner of that territory's color may be placed on it. Only intersections whose
+        // territory is NOT defined (dame) are prohibited below.
+        const wasDeadMarked = scoringState.markedDead[row][col];
+        const deadColorAtCell = scoringState.deadStonesInfo[row][col] || 0;
         const stonesWithDead = scoringState.board.map((r, ri) =>
             r.map((val, ci) => {
                 if (scoringState.markedDead[ri][ci] && val === 0) {
@@ -15892,13 +15898,42 @@ function handleScoringBoardClick(e) {
                 } catch(e) { console.error("GoScorer error:", e); }
             }
         }
+        if (terrColor === 0) {
+            // Dame / seki — territory not defined for this intersection. The physical count
+            // never fills neutral ground (a dame fill would cost only the prisoner's side and
+            // drift the margin), so a replace on it is PROHIBITED.
+            return;
+        }
+        // Fill requires a prisoner of the territory's color; without one there is nothing to place.
+        if (terrColor === 1 && !(scoringState.deadBlack.length > 0 || (scoringState.whiteCaptures || 0) > 0)) return;
+        if (terrColor === 2 && !(scoringState.deadWhite.length > 0 || (scoringState.blackCaptures || 0) > 0)) return;
+        saveScoringStateForUndo();
+        scoringState.board[row][col] = terrColor;
+        scoringState.markedDead[row][col] = false;
+        scoringState.deadStonesInfo[row][col] = null;
+        // The dead stone that WAS on this fill point stays a prisoner: its freed point was the
+        // territory now being filled, but a dead mark can no longer sit on an occupied cell.
+        // Relocate its accounting from the mark set to the capture counter (mark -> capture is
+        // a wash inside that side's prisoner total), exactly mirroring a prisoner consumed from
+        // any other territory point — the totals still drop by exactly 1 per player.
+        if (wasDeadMarked) {
+            if (deadColorAtCell === 1) {
+                scoringState.whiteCaptures = (scoringState.whiteCaptures || 0) + 1;
+                const dIdx = scoringState.deadBlack.indexOf('B');
+                if (dIdx !== -1) scoringState.deadBlack.splice(dIdx, 1);
+                const bIdx = scoringState.bucketWhite.indexOf('B');
+                if (bIdx !== -1) scoringState.bucketWhite.splice(bIdx, 1);
+            } else if (deadColorAtCell === 2) {
+                scoringState.blackCaptures = (scoringState.blackCaptures || 0) + 1;
+                const dIdx = scoringState.deadWhite.indexOf('W');
+                if (dIdx !== -1) scoringState.deadWhite.splice(dIdx, 1);
+                const bIdx = scoringState.bucketBlack.indexOf('W');
+                if (bIdx !== -1) scoringState.bucketBlack.splice(bIdx, 1);
+            }
+        }
+        // Consume the prisoner used for the fill (a dead stone of the territory's color when
+        // available — clearing one matching dead mark — otherwise a capture).
         if (terrColor === 1) {
-            const bAvail = scoringState.deadBlack.length > 0 || (scoringState.whiteCaptures || 0) > 0;
-            if (!bAvail) return;
-            saveScoringStateForUndo();
-            scoringState.board[row][col] = 1;
-            scoringState.markedDead[row][col] = false;
-            scoringState.deadStonesInfo[row][col] = null;
             if (scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
@@ -15907,15 +15942,7 @@ function handleScoringBoardClick(e) {
             } else {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             }
-            updateScoringUI();
-            drawBoard();
-        } else if (terrColor === 2) {
-            const wAvail = scoringState.deadWhite.length > 0 || (scoringState.blackCaptures || 0) > 0;
-            if (!wAvail) return;
-            saveScoringStateForUndo();
-            scoringState.board[row][col] = 2;
-            scoringState.markedDead[row][col] = false;
-            scoringState.deadStonesInfo[row][col] = null;
+        } else {
             if (scoringState.deadWhite.length > 0) {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
@@ -15924,14 +15951,9 @@ function handleScoringBoardClick(e) {
             } else {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             }
-            updateScoringUI();
-            drawBoard();
-        } else {
-            // Dame is neutral ground — filling it costs only the prisoner's side (a single
-            // -1), so the final margin would drift. The physical count never fills dame.
-            // Block it here to keep the margin invariant under every replace fill.
-            return;
         }
+        updateScoringUI();
+        drawBoard();
     } else if (scoringState.interactionMode === 'rearrange') {
         const currentVal = scoringState.board[row][col];
         if (currentVal === 1) {
