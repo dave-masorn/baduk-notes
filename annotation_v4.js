@@ -14678,9 +14678,12 @@ window.scoringState = {
     showCoords: true,
     komi: DEFAULT_KOMI,
     pendingClick: null,
+    pendingLockEdit: null,
     blackCaptures: 0,
     whiteCaptures: 0,
-    frozen: false
+    frozen: false,
+    locked: false,
+    lockedSnapshot: null
 };
 
 let scoringHistory = [];
@@ -14766,6 +14769,119 @@ function updateUndoRedoButtonsUI() {
         btnRedo.style.opacity = scoringFuture.length > 0 ? '1' : '0.4';
         btnRedo.style.cursor = scoringFuture.length > 0 ? 'pointer' : 'not-allowed';
     }
+}
+
+// ── Lock engine: "Saved/Locked" resolution commit (real Japanese professional scoring) ──
+// Mark Dead Stones + Mark Territories are the mandatory first stage. Locking commits them:
+// Replace/Re-arrange unlock, and the SGF Properties (DD/MA/TB/TW) freeze to the locked
+// values. Editing a locked mark/territory (or Unlocking) resets every counting action made
+// AFTER the lock, restoring the board to the exact locked resolution — never to pristine.
+function buildLockedSnapshot() {
+    return { ...getScoringSnapshot(), ruleMode: scoringState.ruleMode };
+}
+
+function applyScoringLock() {
+    if (scoringState.frozen || scoringState.locked) return;
+    scoringState.lockedSnapshot = buildLockedSnapshot();
+    scoringState.locked = true;
+    scoringState.pendingLockEdit = null;
+    updateScoringUI();
+    drawBoard();
+}
+
+// How much post-lock counting work an unlock would discard (for the confirmation copy).
+function countPostLockActions() {
+    const snap = scoringState.lockedSnapshot;
+    if (!snap || !snap.board) return { placed: 0, removed: 0, caps: 0, terr: 0, total: 0 };
+    let placed = 0, removed = 0, terr = 0;
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            const live = scoringState.board[r][c];
+            const locked = snap.board[r][c] || 0;
+            if (live !== 0 && locked === 0) placed++;
+            else if (live === 0 && locked !== 0) removed++;
+            if (scoringState.manualTerritory[r][c] !== (snap.manualTerritory ? snap.manualTerritory[r][c] || 0 : 0)) terr++;
+        }
+    }
+    const caps = Math.abs((scoringState.blackCaptures || 0) - (snap.blackCaptures || 0))
+        + Math.abs((scoringState.whiteCaptures || 0) - (snap.whiteCaptures || 0));
+    return { placed, removed, caps, terr, total: placed + removed + caps + terr };
+}
+
+// Unlock restores the locked resolution (marks + territory + captures + buckets) and drops
+// everything done after the lock. The counting phase's undo history no longer applies.
+function applyUnlockReset() {
+    const snap = scoringState.lockedSnapshot;
+    if (snap && snap.board) restoreScoringSnapshot(snap);
+    scoringState.locked = false;
+    scoringState.lockedSnapshot = null;
+    scoringState.pendingLockEdit = null;
+    if (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange') {
+        scoringState.interactionMode = 'mark';
+        const elModeSelect = document.getElementById('scoring-interaction-mode');
+        if (elModeSelect) elModeSelect.value = 'mark';
+    }
+    scoringHistory = [];
+    scoringFuture = [];
+    updateUndoRedoButtonsUI();
+    updateScoringUI();
+    drawBoard();
+}
+
+function toggleScoringLock() {
+    if (scoringState.frozen) return;
+    if (scoringState.locked) {
+        const counts = countPostLockActions();
+        if (counts.total > 0) showUnlockDialog();
+        else applyUnlockReset();
+    } else {
+        applyScoringLock();
+    }
+}
+
+// The unlock confirmation dialog. Shown when an unlock (button OR a mark/territory edit
+// click) would discard post-lock counting work. The edit click is parked in pendingLockEdit
+// and replayed after the reset so the user's intended mark change still lands.
+function showUnlockDialog() {
+    const dialog = document.getElementById('scoring-unlock-confirm-dialog');
+    if (!dialog) { applyUnlockReset(); return; }
+    const counts = countPostLockActions();
+    const msg = document.getElementById('scoring-unlock-confirm-msg');
+    if (msg) {
+        if (counts.total === 0) {
+            msg.textContent = 'Unlock dead stones & territory? No counting changes were made after locking.';
+        } else {
+            msg.textContent = `Unlock to edit dead stones & territory? This resets the counting phase after the lock: `
+                + `${counts.placed} stone(s) placed, ${counts.removed} stone(s) removed, `
+                + `${counts.caps} capture adjustment(s), ${counts.terr} territory change(s). `
+                + `The locked marks & territory are kept.`;
+        }
+    }
+    dialog.style.display = 'flex';
+}
+
+function confirmScoringUnlock() {
+    const dialog = document.getElementById('scoring-unlock-confirm-dialog');
+    if (dialog) dialog.style.display = 'none';
+    const isEditClick = !!scoringState.pendingLockEdit;
+    const p = scoringState.pendingLockEdit;
+    applyUnlockReset();
+    if (isEditClick && p) {
+        // Replay the parked resolution-edit click on the freshly restored (unlocked) board.
+        const canvas = document.getElementById('go-board-canvas-scoring');
+        if (canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const x = rect.left + ((p.clickX || 0) / 600) * rect.width;
+            const y = rect.top + ((p.clickY || 0) / 600) * rect.height;
+            canvas.dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
+        }
+    }
+}
+
+function cancelScoringUnlock() {
+    const dialog = document.getElementById('scoring-unlock-confirm-dialog');
+    if (dialog) dialog.style.display = 'none';
+    scoringState.pendingLockEdit = null;
 }
 
 // Global Mac / Ctrl Keyboard Shortcut Listener for #scoring modal
@@ -14923,6 +15039,20 @@ function initScoringModal() {
         btnSaveScoring.addEventListener('click', saveScoringResult);
     }
 
+    // ── Lock / Unlock resolution (prerequisite-stage commit) ──────────────
+    const btnLock = document.getElementById('btn-scoring-lock');
+    if (btnLock) {
+        btnLock.addEventListener('click', toggleScoringLock);
+    }
+    const btnConfirmUnlock = document.getElementById('btn-scoring-confirm-unlock');
+    if (btnConfirmUnlock) {
+        btnConfirmUnlock.addEventListener('click', confirmScoringUnlock);
+    }
+    const btnCancelUnlock = document.getElementById('btn-scoring-cancel-unlock');
+    if (btnCancelUnlock) {
+        btnCancelUnlock.addEventListener('click', cancelScoringUnlock);
+    }
+
     // ── Placement dialog helpers ──────────────────────────────────────────
     const closePlacementDialog = () => {
         const dialog = document.getElementById('scoring-color-picker-dialog');
@@ -15029,8 +15159,9 @@ function initScoringModal() {
             return;
         }
         scoringState.board[r][c] = color;
-        scoringState.markedDead[r][c] = false;
-        scoringState.deadStonesInfo[r][c] = null;
+        // Dead marks NEVER clear when a stone is placed on the point (marks are the immutable
+        // resolution — the dead X keeps showing over the placed stone when "Show dead stones"
+        // is checked, and the SGF Properties DD/MA counts stay intact).
         const mode = scoringState.interactionMode;
         if (color === 1) { // placing black stone
             if (mode === 'rearrange' && scoringState.rearrangeBlack.length > 0) {
@@ -15337,6 +15468,20 @@ function resetScoringBoardFromState(options) {
     // embedders/tests that inject a separate stub stay consistent.
     window.scoringState = scoringState;
 
+    // Lock state: a pristine Reset clears the resolution entirely. A first-entry non-pristine
+    // open PRE-ENGAGES the lock when the loaded record carries its own endgame markup
+    // (DD/MA/TB/TW) — the file's resolved Life & Death/territory is treated as already
+    // committed, so Replacing/Re-arranging are available immediately. Records with no markup
+    // open unlocked: the user must resolve dead stones + territory and click Lock first.
+    if (!pristine && markupMove && (markupMove.DD || markupMove.MA || markupMove.TB || markupMove.TW)) {
+        scoringState.locked = true;
+        scoringState.lockedSnapshot = buildLockedSnapshot();
+    } else {
+        scoringState.locked = false;
+        scoringState.lockedSnapshot = null;
+    }
+    scoringState.pendingLockEdit = null;
+
     updateScoringSaveButton();
     updateScoringUI();
     drawBoard();
@@ -15371,6 +15516,10 @@ function countTerritoryFromScores(ss, locScores, areaScores, ruleMode) {
     const isJpn = ruleMode === 'japanese';
     for (let y = 0; y < 19; y++) {
         for (let x = 0; x < 19; x++) {
+            // Territory is, by definition, EMPTY intersections. An occupied cell — including a
+            // replaced stone sitting on a kept dead-X mark (transparent to GoScorer, which would
+            // otherwise still report territory there) — is a stone, never territory.
+            if (ss.board && ss.board[y] && ss.board[y][x] !== 0) continue;
             if (ss.manualTerritory[y][x] > 0) {
                 if (ss.manualTerritory[y][x] === 1) b++;
                 else if (ss.manualTerritory[y][x] === 2) w++;
@@ -15491,8 +15640,30 @@ function buildScoringSessionSnapshot() {
         blackCaptures: scoringState.blackCaptures,
         whiteCaptures: scoringState.whiteCaptures,
         frozen: scoringState.frozen,
+        locked: scoringState.locked,
+        lockedSnapshot: scoringState.lockedSnapshot ? copySnapshotShape(scoringState.lockedSnapshot) : undefined,
         _scoringDirty: _scoringDirty,
         _scoringHasSaved: _scoringHasSaved
+    };
+}
+
+// Deep-copy one snapshot-shaped object (the locked-resolution commit point) so a persisted
+// session never shares mutable arrays with the live scoring state.
+function copySnapshotShape(snap) {
+    return {
+        board: snap.board.map(r => [...r]),
+        markedDead: snap.markedDead.map(r => [...r]),
+        deadStonesInfo: snap.deadStonesInfo.map(r => [...r]),
+        manualTerritory: snap.manualTerritory.map(r => [...r]),
+        bucketBlack: [...snap.bucketBlack],
+        bucketWhite: [...snap.bucketWhite],
+        rearrangeBlack: [...snap.rearrangeBlack],
+        rearrangeWhite: [...snap.rearrangeWhite],
+        deadWhite: [...snap.deadWhite],
+        deadBlack: [...snap.deadBlack],
+        blackCaptures: snap.blackCaptures,
+        whiteCaptures: snap.whiteCaptures,
+        ruleMode: snap.ruleMode
     };
 }
 
@@ -15514,6 +15685,7 @@ function setScoringFrozen(frozen) {
     scoringState.frozen = frozen;
     const overlay = document.getElementById('scoring-frozen-overlay');
     if (overlay) overlay.style.display = frozen ? 'block' : 'none';
+    if (typeof updateScoringUI === 'function') updateScoringUI();
 }
 
 function updateScoringSaveButton() {
@@ -15718,6 +15890,11 @@ function restoreScoringFromSavedData(data) {
     }
     scoringState.ruleMode = data.ruleMode || 'japanese';
     scoringState.interactionMode = data.interactionMode || 'mark';
+    // Lock state: restores the resolution commit + its snapshot from the saved session.
+    // Legacy sessions without these fields open unlocked (the user locks when ready).
+    scoringState.locked = !!(data.locked);
+    scoringState.lockedSnapshot = data.lockedSnapshot || null;
+    scoringState.pendingLockEdit = null;
     // Legacy sessions saved without a komi field fall back to the SGF's real komi (via the
     // SSOT resolver) — never a hardcoded default — so a KM[0] game stays 0 here too.
     scoringState.komi = data.komi != null ? data.komi : extractSgfKomi();
@@ -15775,6 +15952,46 @@ function updateScoringUI() {
         } else if (scoringState.interactionMode === 'mark-territory') {
             help.textContent = 'Click empty intersection to assign territory to a color. Click again to unassign.';
         }
+    }
+
+    // ── Lock / Unlock button + Interaction Mode gating ─────────────────────
+    // Replace & Re-arrange are counting-aid modes gated behind the resolution lock
+    // (Mark Dead Stones + Mark Territories committed). Disabled-and-visible with a hint.
+    const btnLock = document.getElementById('btn-scoring-lock');
+    if (btnLock) {
+        if (scoringState.frozen) {
+            btnLock.style.display = 'none';
+        } else {
+            btnLock.style.display = '';
+            if (scoringState.locked) {
+                btnLock.textContent = '🔓 Unlock Resolution';
+                btnLock.title = 'Unlock to edit dead stones & territory (resets the counting phase done after locking)';
+            } else {
+                btnLock.textContent = '🔒 Lock Dead Stones + Territory';
+                btnLock.title = 'Commit dead stones & territory, then Replacing / Re-arranging become available';
+            }
+        }
+    }
+
+    const elModeSelect = document.getElementById('scoring-interaction-mode');
+    if (elModeSelect) {
+        const gated = !scoringState.locked;
+        for (let i = 0; i < elModeSelect.options.length; i++) {
+            const opt = elModeSelect.options[i];
+            if (opt.value === 'replace' || opt.value === 'rearrange') {
+                opt.disabled = gated;
+            }
+        }
+        // If the current mode is a gated counting mode, fall back to the resolution stage.
+        if (gated && (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange')) {
+            scoringState.interactionMode = 'mark';
+        }
+        elModeSelect.value = scoringState.interactionMode;
+    }
+    const elLockHint = document.getElementById('scoring-lock-hint');
+    if (elLockHint) {
+        elLockHint.style.display = scoringState.locked ? 'none' : '';
+        elLockHint.textContent = '🔒 Lock dead stones & territory to enable Replacing / Re-arranging.';
     }
 
     // Buckets display total counts matching sum of Re-arrange + Dead + Cap
@@ -15875,7 +16092,14 @@ function computeSgfPropertyBars() {
  * Called from updateScoringUI() after every board change.
  */
 function updateSgfPropBarsUI() {
-    const props = computeSgfPropertyBars();
+    // When the resolution is LOCKED the bars freeze to the committed (locked) values: the
+    // counting phase (replace/re-arrange) is a display aid and must not move the committed
+    // DD/MA/TB/TW read-out. Unlocked, the bars follow the live session.
+    const session = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState;
+    const props = computeScoringPropsFromSession(session);
+
+    const lockBadge = document.getElementById('sgf-prop-lock-badge');
+    if (lockBadge) lockBadge.style.display = scoringState.locked ? '' : 'none';
 
     const renderBar = (countElId, listElId, points, totalPts, accentColor) => {
         const countEl = document.getElementById(countElId);
@@ -15960,6 +16184,22 @@ function handleScoringBoardClick(e) {
     const row = Math.round((clickY - PADDING) / CELL_SIZE);
 
     if (row < 0 || row >= 19 || col < 0 || col >= 19) return;
+
+    // Lock-break: editing a LOCKED resolution (Mark Dead Stones / Mark Territories) resets the
+    // counting phase done after the lock. Park the click, confirm, then replay it on the
+    // restored board. No-op clicks (empty spot in mark mode, occupied spot in territory mode)
+    // pass through without breaking the lock.
+    const modeNow = scoringState.interactionMode;
+    if (scoringState.locked && (modeNow === 'mark' || modeNow === 'mark-territory')) {
+        const wouldChange = modeNow === 'mark'
+            ? (scoringState.board[row][col] !== 0 || scoringState.markedDead[row][col])
+            : (scoringState.board[row][col] === 0);
+        if (wouldChange) {
+            scoringState.pendingLockEdit = { row, col, clickX, clickY };
+            showUnlockDialog();
+            return;
+        }
+    }
 
     if (scoringState.interactionMode === 'mark') {
         const val = scoringState.board[row][col];
@@ -16047,8 +16287,6 @@ function handleScoringBoardClick(e) {
         // stone was lifted, so the intersection reads as territory (the freed point) and a
         // prisoner of that territory's color may be placed on it. Only intersections whose
         // territory is NOT defined (dame) are prohibited below.
-        const wasDeadMarked = scoringState.markedDead[row][col];
-        const deadColorAtCell = scoringState.deadStonesInfo[row][col] || 0;
         const stonesWithDead = scoringState.board.map((r, ri) =>
             r.map((val, ci) => {
                 if (scoringState.markedDead[ri][ci] && val === 0) {
@@ -16086,34 +16324,11 @@ function handleScoringBoardClick(e) {
         if (terrColor === 2 && !(scoringState.deadWhite.length > 0 || (scoringState.blackCaptures || 0) > 0)) return;
         saveScoringStateForUndo();
         scoringState.board[row][col] = terrColor;
-        scoringState.markedDead[row][col] = false;
-        scoringState.deadStonesInfo[row][col] = null;
-        // The dead stone that WAS on this fill point stays a prisoner: its freed point was the
-        // territory now being filled, but a dead mark can no longer sit on an occupied cell.
-        // Relocate its accounting from the mark set to the capture counter (mark -> capture is
-        // a wash inside that side's prisoner total — the totals still drop by exactly 1 per
-        // player). This is the ONLY replace path that clears a dead mark: replacing into other
-        // territory points must never touch the marks, so the SGF Properties DD/MA counts stay
-        // intact while Replacing Dead Stones.
-        if (wasDeadMarked) {
-            if (deadColorAtCell === 1) {
-                scoringState.whiteCaptures = (scoringState.whiteCaptures || 0) + 1;
-                const dIdx = scoringState.deadBlack.indexOf('B');
-                if (dIdx !== -1) scoringState.deadBlack.splice(dIdx, 1);
-                const bIdx = scoringState.bucketWhite.indexOf('B');
-                if (bIdx !== -1) scoringState.bucketWhite.splice(bIdx, 1);
-            } else if (deadColorAtCell === 2) {
-                scoringState.blackCaptures = (scoringState.blackCaptures || 0) + 1;
-                const dIdx = scoringState.deadWhite.indexOf('W');
-                if (dIdx !== -1) scoringState.deadWhite.splice(dIdx, 1);
-                const bIdx = scoringState.bucketBlack.indexOf('W');
-                if (bIdx !== -1) scoringState.bucketBlack.splice(bIdx, 1);
-            }
-        }
-        // Consume the prisoner used for the fill. The dead mark itself is preserved — replacing
-        // dead stones must never reduce the SGF Properties DD/MA counts — so the prisoner term
-        // in the score drops by decrementing the capture counter (a dead stone still sits in the
-        // marks, so counting it via captures keeps the margin pinned at exactly −1 per fill).
+        // The dead mark on this fill point is PRESERVED — marks never clear. The dead X stays
+        // visible over the placed prisoner when "Show dead stones" is checked, and the SGF
+        // Properties DD/MA counts stay intact. The dead stone remains a prisoner via the mark
+        // (not the capture counter), so every fill still drops both players by exactly 1 and
+        // the margin stays pinned — including fills into formerly dead-marked cells.
         if (terrColor === 1) {
             if (scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
@@ -16136,7 +16351,8 @@ function handleScoringBoardClick(e) {
         if (currentVal === 1) {
             saveScoringStateForUndo();
             scoringState.board[row][col] = 0;
-            scoringState.markedDead[row][col] = false;
+            // Dead marks NEVER clear on a re-arrange pickup — marks are the immutable
+            // resolution, so the dead X stays over the now-empty point.
             scoringState.rearrangeBlack.push('B');
             scoringState.bucketBlack.push('B');
             updateScoringUI();
@@ -16144,7 +16360,6 @@ function handleScoringBoardClick(e) {
         } else if (currentVal === 2) {
             saveScoringStateForUndo();
             scoringState.board[row][col] = 0;
-            scoringState.markedDead[row][col] = false;
             scoringState.rearrangeWhite.push('W');
             scoringState.bucketWhite.push('W');
             updateScoringUI();
@@ -16175,8 +16390,6 @@ function handleScoringBoardClick(e) {
             if (bPrim > 0 && wPrim === 0) {
                 saveScoringStateForUndo();
                 scoringState.board[row][col] = 1;
-                scoringState.markedDead[row][col] = false;
-                scoringState.deadStonesInfo[row][col] = null;
                 scoringState.rearrangeBlack.pop();
                 scoringState.bucketBlack.pop();
                 updateScoringUI(); drawBoard(); return;
@@ -16184,8 +16397,6 @@ function handleScoringBoardClick(e) {
             if (wPrim > 0 && bPrim === 0) {
                 saveScoringStateForUndo();
                 scoringState.board[row][col] = 2;
-                scoringState.markedDead[row][col] = false;
-                scoringState.deadStonesInfo[row][col] = null;
                 scoringState.rearrangeWhite.pop();
                 scoringState.bucketWhite.pop();
                 updateScoringUI(); drawBoard(); return;
@@ -16510,6 +16721,10 @@ function renderScoringBoardToCtx(ctx) {
         if (locScores) {
             for (let y = 0; y < 19; y++) {
                 for (let x = 0; x < 19; x++) {
+                    // Occupied cells are stones, never territory (see countTerritoryFromScores):
+                    // a replace fill over a kept dead-X mark stays transparent to GoScorer, so
+                    // guard on the live board or the summary would count the point as territory.
+                    if (scoringState.board[y][x] !== 0) continue;
                     // Manual territory overrides GoScorer
                     if (scoringState.manualTerritory[y][x] > 0) {
                         if (scoringState.manualTerritory[y][x] === 1) bTerr++;
@@ -16524,6 +16739,7 @@ function renderScoringBoardToCtx(ctx) {
             // Fallback: count manual territory even without GoScorer
             for (let y = 0; y < 19; y++) {
                 for (let x = 0; x < 19; x++) {
+                    if (scoringState.board[y][x] !== 0) continue;
                     if (scoringState.manualTerritory[y][x] === 1) bTerr++;
                     else if (scoringState.manualTerritory[y][x] === 2) wTerr++;
                 }
