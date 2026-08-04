@@ -11198,7 +11198,12 @@ function goToMove(index) {
                 `;
                 const openScoringBtn = document.getElementById('btn-open-manual-scoring');
                 if (openScoringBtn) {
-                    openScoringBtn.addEventListener('click', () => {
+                    openScoringBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        // Behave exactly like the "See Scoring" button: close the Estimation
+                        // panel (same as pressing ⌘⇧E, i.e. a second runScoreEstimate() toggle)
+                        // and THEN open the Manual Scoring Modal.
+                        if (typeof window.runScoreEstimate === 'function') window.runScoreEstimate();
                         if (typeof window.openScoringModal === 'function') window.openScoringModal();
                     });
                 }
