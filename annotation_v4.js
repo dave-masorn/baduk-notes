@@ -10287,7 +10287,8 @@ function computeScoringPropsFromSession(session) {
     // Territory is derived from the session's CURRENT board: the blue-panel Run score, the
     // saved DD/MA/TB/TW and the modal's result badge must all reflect the exact board the
     // user last edited (re-arranged/replaced stones included). baseBoard is deliberately NOT
-    // read here — it is only the untouched-position seed seedAutoDeadMarks uses on first entry.
+    // read here — it is only the untouched-position reference for the original loaded board
+    // (the dead-stone heuristic that once read it has been removed).
     const boardData = (session.board && session.board.length) ? session.board : [];
     const markedDead = session.markedDead || null;
     const deadInfo = session.deadStonesInfo || null;
@@ -11090,16 +11091,17 @@ function goToMove(index) {
         // DD/MA/TB/TW comes from. The decision keys on whether the SGF FILE itself declares the
         // markup (findEndgameMarkup(false) — pure SGF sources only, session fallback skipped),
         // NOT on provenance: a Manual Scoring session on a record whose SGF carries DD/MA/TB/TW
-        // is still SGF-driven (the modal seeds from that markup), so it must read yellow "(SGF)"
-        // rather than red — the red "auto-seeded" label is reserved for resolutions that only
-        // exist because of the dead-stone heuristic, with no markup anywhere in the SGF.
+        // is still SGF-driven (the modal seeds from that markup), so it must read yellow "(SGF)".
+        // Dead-stone auto-seeding has been removed, so a session-only resolution on a markup-less
+        // file is by definition the user's own manual marks; it is labeled red to flag that the
+        // resolution is not backed by the file's recorded markup.
         const scoringSourceNote = (snap) => {
             const sgfHasMarkup = !!(typeof findEndgameMarkup === 'function' && findEndgameMarkup(false));
             if (snap && snap.hasMarkup && sgfHasMarkup) {
                 return { text: 'Deterministic JTS from DD/MA/TB/TW endgame markup (SGF).', color: '#facc15' };
             }
             if (snap && snap.provenance === 'Manual Scoring session') {
-                return { text: 'Deterministic JTS from "auto-seeded" endgame markup.', color: '#ef4444' };
+                return { text: 'Deterministic JTS from manual dead-stone marks (marked in Manual Scoring).', color: '#ef4444' };
             }
             return { text: 'Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.', color: '#cbd5e1' };
         };
@@ -15160,7 +15162,7 @@ function resetScoringBoardFromState(options) {
     // pristine = the "Reset Board" action: rebuild the untouched SGF terminal EXACTLY like
     // opening the same file on goscorer's test page — every stone present, no dead/territory
     // marks, only the game's own in-game captures and komi. Non-pristine (first modal open)
-    // keeps the original auto-seed-from-markup behavior.
+    // keeps the record's own markup as the dead-stone seed (never a heuristic).
     const pristine = !!(options && options.pristine);
     scoringState.board = Array.from({length: 19}, () => Array.from({length: 19}, () => 0));
     scoringState.markedDead = Array.from({length: 19}, () => Array.from({length: 19}, () => false));
@@ -15204,10 +15206,12 @@ function resetScoringBoardFromState(options) {
         }
     }
 
-    // Untouched-position snapshot: the ONLY remaining reader is seedAutoDeadMarks, which
-    // auto-detects dead stones from the game's original position on first entry. It is not
-    // read for territory, captures, or the result — those come from the live display board
-    // (scoringState.board) so re-arrange/replace edits move the score everywhere consistently.
+    // Untouched-position snapshot: kept as the reference for the original loaded board and for
+    // legacy-session parity. It is NOT read for territory, captures, or the result — those come
+    // from the live display board (scoringState.board) so re-arrange/replace edits move the
+    // score everywhere consistently. The dead-stone heuristic that once read this snapshot on
+    // first entry has been removed: no auto-seeding — dead stones are only ever the record's
+    // own markup or the user's manual marks.
     scoringState.baseBoard = scoringState.board.map(r => [...r]);
 
     // 1. Captured stones extraction — pristine reset takes the SGF replay's own in-game
@@ -15322,13 +15326,11 @@ function resetScoringBoardFromState(options) {
         applyTerritory(markupMove.TW, 2);
     }
 
-    // First entry per game: when the loaded record carries no endgame markup, seed the modal
-    // from the goscorer (Sabaki) dead-stone heuristic so auto-marked dead stones and their
-    // auto-derived territory are shown and counted EXACTLY like manual marks (one combined
-    // set for computing). Never run for a pristine Reset.
-    if (!markupMove && !pristine) {
-        seedAutoDeadMarks(scoringState);
-    }
+    // Dead-stone seeding policy — always, by default: when the loaded record carries no endgame
+    // markup (DD/MA/TB/TW), the modal opens with ZERO auto-marked dead stones — the board shows
+    // exactly the position as played. Only territory is allowed to auto-derive (GoScorer derives
+    // it from whatever dead marks exist). Dead stones are recorded exclusively from the user's
+    // manual marks when they hit Save (which writes DD/MA/TB/TW + the session snapshot).
 
     // Keep the canonical window reference in sync: the modal draws from window.scoringState,
     // and every mutation targets the same object in production (harmless no-op there), while
@@ -15338,51 +15340,6 @@ function resetScoringBoardFromState(options) {
     updateScoringSaveButton();
     updateScoringUI();
     drawBoard();
-}
-
-// Seed the scoring session from the goscorer (Sabaki) dead-stone heuristic on the FIRST
-// entry per game, when no endgame markup resolved. Auto-detected dead stones are folded
-// into the same markedDead / deadStonesInfo / dead-bucket structures as manual marks, so
-// the modal treats the algorithm's output and the user's clicks as ONE combined set for
-// computing. Territory is auto-derived by drawBoard from the same marks, so both are shown.
-function seedAutoDeadMarks(ss) {
-    const base = ss.baseBoard || ss.board;
-    if (!base || typeof window.BoardEstimate === 'undefined' ||
-        typeof window.BoardEstimate.detectDeadStonesHeuristic !== 'function') {
-        return false;
-    }
-    let marked = false;
-    try {
-        const signData = base.map(row => row.map(v => v === 1 ? 1 : (v === 2 ? -1 : 0)));
-        const deadMap = window.BoardEstimate.detectDeadStonesHeuristic(signData);
-        for (let r = 0; r < 19; r++) {
-            for (let c = 0; c < 19; c++) {
-                if (deadMap && deadMap[r] && deadMap[r][c] && base[r][c] !== 0 && !ss.markedDead[r][c]) {
-                    const v = base[r][c];
-                    ss.markedDead[r][c] = true;
-                    ss.deadStonesInfo[r][c] = v;
-                    // Lift the stone off the display board, exactly like a manually clicked
-                    // dead mark: the X renders on the empty intersection, the stone sits only
-                    // in its bucket, and Replace/Re-arrange never see the same stone twice
-                    // (once on the board, once in the bucket). baseBoard keeps the canonical
-                    // untouched position for the final result.
-                    if (ss.board && ss.board[r] && ss.board[r][c] !== undefined) ss.board[r][c] = 0;
-                    if (v === 1) {
-                        ss.deadBlack.push('B');
-                        ss.bucketWhite.push('B');
-                    } else if (v === 2) {
-                        ss.deadWhite.push('W');
-                        ss.bucketBlack.push('W');
-                    }
-                    marked = true;
-                }
-            }
-        }
-    } catch (e) {
-        console.error("Auto mark dead error:", e);
-        return false;
-    }
-    return marked;
 }
 
 // Number of stones of the given color currently marked dead (1 = Black, 2 = White).
@@ -15788,9 +15745,10 @@ function restoreScoringFromSavedData(data) {
     if (elKomiInput) elKomiInput.value = scoringState.komi;
     scoringState.blackCaptures = data.blackCaptures || 0;
     scoringState.whiteCaptures = data.whiteCaptures || 0;
-    // Untouched-position snapshot for seedAutoDeadMarks (first-entry auto-detect). The score,
-    // saved markup and blue-panel Run all read the live display board + live captures, so
-    // legacy sessions simply carry no baseBoard without any behavior change.
+    // Untouched-position snapshot for parity with the original loaded board (the dead-stone
+    // heuristic that once read it on first entry is removed). The score, saved markup and
+    // blue-panel Run all read the live display board + live captures, so legacy sessions
+    // simply carry no baseBoard without any behavior change.
     scoringState.baseBoard = data.baseBoard ? data.baseBoard.map(r => [...r]) : null;
     scoringState.baseCaptures = data.baseCaptures
         ? { B: data.baseCaptures.B, W: data.baseCaptures.W }
@@ -16667,7 +16625,8 @@ function renderScoringBoardToCtx(ctx) {
     // dead stones legitimately moves the result — that is the point of editing the board, and
     // every saved consumer (rec.scoringData, the blue panel Run, exported DD/MA/TB/TW) reads
     // the same live session. baseBoard/baseCaptures are kept only as the untouched-position
-    // seed that seedAutoDeadMarks reads on first entry; they no longer drive the score.
+    // reference for the original loaded board (the dead-stone heuristic that once read them
+    // on first entry is removed); they no longer drive the score.
     let fBTotal, fWTotal;
     const finalBoard = scoringState.board;
     let finalLocScores = null;
