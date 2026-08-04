@@ -14990,7 +14990,7 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadBlack.pop();
                         scoringState.bucketWhite.pop();
-                        consumeDeadMarkFromState(scoringState, 1);
+                        scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
                     } else if (src.type === 'cap') {
                         scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
                     }
@@ -15001,7 +15001,7 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadWhite.pop();
                         scoringState.bucketBlack.pop();
-                        consumeDeadMarkFromState(scoringState, 2);
+                        scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     } else if (src.type === 'cap') {
                         scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     }
@@ -15043,7 +15043,7 @@ function initScoringModal() {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
-                consumeDeadMarkFromState(scoringState, 1);
+                scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             } else if (mode === 'replace' && (scoringState.whiteCaptures || 0) > 0) {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             } else if (scoringState.rearrangeBlack.length > 0) {
@@ -15066,7 +15066,7 @@ function initScoringModal() {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
-                consumeDeadMarkFromState(scoringState, 2);
+                scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             } else if (mode === 'replace' && (scoringState.blackCaptures || 0) > 0) {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             } else if (scoringState.rearrangeWhite.length > 0) {
@@ -15362,33 +15362,6 @@ function countMarkedDeadStones(ss, colorVal) {
     return n;
 }
 
-// Consume ONE dead stone of the given color from the true mark set: clear its
-// markedDead/deadStonesInfo entry (its lifted cell stays empty, so the freed point
-// remains territory). This is the counterpart of popping the dead-color bucket during
-// "Replacing Dead Stones": the bucket is only a counter, while the formulas read the
-// MARKS — a pop without this clearing made the dead term stay put, so a prisoner fill
-// dropped only the filler's territory and the final margin drifted by 1 per replace.
-// The last mark in traversal is cleared to pair with the bucket's LIFO pop. Returns
-// true when a mark was cleared (callers fall back to consuming a capture otherwise).
-function consumeDeadMarkFromState(ss, colorVal) {
-    const md = ss.markedDead;
-    const info = ss.deadStonesInfo;
-    if (!md || !info) return false;
-    for (let r = 18; r >= 0; r--) {
-        const mdRow = md[r];
-        const infoRow = info[r];
-        if (!mdRow || !infoRow) continue;
-        for (let c = 18; c >= 0; c--) {
-            if (mdRow[c] && infoRow[c] === colorVal) {
-                mdRow[c] = false;
-                infoRow[c] = null;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 // Count territory/area cells for a given GoScorer score grid, with explicit manualTerritory
 // marks always overriding the algorithm. Works for both Japanese (locScores[..].isTerritoryFor)
 // and Chinese (areaScores[..] = color) rule modes; when GoScorer is unavailable it falls back
@@ -15444,6 +15417,13 @@ function openScoringModal(savedData) {
     const elWRank = document.getElementById('scoring-white-rank');
     if (elBRank) elBRank.textContent = state.sgfMetadata.br || '-';
     if (elWRank) elWRank.textContent = state.sgfMetadata.wr || '-';
+
+    // Result read-out: derived from the SGF's RE value; 'n/a' when the record defines none.
+    const elResultDefaultTag = document.getElementById('scoring-result-default-tag');
+    if (elResultDefaultTag) {
+        const reVal = (state.sgfMetadata && state.sgfMetadata.re) || (state.gameInfo && (state.gameInfo.re || state.gameInfo.RE)) || '';
+        elResultDefaultTag.textContent = `${reVal.trim() || 'n/a'} (default)`;
+    }
 
     if (savedData) {
         restoreScoringFromSavedData(savedData);
@@ -16111,8 +16091,10 @@ function handleScoringBoardClick(e) {
         // The dead stone that WAS on this fill point stays a prisoner: its freed point was the
         // territory now being filled, but a dead mark can no longer sit on an occupied cell.
         // Relocate its accounting from the mark set to the capture counter (mark -> capture is
-        // a wash inside that side's prisoner total), exactly mirroring a prisoner consumed from
-        // any other territory point — the totals still drop by exactly 1 per player.
+        // a wash inside that side's prisoner total — the totals still drop by exactly 1 per
+        // player). This is the ONLY replace path that clears a dead mark: replacing into other
+        // territory points must never touch the marks, so the SGF Properties DD/MA counts stay
+        // intact while Replacing Dead Stones.
         if (wasDeadMarked) {
             if (deadColorAtCell === 1) {
                 scoringState.whiteCaptures = (scoringState.whiteCaptures || 0) + 1;
@@ -16128,26 +16110,24 @@ function handleScoringBoardClick(e) {
                 if (bIdx !== -1) scoringState.bucketBlack.splice(bIdx, 1);
             }
         }
-        // Consume the prisoner used for the fill (a dead stone of the territory's color when
-        // available — clearing one matching dead mark — otherwise a capture).
+        // Consume the prisoner used for the fill. The dead mark itself is preserved — replacing
+        // dead stones must never reduce the SGF Properties DD/MA counts — so the prisoner term
+        // in the score drops by decrementing the capture counter (a dead stone still sits in the
+        // marks, so counting it via captures keeps the margin pinned at exactly −1 per fill).
         if (terrColor === 1) {
             if (scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
-                consumeDeadMarkFromState(scoringState, 1);
-            } else {
-                scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             }
+            scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
         } else {
             if (scoringState.deadWhite.length > 0) {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
-                consumeDeadMarkFromState(scoringState, 2);
-            } else {
-                scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             }
+            scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
         }
         updateScoringUI();
         drawBoard();
