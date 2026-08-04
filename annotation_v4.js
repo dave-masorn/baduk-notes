@@ -11086,6 +11086,22 @@ function goToMove(index) {
         // the user to resolve dead stones in the Manual Scoring Modal before computing.
         const atFinalMove = state.currentMoveIndex === (state.sgfMoves ? state.sgfMoves.length - 1 : -1);
 
+        // Source-aware subtitle under the Run control: call out whether the deterministic JTS
+        // will compute from DD/MA/TB/TW markup inside the SGF (yellow) or from the Manual
+        // Scoring session's auto-seeded dead-stone heuristic (red), so the auto-seeded state is
+        // never silently presented as if the SGF itself declared the endgame markup.
+        const scoringSourceNote = (snap) => {
+            const src = snap && snap.provenance;
+            if (src === 'Manual Scoring session') {
+                return { text: 'Deterministic JTS from "auto-seeded" endgame markup.', color: '#ef4444' };
+            }
+            if (src === 'SGF endgame markup (DD/MA/TB/TW)') {
+                return { text: 'Deterministic JTS from DD/MA/TB/TW endgame markup (SGF).', color: '#facc15' };
+            }
+            return { text: 'Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.', color: '#cbd5e1' };
+        };
+        const sourceNote = scoringSourceNote(resolveScoringInputs());
+
         panel.innerHTML += `
             <div id="computational-estimate-card" style="margin-top: 14px; background: linear-gradient(135deg, #090e52 0%, #0c1468 100%); border-radius: 12px; padding: 16px 20px; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);">
                 <div style="font-weight: 700; font-size: 1.1rem; text-align: center; margin-bottom: 12px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);">
@@ -11094,7 +11110,7 @@ function goToMove(index) {
                 ${atFinalMove ? `
                     <div style="text-align: center;">
                         <button id="btn-run-computational-method" type="button" style="padding: 9px 20px; border-radius: 8px; font-weight: 700; font-size: 0.9rem; cursor: pointer; background: #10b981; color: #ffffff; border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 2px 10px rgba(16, 185, 129, 0.4); font-family: inherit;">Run / Compute &gt;</button>
-                        <div style="color: #cbd5e1; font-size: 0.75rem; margin-top: 8px;">Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.</div>
+                        <div id="scoring-source-note" style="color: ${sourceNote.color}; font-size: 0.75rem; margin-top: 8px;">${sourceNote.text}</div>
                     </div>
                     <div id="computational-method-result" style="margin-top: 12px;"></div>
                 ` : `
@@ -11122,6 +11138,16 @@ function goToMove(index) {
             // score. Both sources feed the identical scorer inputs, so the blue panel always
             // matches the Scoring Modal for a saved session.
             const snapshot = resolveScoringInputs();
+
+            // Keep the source subtitle honest: the panel may have been built before a scoring
+            // session existed, so refresh it from the snapshot actually used by this Run.
+            const noteEl = document.getElementById('scoring-source-note');
+            if (noteEl) {
+                const note = scoringSourceNote(snapshot);
+                noteEl.textContent = note.text;
+                noteEl.style.color = note.color;
+            }
+
             const markupMove = snapshot.markupMove;
             const compBoard = snapshot.board;
             const compCaptures = snapshot.captures;
