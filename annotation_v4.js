@@ -11086,17 +11086,20 @@ function goToMove(index) {
         // the user to resolve dead stones in the Manual Scoring Modal before computing.
         const atFinalMove = state.currentMoveIndex === (state.sgfMoves ? state.sgfMoves.length - 1 : -1);
 
-        // Source-aware subtitle under the Run control: call out whether the deterministic JTS
-        // will compute from DD/MA/TB/TW markup inside the SGF (yellow) or from the Manual
-        // Scoring session's auto-seeded dead-stone heuristic (red), so the auto-seeded state is
-        // never silently presented as if the SGF itself declared the endgame markup.
+        // Source-aware subtitle under the Run control: call out where the deterministic JTS's
+        // DD/MA/TB/TW comes from. The decision keys on whether the SGF FILE itself declares the
+        // markup (findEndgameMarkup(false) — pure SGF sources only, session fallback skipped),
+        // NOT on provenance: a Manual Scoring session on a record whose SGF carries DD/MA/TB/TW
+        // is still SGF-driven (the modal seeds from that markup), so it must read yellow "(SGF)"
+        // rather than red — the red "auto-seeded" label is reserved for resolutions that only
+        // exist because of the dead-stone heuristic, with no markup anywhere in the SGF.
         const scoringSourceNote = (snap) => {
-            const src = snap && snap.provenance;
-            if (src === 'Manual Scoring session') {
-                return { text: 'Deterministic JTS from "auto-seeded" endgame markup.', color: '#ef4444' };
-            }
-            if (src === 'SGF endgame markup (DD/MA/TB/TW)') {
+            const sgfHasMarkup = !!(typeof findEndgameMarkup === 'function' && findEndgameMarkup(false));
+            if (snap && snap.hasMarkup && sgfHasMarkup) {
                 return { text: 'Deterministic JTS from DD/MA/TB/TW endgame markup (SGF).', color: '#facc15' };
+            }
+            if (snap && snap.provenance === 'Manual Scoring session') {
+                return { text: 'Deterministic JTS from "auto-seeded" endgame markup.', color: '#ef4444' };
             }
             return { text: 'Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.', color: '#cbd5e1' };
         };
