@@ -11281,9 +11281,11 @@ function goToMove(index) {
         if (runBtn) {
             runBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                // After the first Run, the button morphs into "See Scoring" (opens the
-                // Manual Scoring Modal, same as the ⚑ Endgame Scoring shortcut).
+                // After the first Run, the button morphs into "See Scoring": clicking it
+                // closes the Estimation panel (same as pressing ⌘⇧E, i.e. a second
+                // runScoreEstimate() toggle) and THEN opens the Manual Scoring Modal.
                 if (runBtnClicked) {
+                    if (typeof window.runScoreEstimate === 'function') window.runScoreEstimate();
                     if (typeof window.openScoringModal === 'function') window.openScoringModal();
                     return;
                 }
