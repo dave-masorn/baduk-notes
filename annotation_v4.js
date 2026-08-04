@@ -11277,10 +11277,20 @@ function goToMove(index) {
             }
         };
 
+        let runBtnClicked = false;
         if (runBtn) {
             runBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                // After the first Run, the button morphs into "See Scoring" (opens the
+                // Manual Scoring Modal, same as the ⚑ Endgame Scoring shortcut).
+                if (runBtnClicked) {
+                    if (typeof window.openScoringModal === 'function') window.openScoringModal();
+                    return;
+                }
+                runBtnClicked = true;
                 runComputationalMethod();
+                runBtn.textContent = 'See Scoring';
+                runBtn.title = 'Open the Manual Scoring Modal (same as ⚑ Endgame Scoring)';
             });
         }
 
