@@ -12089,6 +12089,16 @@ function loadSGF(sgfString) {
         vw: rootProps.VW ? rootProps.VW.slice() : null
     };
     _scoringPersistData = null;
+    // A freshly loaded game has no Save Board playground to restore and no committed resolution:
+    // drop the lock state so the reopened modal starts unlocked. The study-resume path re-applies
+    // its persisted session through restoreScoringFromSavedData after this, so nothing is lost.
+    _savedBoardSnapshot = null;
+    scoringState.locked = false;
+    scoringState.lockedSnapshot = null;
+    scoringState.lockBoundaryIndex = 0;
+    scoringState.frozen = false;
+    _scoringDirty = false;
+    _scoringHasSaved = false;
 
     if (state.sgfMetadata.ev.startsWith('"') && state.sgfMetadata.ev.endsWith('"')) {
         state.sgfMetadata.ev = state.sgfMetadata.ev.substring(1, state.sgfMetadata.ev.length - 1);
@@ -14789,6 +14799,69 @@ function buildLockedSnapshot() {
     return { ...getScoringSnapshot(), ruleMode: scoringState.ruleMode, komi: scoringState.komi };
 }
 
+// Capture the LIVE board state — the post-lock "playground" (replaces/re-arranges + the
+// dead/cap/re-arrange bucket stacks + capture counters) — for an explicit Save Board. This is
+// a display-layer snapshot kept in memory only: the frozen score and SGF Properties keep
+// reading the committed lockedSnapshot, and nothing here is baked into the SGF.
+function captureLiveBoardSnapshot() {
+    return {
+        board: scoringState.board.map(r => [...r]),
+        deadWhite: [...scoringState.deadWhite],
+        deadBlack: [...scoringState.deadBlack],
+        rearrangeBlack: [...scoringState.rearrangeBlack],
+        rearrangeWhite: [...scoringState.rearrangeWhite],
+        blackCaptures: scoringState.blackCaptures || 0,
+        whiteCaptures: scoringState.whiteCaptures || 0
+    };
+}
+
+// Write the COMMITTED DD/MA/TB/TW resolution into the terminal SGF node. Called by Lock Score
+// (step 1 of the two-step Save). The props come from computeSgfPropertyBars(), which reads the
+// lockedSnapshot while locked, so the playground board is never baked into the SGF. Also
+// refreshes rec.workingSgf so downloaded files carry the resolution.
+function writeScoringPropsToSgf() {
+    const sgfProps = computeSgfPropertyBars();
+    const moveCount = state.sgfMoves ? state.sgfMoves.length : 0;
+    if (moveCount > 0 && sgfProps) {
+        const lastMove = state.sgfMoves[moveCount - 1];
+        if (lastMove) {
+            if (!lastMove.unknownProps) lastMove.unknownProps = {};
+            // Overwrite any prior scoring properties on this node; mirror the four properties
+            // onto the terminal move's DIRECT fields (same shape as loadSGF) so the Estimation
+            // modal Run gate finds the markup immediately, with no reload needed.
+            const assign = (key, arr) => {
+                if (arr && arr.length > 0) {
+                    lastMove.unknownProps[key] = arr.slice();
+                    lastMove[key] = arr.slice();
+                } else {
+                    delete lastMove.unknownProps[key];
+                    delete lastMove[key];
+                }
+            };
+            assign('DD', sgfProps.dd);
+            assign('MA', sgfProps.ma);
+            assign('TB', sgfProps.tb);
+            assign('TW', sgfProps.tw);
+            // Mark SGF as dirty so next export includes these properties
+            state.isSgfDirty = true;
+        }
+    }
+
+    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec) {
+            if (typeof generateCurrentSgfString === 'function') {
+                rec.workingSgf = generateCurrentSgfString();
+            }
+            StudyRecordDB.saveRecord(rec);
+        }
+    }
+
+    // Show "saved" badge on SGF property bars panel (the resolution is now committed).
+    const badge = document.getElementById('sgf-prop-bars-save-badge');
+    if (badge) badge.style.display = '';
+}
+
 function applyScoringLock() {
     if (scoringState.frozen || scoringState.locked) return;
     scoringState.lockedSnapshot = buildLockedSnapshot();
@@ -14800,8 +14873,11 @@ function applyScoringLock() {
     // post-lock work and stops at the boundary.
     scoringState.lockBoundaryIndex = scoringHistory.length;
     scoringFuture = [];
+    // Step 1 of the two-step Save: Lock Score commits the resolution to the SGF.
+    writeScoringPropsToSgf();
     updateUndoRedoButtonsUI();
     updateScoringUI();
+    updateScoringSaveButton();
     drawBoard();
 }
 
@@ -14835,6 +14911,8 @@ function applyUnlockReset() {
     scoringState.locked = false;
     scoringState.lockedSnapshot = null;
     scoringState.lockBoundaryIndex = 0;
+    // The saved Board playground no longer matches the restored pre-Lock board — invalidate it.
+    _savedBoardSnapshot = null;
     if (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange') {
         scoringState.interactionMode = 'mark';
         const elModeSelect = document.getElementById('scoring-interaction-mode');
@@ -14844,6 +14922,7 @@ function applyUnlockReset() {
     scoringFuture = [];
     updateUndoRedoButtonsUI();
     updateScoringUI();
+    updateScoringSaveButton();
     drawBoard();
 }
 
@@ -14868,9 +14947,9 @@ function showUnlockDialog() {
     const msg = document.getElementById('scoring-unlock-confirm-msg');
     if (msg) {
         if (counts.total === 0) {
-            msg.textContent = 'Unlock dead stones & territory? No counting changes were made after locking.';
+            msg.textContent = 'Unlock Score? No counting changes were made after locking.';
         } else {
-            msg.textContent = `Unlock to edit dead stones & territory? This resets the counting phase after the lock: `
+            msg.textContent = `Unlock Score? This returns to the pre-Lock stage and discards the counting phase after the lock: `
                 + `${counts.placed} stone(s) placed, ${counts.removed} stone(s) removed, `
                 + `${counts.caps} capture adjustment(s), ${counts.terr} territory change(s). `
                 + `The locked marks & territory are kept.`;
@@ -15036,8 +15115,8 @@ function initScoringModal() {
                 const msg = document.getElementById('scoring-reset-confirm-msg');
                 if (msg) {
                     msg.textContent = scoringState.locked
-                        ? 'Are you sure you want to reset to the locked dead-stones & territory resolution? Post-lock counting edits will be discarded.'
-                        : 'Are you sure you want to reset the board back to the initial state of the last game move?';
+                        ? 'Reset Board? Return to the locked dead-stones & territory resolution — the locked Score is kept, post-lock counting edits are discarded.'
+                        : 'Reset Score? Clear all marked dead stones & territory — the board returns to the initial state of the last game move.';
                 }
                 dialogReset.style.display = 'flex';
             } else {
@@ -15063,7 +15142,7 @@ function initScoringModal() {
 
     const btnSaveScoring = document.getElementById('btn-scoring-save');
     if (btnSaveScoring) {
-        btnSaveScoring.addEventListener('click', saveScoringResult);
+        btnSaveScoring.addEventListener('click', saveScoringBoard);
     }
 
     // ── Lock / Unlock resolution (prerequisite-stage commit) ──────────────
@@ -15321,6 +15400,9 @@ function initScoringModal() {
 }
 
 function resetScoringBoardFromState(options) {
+    // Any reset discards the Save Board playground: the board no longer matches the captured
+    // post-lock fills, and the persisted snapshot must not keep a stale savedBoard.
+    _savedBoardSnapshot = null;
     // pristine = the "Reset Board" action: rebuild the untouched SGF terminal EXACTLY like
     // opening the same file on goscorer's test page — every stone present, no dead/territory
     // marks, only the game's own in-game captures and komi. Non-pristine (first modal open)
@@ -15336,6 +15418,7 @@ function resetScoringBoardFromState(options) {
         scoringHistory = scoringHistory.slice(0, boundary);
         scoringFuture = [];
         updateUndoRedoButtonsUI();
+        persistScoringSessionData();
         return;
     }
     scoringState.board = Array.from({length: 19}, () => Array.from({length: 19}, () => 0));
@@ -15524,9 +15607,27 @@ function resetScoringBoardFromState(options) {
         scoringState.lockedSnapshot = null;
     }
 
+    // User-initiated resets (pristine) drop the resolution from the persisted record too, so a
+    // reopened modal never resurrects the Reset Board / Reset Score state the user just cleared.
+    if (pristine) persistScoringSessionData();
+
     updateScoringSaveButton();
     updateScoringUI();
     drawBoard();
+}
+
+// Persist the current session to in-page memory AND the study record, so a reset that clears
+// the savedBoard playground (and/or the resolution) is durable across modal closes and page
+// reloads. Mirrors the shape buildScoringSessionSnapshot produces for Save Board.
+function persistScoringSessionData() {
+    _scoringPersistData = buildScoringSessionSnapshot();
+    if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec) {
+            rec.scoringData = buildScoringSessionSnapshot();
+            StudyRecordDB.saveRecord(rec);
+        }
+    }
 }
 
 // Number of stones of the given color currently marked dead (1 = Black, 2 = White).
@@ -15676,6 +15777,18 @@ function buildScoringSessionSnapshot() {
     const src = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState;
     return {
         board: src.board.map(r => [...r]),
+        // The post-lock "playground" board captured by Save Board (step 2). Kept in memory only:
+        // it is NOT the source of the frozen score, SGF Properties, or Run — those read
+        // src/lockedSnapshot. On reopen it decides exactly what the modal displays.
+        savedBoard: _savedBoardSnapshot ? {
+            board: _savedBoardSnapshot.board.map(r => [...r]),
+            deadWhite: [..._savedBoardSnapshot.deadWhite],
+            deadBlack: [..._savedBoardSnapshot.deadBlack],
+            rearrangeBlack: [..._savedBoardSnapshot.rearrangeBlack],
+            rearrangeWhite: [..._savedBoardSnapshot.rearrangeWhite],
+            blackCaptures: _savedBoardSnapshot.blackCaptures,
+            whiteCaptures: _savedBoardSnapshot.whiteCaptures
+        } : undefined,
         baseBoard: scoringState.baseBoard ? scoringState.baseBoard.map(r => [...r]) : undefined,
         baseCaptures: scoringState.baseCaptures ? { B: scoringState.baseCaptures.B, W: scoringState.baseCaptures.W } : undefined,
         markedDead: src.markedDead.map(r => [...r]),
@@ -15747,14 +15860,15 @@ function updateScoringSaveButton() {
     const editBtn = document.getElementById('btn-scoring-edit');
     if (!btn) return;
 
+    // FROZEN (post "Save Board"): the board is committed to memory — show the saved badge.
     if (scoringState.frozen) {
         btn.disabled = false;
         btn.style.cursor = 'pointer';
-        btn.textContent = '✓ Saved';
+        btn.textContent = 'Board Saved ✓';
         btn.style.background = 'rgba(16, 185, 129, 0.5)';
         btn.style.color = '#6ee7b7';
         btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
-        btn.title = 'Scoring board saved';
+        btn.title = 'Scoring board saved — click to save again';
         if (editBtn) {
             editBtn.style.display = '';
             editBtn.style.background = 'rgba(107, 114, 128, 0.2)';
@@ -15766,24 +15880,27 @@ function updateScoringSaveButton() {
         return;
     }
 
-    if (!_scoringDirty && !_scoringHasSaved) {
+    // PRE-D&T (unlocked): the two-step Save is gated behind Lock Score — grayed out.
+    if (!scoringState.locked) {
         btn.disabled = true;
         btn.style.cursor = 'not-allowed';
-        btn.textContent = 'Nothing Changed';
+        btn.textContent = 'Save Board';
         btn.style.background = 'rgba(107, 114, 128, 0.2)';
         btn.style.color = '#9ca3af';
         btn.style.borderColor = 'rgba(107, 114, 128, 0.3)';
-        btn.title = 'Make a change to the board first';
+        btn.title = 'Lock the Score first to enable Save Board';
         if (editBtn) editBtn.style.display = 'none';
         return;
     }
+
+    // POST-D&T (locked): Save Board captures the board state to memory.
     btn.disabled = false;
     btn.style.cursor = 'pointer';
-    btn.textContent = 'Save Scoring';
-    btn.style.background = 'rgba(239, 68, 68, 0.2)';
-    btn.style.color = '#fca5a5';
-    btn.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-    btn.title = 'Save scoring to study record';
+    btn.textContent = 'Save Board';
+    btn.style.background = 'rgba(16, 185, 129, 0.25)';
+    btn.style.color = '#34d399';
+    btn.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+    btn.title = 'Save the board state to memory (the resolution is locked in the SGF)';
     if (editBtn) {
         editBtn.style.display = _scoringHasSaved ? '' : 'none';
         if (_scoringHasSaved) {
@@ -15795,69 +15912,17 @@ function updateScoringSaveButton() {
         }
     }
 }
-function saveScoringResult() {
+function saveScoringBoard() {
     const btn = document.getElementById('btn-scoring-save');
     if (!btn) return;
 
-    // ── Write DD / MA / TB / TW into the terminal SGF node ────────────────
-    // Compute the four property arrays from the current scoring session.
-    const sgfProps = computeSgfPropertyBars();
-
-    // Find the target move node: the last move in the current sequence.
-    // We write to the last element of state.sgfMoves (the terminal node).
-    const moveCount = state.sgfMoves ? state.sgfMoves.length : 0;
-    if (moveCount > 0 && sgfProps) {
-        const lastMove = state.sgfMoves[moveCount - 1];
-        if (lastMove) {
-            if (!lastMove.unknownProps) lastMove.unknownProps = {};
-            // Overwrite any prior scoring properties on this node
-            if (sgfProps.dd.length > 0) {
-                lastMove.unknownProps.DD = sgfProps.dd.slice();
-            } else {
-                delete lastMove.unknownProps.DD;
-            }
-            if (sgfProps.ma.length > 0) {
-                lastMove.unknownProps.MA = sgfProps.ma.slice();
-            } else {
-                delete lastMove.unknownProps.MA;
-            }
-            if (sgfProps.tb.length > 0) {
-                lastMove.unknownProps.TB = sgfProps.tb.slice();
-            } else {
-                delete lastMove.unknownProps.TB;
-            }
-            if (sgfProps.tw.length > 0) {
-                lastMove.unknownProps.TW = sgfProps.tw.slice();
-            } else {
-                delete lastMove.unknownProps.TW;
-            }
-            // Mirror the four properties onto the terminal move's DIRECT fields (same shape as
-            // loadSGF) so the Estimation modal Run gate finds the markup immediately, with no
-            // reload needed.
-            if (sgfProps.dd.length > 0) {
-                lastMove.DD = sgfProps.dd.slice();
-            } else {
-                delete lastMove.DD;
-            }
-            if (sgfProps.ma.length > 0) {
-                lastMove.MA = sgfProps.ma.slice();
-            } else {
-                delete lastMove.MA;
-            }
-            if (sgfProps.tb.length > 0) {
-                lastMove.TB = sgfProps.tb.slice();
-            } else {
-                delete lastMove.TB;
-            }
-            if (sgfProps.tw.length > 0) {
-                lastMove.TW = sgfProps.tw.slice();
-            } else {
-                delete lastMove.TW;
-            }
-            // Mark SGF as dirty so next export includes these properties
-            state.isSgfDirty = true;
-        }
-    }
+    // ── Step 2 of the two-step Save: capture the BOARD state to memory ────
+    // The committed resolution was already written to the SGF by Lock Score (step 1). Save
+    // Board captures the LIVE board state — the post-lock "playground" (replaces/re-arranges +
+    // bucket stacks + capture counters) — into memory so reopening restores the board exactly
+    // as saved. The playground is deliberately NOT baked into the SGF: the SGF keeps the
+    // committed resolution, and the frozen score keeps reading lockedSnapshot.
+    _savedBoardSnapshot = captureLiveBoardSnapshot();
 
     // Save always finalizes the session state (saved flags, frozen) regardless of whether a
     // study record exists; the record block then snapshots the exact last-edited board.
@@ -15868,31 +15933,25 @@ function saveScoringResult() {
     if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
         if (rec) {
-            // Persist the exact last-edited scoring board as the per-REC snapshot: lifted dead
-            // stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/
-            // interaction mode, and frozen state. This is the single source of truth for what
-            // the modal shows on reopen AND for the blue panel's Run score; DD/MA/TB/TW are
-            // derived from it by the shared converter. Territory is intentionally NOT stored
-            // as auto-derived points here — manualTerritory is what the user actually marked.
+            // Persist the per-REC snapshot: the committed resolution (board/marks/territory/
+            // captures from lockedSnapshot while locked — the source the blue-panel Run reads)
+            // PLUS the savedBoard playground the modal displays on reopen. DD/MA/TB/TW are
+            // derived from the committed fields by the shared converter.
             rec.scoringData = buildScoringSessionSnapshot();
-
-            // Update rec.workingSgf so downloaded SGF files contain DD / MA / TB / TW
-            if (typeof generateCurrentSgfString === 'function') {
-                rec.workingSgf = generateCurrentSgfString();
-            }
             StudyRecordDB.saveRecord(rec);
         }
     }
-
-    // Show "saved" badge on SGF property bars panel
-    const badge = document.getElementById('sgf-prop-bars-save-badge');
-    if (badge) badge.style.display = '';
 
     updateScoringSaveButton();
 }
 
 function restoreScoringFromSavedData(data) {
-    scoringState.board = data.board.map(r => [...r]);
+    // A "savedBoard" playground (Save Board, step 2) is the post-lock board captured to memory:
+    // when present, the modal DISPLAYS it exactly as saved, while the committed resolution
+    // (marks / territory / buckets carried by lockedSnapshot) stays the source of the frozen
+    // score, the SGF Properties and the blue-panel Run. The playground is never baked into the
+    // SGF, so restoring it must not move any committed number.
+    const playground = data.savedBoard;
     scoringState.markedDead = data.markedDead.map(r => [...r]);
     scoringState.deadStonesInfo = data.deadStonesInfo ? data.deadStonesInfo.map(r => [...r]) : Array.from({length: 19}, () => Array.from({length: 19}, () => null));
     scoringState.manualTerritory = data.manualTerritory ? data.manualTerritory.map(r => [...r]) : Array.from({length: 19}, () => Array.from({length: 19}, () => 0));
@@ -15902,7 +15961,7 @@ function restoreScoringFromSavedData(data) {
     // so the reopened modal (and every downstream consumer) respects it.
     {
         const norm = normalizeScoringSession({
-            board: scoringState.board,
+            board: data.board,
             markedDead: scoringState.markedDead,
             manualTerritory: scoringState.manualTerritory,
             ruleMode: scoringState.ruleMode
@@ -15915,33 +15974,60 @@ function restoreScoringFromSavedData(data) {
     scoringState.bucketWhite = [...(data.bucketWhite || [])];
     scoringState.rearrangeBlack = [...(data.rearrangeBlack || [])];
     scoringState.rearrangeWhite = [...(data.rearrangeWhite || [])];
-    // Rebuild the dead stacks from the MARKS (canonical set) instead of trusting the persisted
-    // arrays: sessions saved before the seeding dedupe fix could carry double-pushed entries
-    // (a stone present in DD/MA AND inside TB/TW bounds), which inflated deadWhite/deadBlack and
-    // the Black/White "Dead:" bucket pills. Rebuilding from markedDead/deadStonesInfo makes the
-    // buckets mirror the marks exactly and self-heals stale persisted counts.
-    scoringState.deadWhite = [];
-    scoringState.deadBlack = [];
-    for (let r = 0; r < 19; r++) {
-        for (let c = 0; c < 19; c++) {
-            if (scoringState.markedDead[r][c]) {
-                if (scoringState.deadStonesInfo[r][c] === 1) scoringState.deadBlack.push('B');
-                else if (scoringState.deadStonesInfo[r][c] === 2) scoringState.deadWhite.push('W');
+    if (playground) {
+        // Playground restore: the exact board + bucket/capture counters captured by Save Board.
+        // The dead-stack rebuild-from-marks and stone-lift self-heal below are SKIPPED — they
+        // operate on the committed marks and would undo the fills the user saved.
+        scoringState.board = playground.board.map(r => [...r]);
+        scoringState.deadWhite = [...(playground.deadWhite || [])];
+        scoringState.deadBlack = [...(playground.deadBlack || [])];
+        scoringState.rearrangeBlack = [...(playground.rearrangeBlack || [])];
+        scoringState.rearrangeWhite = [...(playground.rearrangeWhite || [])];
+        scoringState.blackCaptures = playground.blackCaptures || 0;
+        scoringState.whiteCaptures = playground.whiteCaptures || 0;
+    } else {
+        scoringState.board = data.board.map(r => [...r]);
+        // Rebuild the dead stacks from the MARKS (canonical set) instead of trusting the persisted
+        // arrays: sessions saved before the seeding dedupe fix could carry double-pushed entries
+        // (a stone present in DD/MA AND inside TB/TW bounds), which inflated deadWhite/deadBlack and
+        // the Black/White "Dead:" bucket pills. Rebuilding from markedDead/deadStonesInfo makes the
+        // buckets mirror the marks exactly and self-heals stale persisted counts.
+        scoringState.deadWhite = [];
+        scoringState.deadBlack = [];
+        for (let r = 0; r < 19; r++) {
+            for (let c = 0; c < 19; c++) {
+                if (scoringState.markedDead[r][c]) {
+                    if (scoringState.deadStonesInfo[r][c] === 1) scoringState.deadBlack.push('B');
+                    else if (scoringState.deadStonesInfo[r][c] === 2) scoringState.deadWhite.push('W');
+                }
             }
         }
-    }
-    // Self-heal sessions saved before dead marks were lifted: the seeds wrote markedDead but
-    // left the stone ON the display board (an X drawn over a still-rendered stone), while
-    // manual marks lift it to an empty intersection. The marks are canonical — any stone
-    // sitting at a markedDead position was meant to be lifted, so lift it now. baseBoard is
-    // already the untouched game position, so the final result never moves.
-    for (let r = 0; r < 19; r++) {
-        for (let c = 0; c < 19; c++) {
-            if (scoringState.markedDead[r][c] && scoringState.board[r][c] !== 0) {
-                scoringState.board[r][c] = 0;
+        // Self-heal sessions saved before dead marks were lifted: the seeds wrote markedDead but
+        // left the stone ON the display board (an X drawn over a still-rendered stone), while
+        // manual marks lift it to an empty intersection. The marks are canonical — any stone
+        // sitting at a markedDead position was meant to be lifted, so lift it now. baseBoard is
+        // already the untouched game position, so the final result never moves.
+        for (let r = 0; r < 19; r++) {
+            for (let c = 0; c < 19; c++) {
+                if (scoringState.markedDead[r][c] && scoringState.board[r][c] !== 0) {
+                    scoringState.board[r][c] = 0;
+                }
             }
         }
+        scoringState.blackCaptures = data.blackCaptures || 0;
+        scoringState.whiteCaptures = data.whiteCaptures || 0;
     }
+    // Reflect the restored playground in the module-level capture (Save Board) slot so any later
+    // snapshot (modal close, save again) keeps carrying the savedBoard the user saw.
+    _savedBoardSnapshot = playground ? {
+        board: playground.board.map(r => [...r]),
+        deadWhite: [...(playground.deadWhite || [])],
+        deadBlack: [...(playground.deadBlack || [])],
+        rearrangeBlack: [...(playground.rearrangeBlack || [])],
+        rearrangeWhite: [...(playground.rearrangeWhite || [])],
+        blackCaptures: playground.blackCaptures || 0,
+        whiteCaptures: playground.whiteCaptures || 0
+    } : null;
     scoringState.ruleMode = data.ruleMode || 'japanese';
     scoringState.interactionMode = data.interactionMode || 'mark';
     // Lock state: restores the resolution commit + its snapshot from the saved session.
@@ -15959,8 +16045,6 @@ function restoreScoringFromSavedData(data) {
     scoringState.komi = data.komi != null ? data.komi : extractSgfKomi();
     const elKomiInput = document.getElementById('scoring-komi-val');
     if (elKomiInput) elKomiInput.value = scoringState.komi;
-    scoringState.blackCaptures = data.blackCaptures || 0;
-    scoringState.whiteCaptures = data.whiteCaptures || 0;
     // Untouched-position snapshot for parity with the original loaded board (the dead-stone
     // heuristic that once read it on first entry is removed). The score, saved markup and
     // blue-panel Run all read the live display board + live captures, so legacy sessions
@@ -16013,7 +16097,7 @@ function updateScoringUI() {
         }
     }
 
-    // ── Lock / Unlock button + Interaction Mode gating ─────────────────────
+    // ── Lock Score / Unlock Score? button + Interaction Mode gating ────────
     // Replace & Re-arrange are counting-aid modes gated behind the resolution lock
     // (Mark Dead Stones + Mark Territories committed). Disabled-and-visible with a hint.
     const btnLock = document.getElementById('btn-scoring-lock');
@@ -16023,13 +16107,23 @@ function updateScoringUI() {
         } else {
             btnLock.style.display = '';
             if (scoringState.locked) {
-                btnLock.textContent = '🔓 Unlock Resolution';
-                btnLock.title = 'Unlock to edit dead stones & territory (resets the counting phase done after locking)';
+                btnLock.textContent = '🔓 Unlock Score?';
+                btnLock.title = 'Unlock the Score to edit dead stones & territory (resets the counting phase done after locking)';
             } else {
-                btnLock.textContent = '🔒 Lock Dead Stones + Territory';
-                btnLock.title = 'Commit dead stones & territory, then Replacing / Re-arranging become available';
+                btnLock.textContent = '🔒 Lock Score';
+                btnLock.title = 'Commit dead stones & territory to the SGF, freeze the Score, then Replacing / Re-arranging become available';
             }
         }
+    }
+
+    // The Reset button shares one slot, gated by the lock stage (pre-D&T "Reset Score",
+    // post-D&T "Reset Board") — same gate pattern as the Lock/Save pairing.
+    const btnReset = document.getElementById('btn-scoring-reset');
+    if (btnReset) {
+        btnReset.textContent = scoringState.locked ? 'Reset Board' : 'Reset Score';
+        btnReset.title = scoringState.locked
+            ? 'Reset the board back to the locked dead-stones & territory resolution (the locked Score is kept)'
+            : 'Reset the Score — clear all marked dead stones & territory back to the initial state of the last game move';
     }
 
     const elModeSelect = document.getElementById('scoring-interaction-mode');
@@ -16061,8 +16155,8 @@ function updateScoringUI() {
     if (elLockHint) {
         elLockHint.style.display = '';
         elLockHint.textContent = scoringState.locked
-            ? '🔓 Unlock to edit dead stones & territory.'
-            : '🔒 Lock dead stones & territory to enable Replacing / Re-arranging.';
+            ? '🔓 Unlock Score? to edit dead stones & territory.'
+            : '🔒 Lock Score to enable Replacing / Re-arranging.';
     }
 
     // Buckets display total counts matching sum of Re-arrange + Dead + Cap.
