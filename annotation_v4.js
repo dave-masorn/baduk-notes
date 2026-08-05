@@ -14947,9 +14947,9 @@ function showUnlockDialog() {
     const msg = document.getElementById('scoring-unlock-confirm-msg');
     if (msg) {
         if (counts.total === 0) {
-            msg.textContent = 'Unlock Score? No counting changes were made after locking.';
+            msg.textContent = 'Start D&T? No counting changes were made after locking.';
         } else {
-            msg.textContent = `Unlock Score? This returns to the pre-Lock stage and discards the counting phase after the lock: `
+            msg.textContent = `Start D&T? This returns to the pre-Lock stage and discards the counting phase after the lock: `
                 + `${counts.placed} stone(s) placed, ${counts.removed} stone(s) removed, `
                 + `${counts.caps} capture adjustment(s), ${counts.terr} territory change(s). `
                 + `The locked marks & territory are kept.`;
@@ -16097,7 +16097,7 @@ function updateScoringUI() {
         }
     }
 
-    // ── Lock Score / Unlock Score? button + Interaction Mode gating ────────
+    // ── Save D&T / Start D&T button + Interaction Mode gating ─────────────
     // Replace & Re-arrange are counting-aid modes gated behind the resolution lock
     // (Mark Dead Stones + Mark Territories committed). Disabled-and-visible with a hint.
     const btnLock = document.getElementById('btn-scoring-lock');
@@ -16107,11 +16107,11 @@ function updateScoringUI() {
         } else {
             btnLock.style.display = '';
             if (scoringState.locked) {
-                btnLock.textContent = '🔓 Unlock Score?';
-                btnLock.title = 'Unlock the Score to edit dead stones & territory (resets the counting phase done after locking)';
+                btnLock.textContent = 'Start D&T';
+                btnLock.title = 'Start D&T over — reset the counting phase done after locking';
             } else {
-                btnLock.textContent = '🔒 Lock Score';
-                btnLock.title = 'Commit dead stones & territory to the SGF, freeze the Score, then Replacing / Re-arranging become available';
+                btnLock.textContent = 'Save D&T';
+                btnLock.title = 'Commit dead stones & territory to the SGF';
             }
         }
     }
@@ -16153,10 +16153,7 @@ function updateScoringUI() {
     }
     const elLockHint = document.getElementById('scoring-lock-hint');
     if (elLockHint) {
-        elLockHint.style.display = '';
-        elLockHint.textContent = scoringState.locked
-            ? '🔓 Unlock Score? to edit dead stones & territory.'
-            : '🔒 Lock Score to enable Replacing / Re-arranging.';
+        elLockHint.style.display = 'none';
     }
 
     // Buckets display total counts matching sum of Re-arrange + Dead + Cap.
