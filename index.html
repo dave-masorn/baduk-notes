@@ -295,7 +295,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.058</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.059</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -1735,9 +1735,9 @@
                         <label style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #6ee7b7; letter-spacing: 0.05em; display: block; margin-bottom: 4px;">Interaction Mode</label>
                         <select id="scoring-interaction-mode" style="width: 100%; background: #133a31; color: #ecfdf5; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; padding: 6px 8px; font-size: 0.82rem; outline: none;">
                             <option value="mark">Mark Dead Stones</option>
+                            <option value="mark-territory">Mark Territories</option>
                             <option value="replace">Replacing Dead Stones</option>
                             <option value="rearrange">re-Arranging Stones</option>
-                            <option value="mark-territory">Mark Territories</option>
                         </select>
                         <p id="scoring-mode-help" style="font-size: 0.72rem; color: #a7f3d0; margin-top: 4px; line-height: 1.3; margin-bottom: 0;">Click stones on board to toggle marking dead/alive.</p>
                         <p id="scoring-lock-hint" style="display: none; font-size: 0.68rem; color: #fbbf24; margin-top: 4px; line-height: 1.3; margin-bottom: 0;">🔒 Lock dead stones &amp; territory to enable Replacing / Re-arranging.</p>
@@ -1969,7 +1969,7 @@
                 <div id="scoring-reset-confirm-dialog" style="display: none; position: absolute; inset: 0; z-index: 250; background: rgba(5, 20, 16, 0.75); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); align-items: center; justify-content: center;">
                     <div style="background: #0d2822; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 22px 24px; text-align: center; max-width: 340px; width: 90%; box-shadow: 0 20px 50px rgba(0,0,0,0.6);">
                         <h3 style="margin: 0 0 10px 0; color: #ecfdf5; font-size: 1.05rem; font-weight: 700;">Reset Scoring Board?</h3>
-                        <p style="margin: 0 0 20px 0; color: #a7f3d0; font-size: 0.85rem; line-height: 1.45;">Are you sure you want to reset the board back to the initial state of the last game move?</p>
+                        <p id="scoring-reset-confirm-msg" style="margin: 0 0 20px 0; color: #a7f3d0; font-size: 0.85rem; line-height: 1.45;">Are you sure you want to reset the board back to the initial state of the last game move?</p>
                         <div style="display: flex; gap: 12px; justify-content: center;">
                             <button id="btn-scoring-confirm-reset" style="flex: 1; padding: 10px 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">Reset Board</button>
                             <button id="btn-scoring-cancel-reset" style="flex: 1; padding: 10px 14px; background: rgba(255,255,255,0.08); color: #ecfdf5; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem;">Cancel</button>
@@ -2603,14 +2603,14 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script src="sgf-parser.js?v=0.1.058"></script>
-    <script src="deadstones.bundle.js?v=0.1.058"></script>
-    <script src="board-estimate.js?v=0.1.058"></script>
-    <script src="goscorer.js?v=0.1.058"></script>
-    <script src="liberties.js?v=0.1.058"></script>
-    <script src="move-term-detector.js?v=0.1.058"></script>
-    <script src="phase-detector.js?v=0.1.058"></script>
-    <script src="game-tree.js?v=0.1.058"></script>
-    <script src="annotation_v4.js?v=0.1.058"></script>
+    <script src="sgf-parser.js?v=0.1.059"></script>
+    <script src="deadstones.bundle.js?v=0.1.059"></script>
+    <script src="board-estimate.js?v=0.1.059"></script>
+    <script src="goscorer.js?v=0.1.059"></script>
+    <script src="liberties.js?v=0.1.059"></script>
+    <script src="move-term-detector.js?v=0.1.059"></script>
+    <script src="phase-detector.js?v=0.1.059"></script>
+    <script src="game-tree.js?v=0.1.059"></script>
+    <script src="annotation_v4.js?v=0.1.059"></script>
 </body>
 </html>
