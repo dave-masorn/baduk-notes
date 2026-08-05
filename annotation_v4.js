@@ -14678,7 +14678,6 @@ window.scoringState = {
     showCoords: true,
     komi: DEFAULT_KOMI,
     pendingClick: null,
-    pendingLockEdit: null,
     blackCaptures: 0,
     whiteCaptures: 0,
     frozen: false,
@@ -14794,7 +14793,6 @@ function applyScoringLock() {
     if (scoringState.frozen || scoringState.locked) return;
     scoringState.lockedSnapshot = buildLockedSnapshot();
     scoringState.locked = true;
-    scoringState.pendingLockEdit = null;
     // The lock is a COMMIT point: the pre-lock resolution (marks + territory + buckets +
     // captures) is frozen in lockedSnapshot, so the counting phase's undo must never reach
     // back before it. Pre-lock history is RETAINED behind a boundary (unlock restores it so
@@ -14836,7 +14834,6 @@ function applyUnlockReset() {
     if (snap && snap.board) restoreScoringSnapshot(snap);
     scoringState.locked = false;
     scoringState.lockedSnapshot = null;
-    scoringState.pendingLockEdit = null;
     scoringState.lockBoundaryIndex = 0;
     if (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange') {
         scoringState.interactionMode = 'mark';
@@ -14861,9 +14858,9 @@ function toggleScoringLock() {
     }
 }
 
-// The unlock confirmation dialog. Shown when an unlock (button OR a mark/territory edit
-// click) would discard post-lock counting work. The edit click is parked in pendingLockEdit
-// and replayed after the reset so the user's intended mark change still lands.
+// The unlock confirmation dialog. Shown when Unlocking would discard post-lock counting work
+// (which fills/re-arranges created as a cosmetic ritual). Confirming restores the locked
+// resolution and returns to the Mark Dead + Mark Territories stage.
 function showUnlockDialog() {
     const dialog = document.getElementById('scoring-unlock-confirm-dialog');
     if (!dialog) { applyUnlockReset(); return; }
@@ -14885,25 +14882,12 @@ function showUnlockDialog() {
 function confirmScoringUnlock() {
     const dialog = document.getElementById('scoring-unlock-confirm-dialog');
     if (dialog) dialog.style.display = 'none';
-    const isEditClick = !!scoringState.pendingLockEdit;
-    const p = scoringState.pendingLockEdit;
     applyUnlockReset();
-    if (isEditClick && p) {
-        // Replay the parked resolution-edit click on the freshly restored (unlocked) board.
-        const canvas = document.getElementById('go-board-canvas-scoring');
-        if (canvas) {
-            const rect = canvas.getBoundingClientRect();
-            const x = rect.left + ((p.clickX || 0) / 600) * rect.width;
-            const y = rect.top + ((p.clickY || 0) / 600) * rect.height;
-            canvas.dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
-        }
-    }
 }
 
 function cancelScoringUnlock() {
     const dialog = document.getElementById('scoring-unlock-confirm-dialog');
     if (dialog) dialog.style.display = 'none';
-    scoringState.pendingLockEdit = null;
 }
 
 // Global Mac / Ctrl Keyboard Shortcut Listener for #scoring modal
@@ -15026,8 +15010,9 @@ function initScoringModal() {
     const btnClearBuckets = document.getElementById('btn-scoring-clear-buckets');
     if (btnClearBuckets) {
         btnClearBuckets.addEventListener('click', () => {
-            // LOCKED: the tray is pinned to the committed resolution — clearing is a no-op.
-            if (scoringState.locked) return;
+            // Clears the Re-arrange transfer buckets. While LOCKED this is cosmetic (the tray
+            // mirrors the counting ritual); the frozen score reads lockedSnapshot, so it holds.
+            if (scoringState.frozen) return;
             saveScoringStateForUndo();
             scoringState.bucketBlack = [];
             scoringState.bucketWhite = [];
@@ -15155,31 +15140,29 @@ function initScoringModal() {
                 const { r, c } = scoringState.pendingClick;
                 scoringState.board[r][c] = color;
 
-                // LOCKED: placement is a cosmetic display aid — it consumes no tray stone and
-                // moves no capture counter, so the frozen score + tray never drift.
-                if (!scoringState.locked) {
-                    if (color === 1) {
-                        if (src.type === 'rearrange') {
-                            scoringState.rearrangeBlack.pop();
-                            scoringState.bucketBlack.pop();
-                        } else if (src.type === 'dead') {
-                            scoringState.deadBlack.pop();
-                            scoringState.bucketWhite.pop();
-                            scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
-                        } else if (src.type === 'cap') {
-                            scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
-                        }
-                    } else {
-                        if (src.type === 'rearrange') {
-                            scoringState.rearrangeWhite.pop();
-                            scoringState.bucketWhite.pop();
-                        } else if (src.type === 'dead') {
-                            scoringState.deadWhite.pop();
-                            scoringState.bucketBlack.pop();
-                            scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
-                        } else if (src.type === 'cap') {
-                            scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
-                        }
+                // The source pile shrinks WITH the placement so the tray mirrors the counting
+                // ritual; while LOCKED that is cosmetic — the frozen score reads lockedSnapshot.
+                if (color === 1) {
+                    if (src.type === 'rearrange') {
+                        scoringState.rearrangeBlack.pop();
+                        scoringState.bucketBlack.pop();
+                    } else if (src.type === 'dead') {
+                        scoringState.deadBlack.pop();
+                        scoringState.bucketWhite.pop();
+                        scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
+                    } else if (src.type === 'cap') {
+                        scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
+                    }
+                } else {
+                    if (src.type === 'rearrange') {
+                        scoringState.rearrangeWhite.pop();
+                        scoringState.bucketWhite.pop();
+                    } else if (src.type === 'dead') {
+                        scoringState.deadWhite.pop();
+                        scoringState.bucketBlack.pop();
+                        scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
+                    } else if (src.type === 'cap') {
+                        scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     }
                 }
 
@@ -15205,9 +15188,8 @@ function initScoringModal() {
             return;
         }
         scoringState.board[r][c] = color;
-        // LOCKED: the counting phase is a cosmetic display aid — the stone lands but consumes
-        // no tray stone and moves no capture counter, so the frozen score + tray never drift.
-        if (scoringState.locked) return;
+        // The source pile shrinks WITH the placement so the tray mirrors the counting ritual;
+        // while LOCKED that is cosmetic — the frozen score reads lockedSnapshot.
         // Dead marks NEVER clear when a stone is placed on the point (marks are the immutable
         // resolution — the dead X keeps showing over the placed stone when "Show dead stones"
         // is checked, and the SGF Properties DD/MA counts stay intact).
@@ -15541,7 +15523,6 @@ function resetScoringBoardFromState(options) {
         scoringState.locked = false;
         scoringState.lockedSnapshot = null;
     }
-    scoringState.pendingLockEdit = null;
 
     updateScoringSaveButton();
     updateScoringUI();
@@ -15973,7 +15954,6 @@ function restoreScoringFromSavedData(data) {
     if (scoringState.lockedSnapshot && scoringState.lockedSnapshot.komi == null) {
         scoringState.lockedSnapshot.komi = (data.komi != null) ? data.komi : extractSgfKomi();
     }
-    scoringState.pendingLockEdit = null;
     // Legacy sessions saved without a komi field fall back to the SGF's real komi (via the
     // SSOT resolver) — never a hardcoded default — so a KM[0] game stays 0 here too.
     scoringState.komi = data.komi != null ? data.komi : extractSgfKomi();
@@ -16054,29 +16034,43 @@ function updateScoringUI() {
 
     const elModeSelect = document.getElementById('scoring-interaction-mode');
     if (elModeSelect) {
-        const gated = !scoringState.locked;
+        const locked = scoringState.locked;
+        // SYMMETRIC stage gating: the counting tools (Replace/Re-arrange) are available only
+        // after the resolution is Locked, and the resolution tools (Mark Dead Stones / Mark
+        // Territories) are available only while it is NOT locked — each renders disabled-but-
+        // visible (with a hint) outside its stage, exactly like the other side.
         for (let i = 0; i < elModeSelect.options.length; i++) {
             const opt = elModeSelect.options[i];
             if (opt.value === 'replace' || opt.value === 'rearrange') {
-                opt.disabled = gated;
+                opt.disabled = !locked;
+            }
+            if (opt.value === 'mark' || opt.value === 'mark-territory') {
+                opt.disabled = locked;
             }
         }
-        // If the current mode is a gated counting mode, fall back to the resolution stage.
-        if (gated && (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange')) {
+        // Force the current mode into the stage available under the current lock state.
+        if (!locked && (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange')) {
             scoringState.interactionMode = 'mark';
+        }
+        if (locked && (scoringState.interactionMode === 'mark' || scoringState.interactionMode === 'mark-territory')) {
+            scoringState.interactionMode = 'replace';
         }
         elModeSelect.value = scoringState.interactionMode;
     }
     const elLockHint = document.getElementById('scoring-lock-hint');
     if (elLockHint) {
-        elLockHint.style.display = scoringState.locked ? 'none' : '';
-        elLockHint.textContent = '🔒 Lock dead stones & territory to enable Replacing / Re-arranging.';
+        elLockHint.style.display = '';
+        elLockHint.textContent = scoringState.locked
+            ? '🔓 Unlock to edit dead stones & territory.'
+            : '🔒 Lock dead stones & territory to enable Replacing / Re-arranging.';
     }
 
     // Buckets display total counts matching sum of Re-arrange + Dead + Cap.
-    // LOCKED: the tray pins to the committed resolution — post-lock counting edits are a
-    // cosmetic display aid and can never move the Dead / Caps / Re-arrange read-outs.
-    const traySource = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState;
+    // LOCKED: the tray is a COSMETIC mirror of the counting ritual — post-lock fills consume
+    // stones from the Dead/Caps piles and feed the Re-arrange pile exactly like the board edit
+    // they accompany. The frozen score never reads it (it computes from lockedSnapshot), so the
+    // tray is a display aid only; the real Dead/Caps read-out lives in the locked score.
+    const traySource = scoringState;
     const bRe = traySource.rearrangeBlack ? traySource.rearrangeBlack.length : 0;
     const bDe = traySource.deadWhite ? traySource.deadWhite.length : 0;
     const bCa = traySource.blackCaptures || 0;
@@ -16269,22 +16263,11 @@ function handleScoringBoardClick(e) {
 
     if (row < 0 || row >= 19 || col < 0 || col >= 19) return;
 
-    // Lock-break: editing a LOCKED resolution (Mark Dead Stones / Mark Territories) resets the
-    // counting phase done after the lock. Park the click, confirm, then replay it on the
-    // restored board. No-op clicks (empty spot in mark mode, occupied spot in territory mode)
-    // pass through without breaking the lock.
-    const modeNow = scoringState.interactionMode;
-    if (scoringState.locked && (modeNow === 'mark' || modeNow === 'mark-territory')) {
-        const wouldChange = modeNow === 'mark'
-            ? (scoringState.board[row][col] !== 0 || scoringState.markedDead[row][col])
-            : (scoringState.board[row][col] === 0);
-        if (wouldChange) {
-            scoringState.pendingLockEdit = { row, col, clickX, clickY };
-            showUnlockDialog();
-            return;
-        }
-    }
-
+    // The Lock stage is symmetric and exclusive: while LOCKED only the counting modes
+    // (Replace/Re-arrange) are reachable — the Mark Dead / Mark Territories options are
+    // disabled in the Interaction Mode select, so editing the resolution requires pressing
+    // Unlock Resolution first (updateScoringUI enforces the mode stage). No lock-break
+    // click path exists here anymore.
     if (scoringState.interactionMode === 'mark') {
         const val = scoringState.board[row][col];
         const isDeadMarked = scoringState.markedDead[row][col];
@@ -16411,24 +16394,23 @@ function handleScoringBoardClick(e) {
         // The dead mark on this fill point is PRESERVED — marks never clear. The dead X stays
         // visible over the placed prisoner when "Show dead stones" is checked, and the SGF
         // Properties DD/MA counts stay intact. The dead stone remains a prisoner via the mark
-        // (not the capture counter). While LOCKED the fill is purely cosmetic: the displayed
-        // score and tray are pinned to the committed resolution, so nothing else moves.
-        if (!scoringState.locked) {
-            if (terrColor === 1) {
-                if (scoringState.deadBlack.length > 0) {
-                    scoringState.deadBlack.pop();
-                    const idx = scoringState.bucketWhite.indexOf('B');
-                    if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
-                }
-                scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
-            } else {
-                if (scoringState.deadWhite.length > 0) {
-                    scoringState.deadWhite.pop();
-                    const idx = scoringState.bucketBlack.indexOf('W');
-                    if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
-                }
-                scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
+        // (not the capture counter). The prisoner accounting (dead pile pop + capture counter
+        // decrement) moves WITH the fill so the tray mirrors the counting ritual; while LOCKED
+        // that is purely cosmetic — the displayed score reads lockedSnapshot, never this.
+        if (terrColor === 1) {
+            if (scoringState.deadBlack.length > 0) {
+                scoringState.deadBlack.pop();
+                const idx = scoringState.bucketWhite.indexOf('B');
+                if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
             }
+            scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
+        } else {
+            if (scoringState.deadWhite.length > 0) {
+                scoringState.deadWhite.pop();
+                const idx = scoringState.bucketBlack.indexOf('W');
+                if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+            }
+            scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
         }
         updateScoringUI();
         drawBoard();
@@ -16438,22 +16420,18 @@ function handleScoringBoardClick(e) {
             saveScoringStateForUndo();
             scoringState.board[row][col] = 0;
             // Dead marks NEVER clear on a re-arrange pickup — marks are the immutable
-            // resolution, so the dead X stays over the now-empty point.
-            // LOCKED: pickup is a cosmetic board edit — no tray mutation, the pinned read-out
-            // and tray never move.
-            if (!scoringState.locked) {
-                scoringState.rearrangeBlack.push('B');
-                scoringState.bucketBlack.push('B');
-            }
+            // resolution, so the dead X stays over the now-empty point. The pickup feeds the
+            // Re-arrange pile so the tray mirrors the ritual; while LOCKED that is a cosmetic
+            // display aid only — the frozen score reads lockedSnapshot, never this.
+            scoringState.rearrangeBlack.push('B');
+            scoringState.bucketBlack.push('B');
             updateScoringUI();
             drawBoard();
         } else if (currentVal === 2) {
             saveScoringStateForUndo();
             scoringState.board[row][col] = 0;
-            if (!scoringState.locked) {
-                scoringState.rearrangeWhite.push('W');
-                scoringState.bucketWhite.push('W');
-            }
+            scoringState.rearrangeWhite.push('W');
+            scoringState.bucketWhite.push('W');
             updateScoringUI();
             drawBoard();
         } else if (currentVal === 0) {
@@ -16482,19 +16460,15 @@ function handleScoringBoardClick(e) {
             if (bPrim > 0 && wPrim === 0) {
                 saveScoringStateForUndo();
                 scoringState.board[row][col] = 1;
-                if (!scoringState.locked) {
-                    scoringState.rearrangeBlack.pop();
-                    scoringState.bucketBlack.pop();
-                }
+                scoringState.rearrangeBlack.pop();
+                scoringState.bucketBlack.pop();
                 updateScoringUI(); drawBoard(); return;
             }
             if (wPrim > 0 && bPrim === 0) {
                 saveScoringStateForUndo();
                 scoringState.board[row][col] = 2;
-                if (!scoringState.locked) {
-                    scoringState.rearrangeWhite.pop();
-                    scoringState.bucketWhite.pop();
-                }
+                scoringState.rearrangeWhite.pop();
+                scoringState.bucketWhite.pop();
                 updateScoringUI(); drawBoard(); return;
             }
 
