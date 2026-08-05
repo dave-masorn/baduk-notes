@@ -5,6 +5,12 @@
   "main": "annotation_v4.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:probe": "node test/probe.js",
+    "test:msm": "node test/verify_msm_2step.js",
+    "test:replace-fill": "node test/verify_replace_fix.js",
+    "test:rearrange": "node test/verify_rearrange_mode.js",
+    "test:replace-click": "node test/verify_replace_click.js",
+    "test:all": "node test/verify_replace_click.js && node test/verify_replace_fix.js && node test/verify_rearrange_mode.js && node test/verify_msm_2step.js",
     "build-docs": "node sync-docs.js && cd tech-log && npx next build --webpack && rm -rf ../tech-log-dist/* && cp -r out/* ../tech-log-dist"
   },
   "keywords": [],
@@ -14,5 +20,8 @@
   "dependencies": {
     "@sabaki/deadstones": "^2.1.2",
     "esbuild": "^0.28.1"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.3.0"
   }
 }
