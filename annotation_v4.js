@@ -12097,6 +12097,7 @@ function loadSGF(sgfString) {
     scoringState.lockedSnapshot = null;
     scoringState.lockBoundaryIndex = 0;
     scoringState.frozen = false;
+    scoringState.replacedStoneMap = {};
     _scoringDirty = false;
     _scoringHasSaved = false;
 
@@ -14688,6 +14689,10 @@ window.scoringState = {
     showCoords: true,
     komi: DEFAULT_KOMI,
     pendingClick: null,
+    // Replace-fill bookkeeping: coordinates that hold a stone placed by a Replacing fill,
+    // keyed `"r,c"` → { type: 'dead'|'cap', color: 1|2 }. Clicking such a stone in Replace
+    // mode reverses the fill (board → empty, prisoner returned to its pool).
+    replacedStoneMap: {},
     blackCaptures: 0,
     whiteCaptures: 0,
     frozen: false,
@@ -14712,7 +14717,8 @@ function getScoringSnapshot() {
         deadWhite: [...scoringState.deadWhite],
         deadBlack: [...scoringState.deadBlack],
         blackCaptures: scoringState.blackCaptures || 0,
-        whiteCaptures: scoringState.whiteCaptures || 0
+        whiteCaptures: scoringState.whiteCaptures || 0,
+        replacedStoneMap: { ...scoringState.replacedStoneMap }
     };
 }
 
@@ -14740,6 +14746,7 @@ function restoreScoringSnapshot(snap) {
     scoringState.deadBlack = [...(snap.deadBlack || [])];
     scoringState.blackCaptures = snap.blackCaptures !== undefined ? snap.blackCaptures : (scoringState.blackCaptures || 0);
     scoringState.whiteCaptures = snap.whiteCaptures !== undefined ? snap.whiteCaptures : (scoringState.whiteCaptures || 0);
+    scoringState.replacedStoneMap = snap.replacedStoneMap ? { ...snap.replacedStoneMap } : {};
     updateScoringUI();
     drawBoard();
 }
@@ -14811,7 +14818,8 @@ function captureLiveBoardSnapshot() {
         rearrangeBlack: [...scoringState.rearrangeBlack],
         rearrangeWhite: [...scoringState.rearrangeWhite],
         blackCaptures: scoringState.blackCaptures || 0,
-        whiteCaptures: scoringState.whiteCaptures || 0
+        whiteCaptures: scoringState.whiteCaptures || 0,
+        replacedStoneMap: { ...scoringState.replacedStoneMap }
     };
 }
 
@@ -14911,6 +14919,9 @@ function applyUnlockReset() {
     scoringState.locked = false;
     scoringState.lockedSnapshot = null;
     scoringState.lockBoundaryIndex = 0;
+    // Unlock restores the pre-lock board: replaced stones are gone, so their reversal tracking
+    // is stale and must drop with them.
+    scoringState.replacedStoneMap = {};
     // The saved Board playground no longer matches the restored pre-Lock board — invalidate it.
     _savedBoardSnapshot = null;
     if (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange') {
@@ -15292,8 +15303,10 @@ function initScoringModal() {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
+                scoringState.replacedStoneMap[`${r},${c}`] = { type: 'dead', color: 1 };
             } else if (mode === 'replace' && (scoringState.whiteCaptures || 0) > 0) {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
+                scoringState.replacedStoneMap[`${r},${c}`] = { type: 'cap', color: 1 };
             } else if (scoringState.rearrangeBlack.length > 0) {
                 scoringState.rearrangeBlack.pop();
                 scoringState.bucketBlack.pop();
@@ -15317,8 +15330,10 @@ function initScoringModal() {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+                scoringState.replacedStoneMap[`${r},${c}`] = { type: 'dead', color: 2 };
             } else if (mode === 'replace' && (scoringState.blackCaptures || 0) > 0) {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
+                scoringState.replacedStoneMap[`${r},${c}`] = { type: 'cap', color: 2 };
             } else if (scoringState.rearrangeWhite.length > 0) {
                 scoringState.rearrangeWhite.pop();
                 scoringState.bucketWhite.pop();
@@ -15441,6 +15456,7 @@ function resetScoringBoardFromState(options) {
     scoringState.deadWhite = [];
     scoringState.deadBlack = [];
     scoringState.pendingClick = null;
+    scoringState.replacedStoneMap = {};
     scoringHistory = [];
     scoringFuture = [];
     updateUndoRedoButtonsUI();
@@ -15796,7 +15812,8 @@ function buildScoringSessionSnapshot() {
             rearrangeBlack: [..._savedBoardSnapshot.rearrangeBlack],
             rearrangeWhite: [..._savedBoardSnapshot.rearrangeWhite],
             blackCaptures: _savedBoardSnapshot.blackCaptures,
-            whiteCaptures: _savedBoardSnapshot.whiteCaptures
+            whiteCaptures: _savedBoardSnapshot.whiteCaptures,
+            replacedStoneMap: _savedBoardSnapshot.replacedStoneMap ? { ..._savedBoardSnapshot.replacedStoneMap } : {}
         } : undefined,
         baseBoard: scoringState.baseBoard ? scoringState.baseBoard.map(r => [...r]) : undefined,
         baseCaptures: scoringState.baseCaptures ? { B: scoringState.baseCaptures.B, W: scoringState.baseCaptures.W } : undefined,
@@ -15838,6 +15855,7 @@ function copySnapshotShape(snap) {
         deadBlack: [...snap.deadBlack],
         blackCaptures: snap.blackCaptures,
         whiteCaptures: snap.whiteCaptures,
+        replacedStoneMap: snap.replacedStoneMap ? { ...snap.replacedStoneMap } : {},
         ruleMode: snap.ruleMode,
         komi: snap.komi
     };
@@ -15994,6 +16012,7 @@ function restoreScoringFromSavedData(data) {
         scoringState.rearrangeWhite = [...(playground.rearrangeWhite || [])];
         scoringState.blackCaptures = playground.blackCaptures || 0;
         scoringState.whiteCaptures = playground.whiteCaptures || 0;
+        scoringState.replacedStoneMap = playground.replacedStoneMap ? { ...playground.replacedStoneMap } : {};
     } else {
         scoringState.board = data.board.map(r => [...r]);
         // Rebuild the dead stacks from the MARKS (canonical set) instead of trusting the persisted
@@ -16025,6 +16044,7 @@ function restoreScoringFromSavedData(data) {
         }
         scoringState.blackCaptures = data.blackCaptures || 0;
         scoringState.whiteCaptures = data.whiteCaptures || 0;
+        scoringState.replacedStoneMap = {};
     }
     // Reflect the restored playground in the module-level capture (Save Board) slot so any later
     // snapshot (modal close, save again) keeps carrying the savedBoard the user saw.
@@ -16035,7 +16055,8 @@ function restoreScoringFromSavedData(data) {
         rearrangeBlack: [...(playground.rearrangeBlack || [])],
         rearrangeWhite: [...(playground.rearrangeWhite || [])],
         blackCaptures: playground.blackCaptures || 0,
-        whiteCaptures: playground.whiteCaptures || 0
+        whiteCaptures: playground.whiteCaptures || 0,
+        replacedStoneMap: playground.replacedStoneMap ? { ...playground.replacedStoneMap } : {}
     } : null;
     scoringState.ruleMode = data.ruleMode || 'japanese';
     scoringState.interactionMode = data.interactionMode || 'mark';
@@ -16449,7 +16470,36 @@ function handleScoringBoardClick(e) {
         }
     } else if (scoringState.interactionMode === 'replace') {
         const currentVal = scoringState.board[row][col];
-        if (currentVal !== 0) return;
+        const key = `${row},${col}`;
+        // A stone already on the point can only be a REVERSED-fill target: clicking a stone that
+        // a Replacing fill placed removes it from the board and returns the prisoner to its pool
+        // (the Dead pile or the Caps counter it came from). Stones that were never replaced are
+        // left untouched.
+        if (currentVal !== 0) {
+            const entry = scoringState.replacedStoneMap[key];
+            if (!entry) return;
+            saveScoringStateForUndo();
+            scoringState.board[row][col] = 0;
+            delete scoringState.replacedStoneMap[key];
+            if (entry.color === 1) {
+                if (entry.type === 'dead') {
+                    scoringState.deadBlack.push('B');
+                    scoringState.bucketWhite.push('B');
+                } else {
+                    scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) + 1);
+                }
+            } else {
+                if (entry.type === 'dead') {
+                    scoringState.deadWhite.push('W');
+                    scoringState.bucketBlack.push('W');
+                } else {
+                    scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) + 1);
+                }
+            }
+            updateScoringUI();
+            drawBoard();
+            return;
+        }
         // A dead-marked cell behaves EXACTLY like any other territory point here: the dead
         // stone was lifted, so the intersection reads as territory (the freed point) and a
         // prisoner of that territory's color may be placed on it. Only intersections whose
@@ -16498,22 +16548,27 @@ function handleScoringBoardClick(e) {
         // dead pile first (the stone returns from the board), the capture counter only once the
         // dead pile is empty — so Dead and Cap. stay separate pools and the tray drains one
         // stone per placement. While LOCKED it is purely cosmetic — the displayed score reads
-        // lockedSnapshot, never this.
+        // lockedSnapshot, never this. The fill is recorded in replacedStoneMap so clicking the
+        // placed stone later reverses it.
         if (terrColor === 1) {
             if (scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
+                scoringState.replacedStoneMap[key] = { type: 'dead', color: 1 };
             } else {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
+                scoringState.replacedStoneMap[key] = { type: 'cap', color: 1 };
             }
         } else {
             if (scoringState.deadWhite.length > 0) {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+                scoringState.replacedStoneMap[key] = { type: 'dead', color: 2 };
             } else {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
+                scoringState.replacedStoneMap[key] = { type: 'cap', color: 2 };
             }
         }
         updateScoringUI();
@@ -16527,6 +16582,7 @@ function handleScoringBoardClick(e) {
             // resolution, so the dead X stays over the now-empty point. The pickup feeds the
             // Re-arrange pile so the tray mirrors the ritual; while LOCKED that is a cosmetic
             // display aid only — the frozen score reads lockedSnapshot, never this.
+            delete scoringState.replacedStoneMap[`${row},${col}`];
             scoringState.rearrangeBlack.push('B');
             scoringState.bucketBlack.push('B');
             updateScoringUI();
@@ -16534,6 +16590,7 @@ function handleScoringBoardClick(e) {
         } else if (currentVal === 2) {
             saveScoringStateForUndo();
             scoringState.board[row][col] = 0;
+            delete scoringState.replacedStoneMap[`${row},${col}`];
             scoringState.rearrangeWhite.push('W');
             scoringState.bucketWhite.push('W');
             updateScoringUI();
