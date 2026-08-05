@@ -15279,9 +15279,12 @@ function initScoringModal() {
         // is checked, and the SGF Properties DD/MA counts stay intact).
         const mode = scoringState.interactionMode;
         if (color === 1) { // placing black stone
-            if (mode === 'rearrange' && scoringState.rearrangeBlack.length > 0) {
-                scoringState.rearrangeBlack.pop();
-                scoringState.bucketBlack.pop();
+            if (mode === 'rearrange') {
+                // re-Arrange places ONLY from the Re-arrange pile — never Dead or Caps.
+                if (scoringState.rearrangeBlack.length > 0) {
+                    scoringState.rearrangeBlack.pop();
+                    scoringState.bucketBlack.pop();
+                }
             } else if (mode === 'mark' && scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
                 scoringState.bucketWhite.pop();
@@ -15301,9 +15304,12 @@ function initScoringModal() {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             }
         } else { // placing white stone
-            if (mode === 'rearrange' && scoringState.rearrangeWhite.length > 0) {
-                scoringState.rearrangeWhite.pop();
-                scoringState.bucketWhite.pop();
+            if (mode === 'rearrange') {
+                // re-Arrange places ONLY from the Re-arrange pile — never Dead or Caps.
+                if (scoringState.rearrangeWhite.length > 0) {
+                    scoringState.rearrangeWhite.pop();
+                    scoringState.bucketWhite.pop();
+                }
             } else if (mode === 'mark' && scoringState.deadWhite.length > 0) {
                 scoringState.deadWhite.pop();
                 scoringState.bucketBlack.pop();
@@ -16533,28 +16539,14 @@ function handleScoringBoardClick(e) {
             updateScoringUI();
             drawBoard();
         } else if (currentVal === 0) {
-            const mode = scoringState.interactionMode;
+            // re-Arrange places ONLY from the Re-arrange piles — never Dead or Caps.
+            const bPrim = scoringState.rearrangeBlack ? scoringState.rearrangeBlack.length : 0;
+            const wPrim = scoringState.rearrangeWhite ? scoringState.rearrangeWhite.length : 0;
 
-            // Primary count: stones matching the current mode's type
-            const bPrim = mode === 'rearrange'
-                ? (scoringState.rearrangeBlack ? scoringState.rearrangeBlack.length : 0)
-                : (scoringState.deadBlack ? scoringState.deadBlack.length : 0);
-            const wPrim = mode === 'rearrange'
-                ? (scoringState.rearrangeWhite ? scoringState.rearrangeWhite.length : 0)
-                : (scoringState.deadWhite ? scoringState.deadWhite.length : 0);
+            // With both Re-arrange piles empty there is nothing to place: the click is a no-op.
+            if (bPrim === 0 && wPrim === 0) return;
 
-            // Fallback total: anything available at all
-            const bAll = (scoringState.rearrangeBlack ? scoringState.rearrangeBlack.length : 0)
-                       + (scoringState.deadBlack ? scoringState.deadBlack.length : 0)
-                       + (scoringState.whiteCaptures || 0);
-            const wAll = (scoringState.rearrangeWhite ? scoringState.rearrangeWhite.length : 0)
-                       + (scoringState.deadWhite ? scoringState.deadWhite.length : 0)
-                       + (scoringState.blackCaptures || 0);
-
-            if (bAll === 0 && wAll === 0) return;
-
-            // ── Happy path: mode tells us the type ──────────────────────────
-            // If only one color has mode-type stones → auto-place, no dialog
+            // Only one color has re-arrange stones → auto-place, no dialog
             if (bPrim > 0 && wPrim === 0) {
                 saveScoringStateForUndo();
                 scoringState.board[row][col] = 1;
@@ -16570,49 +16562,24 @@ function handleScoringBoardClick(e) {
                 updateScoringUI(); drawBoard(); return;
             }
 
-            // Both colors have mode-type stones → ask color only (no step 2)
-            if (bPrim > 0 && wPrim > 0) {
-                scoringState.pendingClick = { r: row, c: col };
-                const dialog = document.getElementById('scoring-color-picker-dialog');
-                if (!dialog) return;
-                const canvasViewport = document.getElementById('scoring-board-viewport');
-                const vRect = canvasViewport ? canvasViewport.getBoundingClientRect() : rect;
-                dialog.style.left = `${Math.min(vRect.width - 260, Math.max(10, clickX - 120))}px`;
-                dialog.style.top  = `${Math.min(vRect.height - 160, Math.max(10, clickY - 40))}px`;
-                const s1 = document.getElementById('scoring-picker-step1');
-                const s2 = document.getElementById('scoring-picker-step2');
-                if (s1) s1.style.display = '';
-                if (s2) s2.style.display = 'none';
-                // Both buttons visible (both have stones)
-                const btnB = document.getElementById('btn-place-black-stone');
-                const btnW = document.getElementById('btn-place-white-stone');
-                if (btnB) btnB.style.display = '';
-                if (btnW) btnW.style.display = '';
-                dialog.style.display = 'block';
-                return;
-            }
-
-            // ── Fallback: mode-type is empty for both colors (e.g. only Cap. left)
-            // Show full picker with sub-type step so user can still place from other types
+            // Both colors have re-arrange stones → ask color only (no sub-type step)
             scoringState.pendingClick = { r: row, c: col };
             const dialog = document.getElementById('scoring-color-picker-dialog');
             if (!dialog) return;
             const canvasViewport = document.getElementById('scoring-board-viewport');
             const vRect = canvasViewport ? canvasViewport.getBoundingClientRect() : rect;
             dialog.style.left = `${Math.min(vRect.width - 260, Math.max(10, clickX - 120))}px`;
-            dialog.style.top  = `${Math.min(vRect.height - 220, Math.max(10, clickY - 40))}px`;
+            dialog.style.top  = `${Math.min(vRect.height - 160, Math.max(10, clickY - 40))}px`;
             const s1 = document.getElementById('scoring-picker-step1');
             const s2 = document.getElementById('scoring-picker-step2');
             if (s1) s1.style.display = '';
             if (s2) s2.style.display = 'none';
+            // Both buttons visible (both have stones)
             const btnB = document.getElementById('btn-place-black-stone');
             const btnW = document.getElementById('btn-place-white-stone');
-            if (btnB) btnB.style.display = bAll > 0 ? '' : 'none';
-            if (btnW) btnW.style.display = wAll > 0 ? '' : 'none';
+            if (btnB) btnB.style.display = '';
+            if (btnW) btnW.style.display = '';
             dialog.style.display = 'block';
-            // In fallback, color buttons go to step 2 (sub-type picker)
-            if (bAll > 0 && wAll === 0 && showPickerStep2) showPickerStep2(1);
-            else if (wAll > 0 && bAll === 0 && showPickerStep2) showPickerStep2(2);
         }
     } else if (scoringState.interactionMode === 'mark-territory') {
         const currentVal = scoringState.board[row][col];
