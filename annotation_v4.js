@@ -15113,10 +15113,17 @@ function initScoringModal() {
                 // post-D&T committed resolution (the state the locked score was computed from);
                 // unlocked, it rebuilds the untouched SGF terminal (every stone, no marks).
                 const msg = document.getElementById('scoring-reset-confirm-msg');
+                const title = document.getElementById('scoring-reset-confirm-title');
                 if (msg) {
                     msg.textContent = scoringState.locked
-                        ? 'Reset Board? Return to the locked dead-stones & territory resolution — the locked Score is kept, post-lock counting edits are discarded.'
-                        : 'Reset Score? Clear all marked dead stones & territory — the board returns to the initial state of the last game move.';
+                        ? 'Reset Playground will: Return to the locked dead-stones & territory resolution — the locked Score is kept, post-lock counting edits are discarded.'
+                        : 'Reset D&T Scoring will: Clear all marked dead stones & territory — the board returns to the initial state of the last game move.';
+                }
+                if (title) {
+                    title.textContent = scoringState.locked ? 'Reset Playground Board?' : 'Reset D&T Scoring?';
+                }
+                if (btnConfirmReset) {
+                    btnConfirmReset.textContent = scoringState.locked ? 'Reset Board' : 'Reset D&T';
                 }
                 dialogReset.style.display = 'flex';
             } else {
