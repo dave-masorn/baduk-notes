@@ -15235,7 +15235,6 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadBlack.pop();
                         scoringState.bucketWhite.pop();
-                        scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
                     } else if (src.type === 'cap') {
                         scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
                     }
@@ -15246,7 +15245,6 @@ function initScoringModal() {
                     } else if (src.type === 'dead') {
                         scoringState.deadWhite.pop();
                         scoringState.bucketBlack.pop();
-                        scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     } else if (src.type === 'cap') {
                         scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
                     }
@@ -15291,7 +15289,6 @@ function initScoringModal() {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
-                scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             } else if (mode === 'replace' && (scoringState.whiteCaptures || 0) > 0) {
                 scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             } else if (scoringState.rearrangeBlack.length > 0) {
@@ -15314,7 +15311,6 @@ function initScoringModal() {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
-                scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             } else if (mode === 'replace' && (scoringState.blackCaptures || 0) > 0) {
                 scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             } else if (scoringState.rearrangeWhite.length > 0) {
@@ -16492,23 +16488,27 @@ function handleScoringBoardClick(e) {
         // The dead mark on this fill point is PRESERVED — marks never clear. The dead X stays
         // visible over the placed prisoner when "Show dead stones" is checked, and the SGF
         // Properties DD/MA counts stay intact. The dead stone remains a prisoner via the mark
-        // (not the capture counter). The prisoner accounting (dead pile pop + capture counter
-        // decrement) moves WITH the fill so the tray mirrors the counting ritual; while LOCKED
-        // that is purely cosmetic — the displayed score reads lockedSnapshot, never this.
+        // (not the capture counter). The prisoner accounting consumes ONE pool per fill: the
+        // dead pile first (the stone returns from the board), the capture counter only once the
+        // dead pile is empty — so Dead and Cap. stay separate pools and the tray drains one
+        // stone per placement. While LOCKED it is purely cosmetic — the displayed score reads
+        // lockedSnapshot, never this.
         if (terrColor === 1) {
             if (scoringState.deadBlack.length > 0) {
                 scoringState.deadBlack.pop();
                 const idx = scoringState.bucketWhite.indexOf('B');
                 if (idx !== -1) scoringState.bucketWhite.splice(idx, 1);
+            } else {
+                scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
             }
-            scoringState.whiteCaptures = Math.max(0, (scoringState.whiteCaptures || 0) - 1);
         } else {
             if (scoringState.deadWhite.length > 0) {
                 scoringState.deadWhite.pop();
                 const idx = scoringState.bucketBlack.indexOf('W');
                 if (idx !== -1) scoringState.bucketBlack.splice(idx, 1);
+            } else {
+                scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
             }
-            scoringState.blackCaptures = Math.max(0, (scoringState.blackCaptures || 0) - 1);
         }
         updateScoringUI();
         drawBoard();
