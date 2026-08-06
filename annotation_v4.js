@@ -5936,6 +5936,305 @@ function isPosInQuarter(cx, cy, cellSize, qrtNum) {
     return false;
 }
 
+// ============================================================
+// GO STONE RENDERER — STONE SET C (pure Canvas 2D, no external assets)
+// Added as a self-contained addition; Set A / Set B / image / solid-color
+// paths are untouched. Modeled on the actual materials rather than a
+// generic look:
+//
+//   WHITE = hamaguri (蛤 clamshell)
+//     - ivory/cream base with a warm, slightly translucent amber
+//       band near the rim (where the shell is thinnest)
+//     - fine concentric "growth ring" lines radiating from an
+//       off-center origin point, like a fingerprint
+//
+//   BLACK = slate (那智黒 nachiguro-style)
+//     - matte-glossy near-black with a subtle blue-green mineral
+//       tint, not a glassy "plastic bead" look
+//     - faint, sparse, roughly-parallel mineral grain lines
+//     - softer, larger, dimmer highlight than glass would have
+// ============================================================
+
+const _stoneTextureCache = new Map();
+
+function _mulberry32(seed) {
+    return function () {
+        seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+/**
+ * Hamaguri growth-ring texture. Draws many concentric, slightly
+ * irregular rings around an origin point offset outside the stone
+ * (mimicking the hinge point a real shell's rings radiate from).
+ * Irregularity comes from a per-point sine jitter so rings look
+ * hand-grown rather than mechanically perfect circles.
+ *
+ * @param {number} radius
+ * @param {number} ringCount   - number of growth rings (default 26)
+ * @param {number} jitter      - 0–2, how irregular the rings are (default 1)
+ */
+function _getHamaguriTexture(radius, ringCount = 26, jitter = 1) {
+    const key = `hamaguri_${Math.round(radius)}_${ringCount}_${jitter}`;
+    if (_stoneTextureCache.has(key)) return _stoneTextureCache.get(key);
+
+    const size = Math.ceil(radius * 2);
+    const tex = document.createElement('canvas');
+    tex.width = size;
+    tex.height = size;
+    const tctx = tex.getContext('2d');
+    const cx = size / 2, cy = size / 2;
+    const rand = _mulberry32(2024);
+
+    tctx.save();
+    tctx.beginPath();
+    tctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    tctx.clip();
+
+    // Origin point sits outside the stone, up and to one side — this is
+    // the "hinge" the growth rings appear to radiate from. Fixed angle
+    // so every stone in a set shares the same grain direction, like
+    // stones cut from the same shell region.
+    const originAngle = -2.3; // radians
+    const originDist = radius * 1.35;
+    const ox = cx + Math.cos(originAngle) * originDist;
+    const oy = cy + Math.sin(originAngle) * originDist;
+
+    // Rings span from just past the origin-side edge to well past the
+    // far edge, so the visible portion (inside the clip) always has
+    // several rings crossing it regardless of stone size.
+    const minR = originDist - radius * 0.3;
+    const maxR = originDist + radius * 2.4;
+
+    for (let i = 0; i < ringCount; i++) {
+        const t = i / ringCount;
+        const ringR = minR + t * (maxR - minR);
+        const isLight = i % 3 !== 0; // roughly 2:1 light:shadow rings
+        const alpha = (isLight ? 0.05 + rand() * 0.06 : 0.06 + rand() * 0.08);
+        tctx.strokeStyle = isLight
+            ? `rgba(255,252,240,${alpha})`   // pale cream ring
+            : `rgba(150,124,80,${alpha})`;   // warm shadow ring
+        tctx.lineWidth = 0.6 + rand() * 1.1;
+
+        // Build the ring as a jittered polyline rather than a perfect
+        // arc — small radius wobble per point gives the hand-grown,
+        // slightly uneven look real shell rings have.
+        const points = 40;
+        tctx.beginPath();
+        for (let p = 0; p <= points; p++) {
+            const angle = (p / points) * Math.PI * 2;
+            const wobble = Math.sin(angle * 5 + i * 1.7) * radius * 0.015 * jitter
+                         + (rand() - 0.5) * radius * 0.01 * jitter;
+            const r = ringR + wobble;
+            const px = ox + Math.cos(angle) * r;
+            const py = oy + Math.sin(angle) * r;
+            if (p === 0) tctx.moveTo(px, py); else tctx.lineTo(px, py);
+        }
+        tctx.stroke();
+    }
+
+    tctx.restore();
+    _stoneTextureCache.set(key, tex);
+    return tex;
+}
+
+/**
+ * Slate mineral-grain texture: sparse, faint, roughly parallel
+ * streaks (not radial, not fibrous) — real slate's grain is subtle
+ * banding from sediment layers, easy to overdo, so keep it quiet.
+ *
+ * @param {number} radius
+ * @param {number} grainCount  - default 10
+ */
+function _getSlateTexture(radius, grainCount = 10) {
+    const key = `slate_${Math.round(radius)}_${grainCount}`;
+    if (_stoneTextureCache.has(key)) return _stoneTextureCache.get(key);
+
+    const size = Math.ceil(radius * 2);
+    const tex = document.createElement('canvas');
+    tex.width = size;
+    tex.height = size;
+    const tctx = tex.getContext('2d');
+    const cx = size / 2, cy = size / 2;
+    const rand = _mulberry32(9911);
+
+    tctx.save();
+    tctx.beginPath();
+    tctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    tctx.clip();
+
+    // Consistent grain direction (sediment banding runs one way
+    // through a given piece of slate), with mild per-line jitter.
+    const grainAngle = 0.35; // radians, roughly diagonal
+    for (let i = 0; i < grainCount; i++) {
+        const offset = (rand() - 0.5) * radius * 2.2;
+        const perpX = Math.cos(grainAngle + Math.PI / 2) * offset;
+        const perpY = Math.sin(grainAngle + Math.PI / 2) * offset;
+        const len = radius * (1.4 + rand() * 0.8);
+        const sx = cx + perpX - Math.cos(grainAngle) * len / 2;
+        const sy = cy + perpY - Math.sin(grainAngle) * len / 2;
+        const ex = cx + perpX + Math.cos(grainAngle) * len / 2;
+        const ey = cy + perpY + Math.sin(grainAngle) * len / 2;
+        const midBend = (rand() - 0.5) * radius * 0.15;
+
+        const lighter = rand() > 0.5;
+        tctx.strokeStyle = lighter
+            ? `rgba(120,135,140,${0.025 + rand() * 0.03})`  // faint blue-grey mineral streak
+            : `rgba(0,0,0,${0.05 + rand() * 0.05})`;        // faint dark streak
+        tctx.lineWidth = 0.5 + rand() * 1.0;
+        tctx.beginPath();
+        tctx.moveTo(sx, sy);
+        tctx.quadraticCurveTo(cx + perpX + midBend, cy + perpY + midBend, ex, ey);
+        tctx.stroke();
+    }
+
+    tctx.restore();
+    _stoneTextureCache.set(key, tex);
+    return tex;
+}
+
+/**
+ * Draws one Go stone with 3D shading + true-to-material texture.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} cx, cy   - center coordinates
+ * @param {number} radius   - stone radius in px
+ * @param {'B'|'W'} player  - 'B' = slate, anything else = hamaguri
+ * @param {object} [options]
+ * @param {number} [options.ringCount=26]        - hamaguri ring density
+ * @param {number} [options.ringJitter=1]        - hamaguri ring irregularity
+ * @param {number} [options.grainCount=10]       - slate grain density
+ * @param {number} [options.specularStrength=1]  - highlight brightness multiplier
+ */
+function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
+    const ringCount = options.ringCount ?? 26;
+    const ringJitter = options.ringJitter ?? 1;
+    const grainCount = options.grainCount ?? 10;
+    const specStrength = options.specularStrength ?? 1;
+
+    ctx.save();
+
+    // ---- Drop shadow ----
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = Math.max(3, radius * 0.28);
+    ctx.shadowOffsetX = Math.max(2, radius * 0.14);
+    ctx.shadowOffsetY = Math.max(2, radius * 0.18);
+
+    if (player === 'B') {
+        // ============ SLATE — matte-glossy black with blue-green tint ============
+        const grad = ctx.createRadialGradient(
+            cx - radius * 0.3, cy - radius * 0.35, radius * 0.05,
+            cx - radius * 0.05, cy - radius * 0.05, radius * 1.1
+        );
+        grad.addColorStop(0.00, '#4b565a'); // faint blue-green core, not neutral grey
+        grad.addColorStop(0.2, '#2a3336');
+        grad.addColorStop(0.55, '#12171a');
+        grad.addColorStop(1.00, '#020303');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+    } else {
+        // ============ HAMAGURI — ivory shell with warm translucent rim ============
+        const grad = ctx.createRadialGradient(
+            cx - radius * 0.3, cy - radius * 0.35, radius * 0.05,
+            cx - radius * 0.05, cy - radius * 0.05, radius * 1.15
+        );
+        grad.addColorStop(0.00, '#fffdf6');
+        grad.addColorStop(0.35, '#f8f0da');
+        grad.addColorStop(0.7, '#efdfbb');
+        grad.addColorStop(1.00, '#dcc593'); // warm amber, not blue-grey
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    ctx.shadowColor = 'transparent';
+
+    // ---- Material texture ----
+    if (player === 'B') {
+        const tex = _getSlateTexture(radius, grainCount);
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(tex, cx - radius, cy - radius);
+        ctx.globalAlpha = 1.0;
+    } else {
+        const tex = _getHamaguriTexture(radius, ringCount, ringJitter);
+        ctx.globalAlpha = 0.9;
+        ctx.drawImage(tex, cx - radius, cy - radius);
+        ctx.globalAlpha = 1.0;
+
+        // Thin warm translucent band just inside the rim — the visual
+        // cue of light passing through the thinnest part of the shell.
+        const edgeGrad = ctx.createRadialGradient(cx, cy, radius * 0.72, cx, cy, radius);
+        edgeGrad.addColorStop(0, 'rgba(200,160,90,0)');
+        edgeGrad.addColorStop(0.75, 'rgba(200,160,90,0.12)');
+        edgeGrad.addColorStop(1, 'rgba(160,120,60,0.22)');
+        ctx.fillStyle = edgeGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // ---- Specular highlight ----
+    // Hamaguri: soft polished-shell sheen, moderate size, warm-neutral.
+    // Slate: larger but dimmer/softer highlight — stone, not glass.
+    const glintX = player === 'B' ? cx - radius * 0.28 : cx + radius * 0.1;
+    const glintY = player === 'B' ? cy - radius * 0.3 : cy + radius * 0.02;
+    const glintR = radius * (player === 'B' ? 0.3 : 0.2);
+
+    const glintGrad = ctx.createRadialGradient(glintX, glintY, 0, glintX, glintY, glintR);
+    const glintPeak = (player === 'B' ? 0.32 : 0.75) * specStrength;
+    glintGrad.addColorStop(0, `rgba(255,255,255,${glintPeak})`);
+    glintGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glintGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ---- Thin rim stroke (hamaguri only) for edge definition ----
+    if (player !== 'B') {
+        ctx.strokeStyle = 'rgba(150,120,70,0.4)';
+        ctx.lineWidth = Math.max(0.5, radius * 0.02);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius - ctx.lineWidth / 2, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+/**
+ * Deterministically derives per-stone texture variant params from board
+ * position, so each stone gets a distinct "shell"/"slate" look that stays
+ * STABLE across redraws (no reroll/flicker on hover, undo, export preview,
+ * etc.) — same (row, col, player) always yields the same variant.
+ *
+ * Seeded by POSITION (row, col), not by placement: capturing and replaying
+ * a stone on the same point keeps the same grain pattern.
+ *
+ * Specular is capped at 0–0.5 (50%) as requested: real hamaguri/slate
+ * finishes are gentle, and un-capped randomness occasionally rolled a
+ * near-glass glint that looked out of place next to the matte ones.
+ */
+function getStoneVariant(row, col, player) {
+    // Distinct seed space per player so black/white don't share patterns
+    // even when a black and white stone happen to occupy mirrored spots
+    // across different games/positions.
+    const seed = (row * 19 + col) * 137 + (player === 'B' ? 911 : 313);
+    const rand = _mulberry32(seed);
+    return {
+        ringCount: 14 + Math.floor(rand() * 24),   // 14–38, hamaguri only
+        ringJitter: 0.6 + rand() * 1.0,             // 0.6–1.6, hamaguri only
+        grainCount: 4 + Math.floor(rand() * 14),    // 4–18, slate only
+        specularStrength: rand() * 0.5,             // 0–0.5 HARD CAP (50%)
+    };
+}
+
 // Helper: Draw single cell elements (stones, annotations, labels)
 function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, clipRect = null, bgColor = '#DCB35C', fullBoardRect = null, r = null, c = null) {
     const stoneRadius = cellSize * 0.47;
@@ -6385,7 +6684,15 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
 
         const useGradient = (style && style.stoneSet === 'A' && cell.player);
         const useGradientB = (style && style.stoneSet === 'B' && cell.player);
-        if (useGradient || useGradientB) {
+        const useGradientC = (style && style.stoneSet === 'C' && cell.player);
+        if (useGradientC) {
+            targetCtx.save();
+            // Set C: material renderer. drawGoStone() sets its own shadow
+            // internally, so this path is fully self-contained.
+            const variant = getStoneVariant(r, c, cell.player);
+            drawGoStone(targetCtx, cx, cy, currentStoneRadius, cell.player, variant);
+            targetCtx.restore();
+        } else if (useGradient || useGradientB) {
             targetCtx.save();
             // Stronger drop shadow matching MultiGo
             targetCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
