@@ -3570,6 +3570,14 @@ function setupEventListeners() {
 
     // SGF Editing Events
     window.addEventListener('beforeunload', (e) => {
+        // Manual Scoring Modal: warn when the scoring board carries unsaved changes — post-Save
+        // Board playground edits, or first-time marking work — that were never committed with
+        // Save Board. On refresh these changes are discarded and the last Saved Board returns.
+        if (_scoringDirty) {
+            e.preventDefault();
+            e.returnValue = 'You have unsaved changes on the scoring board. Please press "Save Board" to keep them before refreshing — otherwise the last Saved Board will be restored.';
+            return e.returnValue;
+        }
         // Rec/Study mode: warn about unsaved changes, do NOT auto-save
         if (state.activeStudyId && state.isSgfDirty) {
             e.preventDefault();
@@ -12477,6 +12485,7 @@ function loadSGF(sgfString) {
     // drop the lock state so the reopened modal starts unlocked. The study-resume path re-applies
     // its persisted session through restoreScoringFromSavedData after this, so nothing is lost.
     _savedBoardSnapshot = null;
+    _lastSavedSession = null;
     scoringState.locked = false;
     scoringState.lockedSnapshot = null;
     scoringState.lockBoundaryIndex = 0;
@@ -15053,6 +15062,11 @@ document.addEventListener('DOMContentLoaded', () => {
    ========================================================================== */
 
 _scoringPersistData = null;
+// The full persisted snapshot captured at the last "Save Board". Once a Save exists this (and
+// ONLY this) is what survives modal close / refresh — unsaved post-Save edits (playground
+// re-arranges, Reset Board/Score) are ephemeral display work that never leaks into persistence,
+// so reopening always lands on the last Saved Board in the frozen 'Board Saved ✓' state.
+_lastSavedSession = null;
 
 window.scoringState = {
     active: false,
@@ -15069,6 +15083,7 @@ window.scoringState = {
     ruleMode: 'japanese',
     interactionMode: 'mark',
     showTerritory: true,
+    showTerritoryCounts: false,
     showDead: true,
     showCoords: true,
     komi: DEFAULT_KOMI,
@@ -15432,6 +15447,13 @@ function initScoringModal() {
     if (optTerr) {
         optTerr.addEventListener('change', (e) => {
             scoringState.showTerritory = e.target.checked;
+            drawBoard();
+        });
+    }
+    const optTerrCounts = document.getElementById('scoring-opt-territory-counts');
+    if (optTerrCounts) {
+        optTerrCounts.addEventListener('change', (e) => {
+            scoringState.showTerritoryCounts = e.target.checked;
             drawBoard();
         });
     }
@@ -16029,6 +16051,14 @@ function resetScoringBoardFromState(options) {
 // the savedBoard playground (and/or the resolution) is durable across modal closes and page
 // reloads. Mirrors the shape buildScoringSessionSnapshot produces for Save Board.
 function persistScoringSessionData() {
+    // Persistence rule: once a Save Board exists, the persisted session is ALWAYS the last saved
+    // state — a Reset Board / Reset Score clears only the live display and stays discardable
+    // until the next Save Board finalizes it. Only before any Save exists does a reset write the
+    // live (pristine) session to persistence, so a reopen doesn't resurrect the cleared state.
+    if (_scoringHasSaved && _lastSavedSession) {
+        _scoringPersistData = _lastSavedSession;
+        return;
+    }
     _scoringPersistData = buildScoringSessionSnapshot();
     if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
@@ -16133,12 +16163,21 @@ function openScoringModal(savedData) {
 
     if (savedData) {
         restoreScoringFromSavedData(savedData);
+        // Persistence rule: once a Save Board exists, the persisted session is the last SAVED
+        // state, and the modal ALWAYS reopens frozen in the 'Board Saved ✓' presentation — never
+        // in an editable state, and never carrying a stale dirty flag from an unsaved edit. Only
+        // before any Save exists (the very first time) does the modal open in the normal
+        // first-entry flow (fresh open stays frozen, Edit-first).
+        const hasSaved = !!(savedData._scoringHasSaved || savedData.savedBoard);
         if (savedData._scoringDirty != null) {
-            _scoringDirty = savedData._scoringDirty;
-            _scoringHasSaved = savedData._scoringHasSaved || false;
+            _scoringDirty = hasSaved ? false : savedData._scoringDirty;
+            _scoringHasSaved = hasSaved;
             updateScoringSaveButton();
         }
-        setScoringFrozen(savedData.frozen !== false);
+        // Restored saved sessions become the in-memory last-saved reference for this page load
+        // (fresh loads pull rec.scoringData), so later unsaved edits are discarded against it.
+        if (hasSaved) _lastSavedSession = savedData;
+        setScoringFrozen(hasSaved || savedData.frozen !== false);
     } else {
         let initialRule = ((state.gameInfo && (state.gameInfo.rules || state.gameInfo.RU)) || (state.sgfMetadata && state.sgfMetadata.ru) || 'japanese').toLowerCase();
         if (initialRule.includes('chinese') || initialRule.includes('area')) {
@@ -16247,7 +16286,11 @@ function copySnapshotShape(snap) {
 
 function closeScoringModal() {
     if (scoringState.active) {
-        _scoringPersistData = buildScoringSessionSnapshot();
+        // Persistence rule: once a Save Board exists, the persisted session is ALWAYS the last
+        // saved state — unsaved post-Save edits (playground re-arranges, Reset Board/Score) are
+        // discardable display work and must not survive close/reopen or a refresh. Only before
+        // any Save exists (the first-time flow) does close persist the live session in memory.
+        _scoringPersistData = (_scoringHasSaved && _lastSavedSession) ? _lastSavedSession : buildScoringSessionSnapshot();
     }
     scoringState.active = false;
     const overlay = document.getElementById('scoring-modal-overlay');
@@ -16341,6 +16384,12 @@ function saveScoringBoard() {
     _scoringHasSaved = true;
     setScoringFrozen(true);
 
+    // The last saved session: the exact snapshot (committed resolution + savedBoard playground +
+    // frozen/clean flags) captured at Save Board time. This is the persistence source of truth:
+    // until the next Save Board, every modal close / refresh restores THIS state and discards
+    // any unsaved post-Save edits (Reset Board/Score, playground re-arranges).
+    _lastSavedSession = buildScoringSessionSnapshot();
+
     if (state.activeStudyId && typeof StudyRecordDB !== 'undefined') {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
         if (rec) {
@@ -16348,7 +16397,7 @@ function saveScoringBoard() {
             // captures from lockedSnapshot while locked — the source the blue-panel Run reads)
             // PLUS the savedBoard playground the modal displays on reopen. DD/MA/TB/TW are
             // derived from the committed fields by the shared converter.
-            rec.scoringData = buildScoringSessionSnapshot();
+            rec.scoringData = _lastSavedSession;
             StudyRecordDB.saveRecord(rec);
         }
     }
@@ -16753,6 +16802,111 @@ function toggleSgfPropertiesPanel(forceState) {
     }
 }
 
+// VACATED-TERRITORY: while LOCKED a re-arranged (lifted) stone's vacated point draws its own
+// territory marker when it sits INSIDE its own marked territory — an empty point bounded by its
+// color's territory is territory, so lifting such a stone must reveal the square underneath (the
+// counting ritual moves stones, it never erases territory). The frozen overlay scores the vacated
+// point as 0 (it was OCCUPIED at lock), so BFS the live-empty region from each vacated point over
+// the COMMITTED resolution: if every cell in the region is color X's territory (or a lifted X
+// stone / transparent dead X point), the hole is X. A vacated point that connects to dame or enemy
+// territory gets nothing, and a hole fully enclosed by X STONES (not X territory) also gets
+// nothing. Returns a 19x19 grid: 0 = not a vacated point, >0 = revealed territory color, -1 =
+// vacated point with NO square. Shared by the territory overlay and the Replace-mode placement
+// check so the two can never diverge.
+function computeVacatedTerritory(src, liveBoard, locScores, areaScores) {
+    const vacatedTerritory = Array.from({ length: 19 }, () => Array(19).fill(0));
+    if (!(scoringState.showTerritory && window.GoScorer && (locScores || areaScores) && scoringState.locked && scoringState.lockedSnapshot)) {
+        return vacatedTerritory;
+    }
+    const terrBoard = src.board;
+    const terrMarkedDead = src.markedDead;
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            if (terrBoard[r][c] === 0) continue;         // not occupied at lock
+            if (liveBoard[r][c] !== 0) continue;         // stone still there (not lifted)
+            if (terrMarkedDead[r][c]) continue;          // dead X is not a re-arrange pickup
+            const color = terrBoard[r][c];
+            const seen = Array.from({ length: 19 }, () => Array(19).fill(false));
+            const queue = [[r, c]];
+            seen[r][c] = true;
+            let ok = true, hasEmpty = false;
+            for (let qi = 0; qi < queue.length && ok; qi++) {
+                const [y, x] = queue[qi];
+                let terrVal;
+                if (terrMarkedDead[y][x]) {
+                    terrVal = locScores ? locScores[y][x].isTerritoryFor : areaScores[y][x];
+                } else if (terrBoard[y][x] === 0) {
+                    hasEmpty = true;
+                    terrVal = locScores ? locScores[y][x].isTerritoryFor : areaScores[y][x];
+                } else {
+                    terrVal = terrBoard[y][x];
+                }
+                if (terrVal !== color) { ok = false; break; }
+                const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+                for (let d = 0; d < 4; d++) {
+                    const ny = y + dirs[d][0], nx = x + dirs[d][1];
+                    if (ny < 0 || nx < 0 || ny >= 19 || nx >= 19) continue;
+                    if (seen[ny][nx] || liveBoard[ny][nx] !== 0) continue;
+                    seen[ny][nx] = true;
+                    queue.push([ny, nx]);
+                }
+            }
+            if (ok && hasEmpty) vacatedTerritory[r][c] = color;
+            else vacatedTerritory[r][c] = -1;
+        }
+    }
+    return vacatedTerritory;
+}
+
+// The territory color the overlay DISPLAYS at a point — the Replace-mode placement truth.
+// ALL and ONLY the intersections marked as territory accept a prisoner, and each accepts only
+// the stone of ITS marked color. Explicit manual marks win over the auto-derived score; while
+// LOCKED both come from the committed lockedSnapshot (exactly like the overlay), and a
+// re-arranged/lifted point inside its own territory keeps reading as that territory. Dame/seki
+// reads 0 and stays unplaceable.
+function scoringTerritoryColorForPoint(r, c) {
+    const src = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState;
+    const manual = src.manualTerritory || scoringState.manualTerritory;
+    if (manual && manual[r] && manual[r][c] > 0) return manual[r][c];
+
+    const deadInfo = src.deadStonesInfo || scoringState.deadStonesInfo;
+    const stonesWithDead = src.board.map((row, ri) =>
+        row.map((val, ci) => {
+            if (src.markedDead && src.markedDead[ri] && src.markedDead[ri][ci] && val === 0) {
+                return (deadInfo && deadInfo[ri] && deadInfo[ri][ci]) || 0;
+            }
+            return val;
+        })
+    );
+    let locScores = null;
+    let areaScores = null;
+    if (window.GoScorer) {
+        try {
+            if (scoringState.ruleMode === 'japanese') {
+                locScores = window.GoScorer.territoryScoring(stonesWithDead, src.markedDead, false);
+            } else {
+                areaScores = window.GoScorer.areaScoring(stonesWithDead, src.markedDead);
+            }
+        } catch (e) { console.error("GoScorer error:", e); }
+    }
+
+    // Vacated lifted-stone points mirror the overlay: a revealed square is placeable, a
+    // squareless vacated point (adjacent to dame / enclosed by stones) is not.
+    if (scoringState.showTerritory && window.GoScorer && (locScores || areaScores) && scoringState.locked && scoringState.lockedSnapshot) {
+        const vacated = computeVacatedTerritory(src, scoringState.board, locScores, areaScores)[r][c];
+        if (vacated > 0) return vacated;
+        if (vacated < 0) return 0;
+    }
+
+    if (scoringState.ruleMode === 'japanese' && locScores && locScores[r] && locScores[r][c]) {
+        return locScores[r][c].isTerritoryFor || 0;
+    }
+    if (scoringState.ruleMode === 'chinese' && areaScores && areaScores[r] && areaScores[r][c]) {
+        return areaScores[r][c] || 0;
+    }
+    return 0;
+}
+
 function handleScoringBoardClick(e) {
     if (scoringState.frozen) return;
     const canvas = e.currentTarget;
@@ -16886,34 +17040,14 @@ function handleScoringBoardClick(e) {
         }
         // A dead-marked cell behaves EXACTLY like any other territory point here: the dead
         // stone was lifted, so the intersection reads as territory (the freed point) and a
-        // prisoner of that territory's color may be placed on it. Only intersections whose
-        // territory is NOT defined (dame) are prohibited below.
-        const stonesWithDead = scoringState.board.map((r, ri) =>
-            r.map((val, ci) => {
-                if (scoringState.markedDead[ri][ci] && val === 0) {
-                    return scoringState.deadStonesInfo[ri][ci] || 0;
-                }
-                return val;
-            })
-        );
-        let terrColor = 0;
-        if (window.GoScorer) {
-            if (scoringState.ruleMode === 'japanese') {
-                try {
-                    const locScores = window.GoScorer.territoryScoring(stonesWithDead, scoringState.markedDead, false);
-                    if (locScores && locScores[row] && locScores[row][col]) {
-                        terrColor = locScores[row][col].isTerritoryFor || 0;
-                    }
-                } catch(e) { console.error("GoScorer error:", e); }
-            } else {
-                try {
-                    const areaScores = window.GoScorer.areaScoring(stonesWithDead, scoringState.markedDead);
-                    if (areaScores) {
-                        terrColor = areaScores[row][col] || 0;
-                    }
-                } catch(e) { console.error("GoScorer error:", e); }
-            }
-        }
+        // prisoner of that territory's color may be placed on it. The placement truth is the
+        // DISPLAYED territory resolution — ALL and ONLY the intersections the overlay marks as
+        // territory, each with ONLY the stone of its marked color. scoringTerritoryColorForPoint
+        // reads the same committed source + precedence the overlay uses (explicit manual marks
+        // win; frozen lockedSnapshot while locked; vacated lifted-stone points inside their own
+        // territory stay placeable). Only intersections whose territory is NOT defined (dame /
+        // seki) read 0 and are prohibited below.
+        const terrColor = scoringTerritoryColorForPoint(row, col);
         if (terrColor === 0) {
             // Dame / seki — territory not defined for this intersection. The physical count
             // never fills neutral ground (a dame fill would cost only the prisoner's side and
@@ -17216,8 +17350,14 @@ function renderScoringBoardToCtx(ctx) {
         }
     }
 
+    // VACATED-TERRITORY: while LOCKED a re-arranged (lifted) stone's vacated point draws its
+    // own territory marker when it sits INSIDE its own marked territory — an empty point
+    // bounded by its color's territory is territory, so lifting such a stone must reveal the
+    // square underneath (the counting ritual moves stones, it never erases territory).
+    // computeVacatedTerritory is shared with the Replace-mode placement check.
+    const vacatedTerritory = computeVacatedTerritory(terrSrc, scoringState.board, locScores, areaScores);
 
-    // 6. Render Stones
+
     for (let r = 0; r < 19; r++) {
         for (let c = 0; c < 19; c++) {
             const val = scoringState.board[r][c];
@@ -17289,14 +17429,84 @@ function renderScoringBoardToCtx(ctx) {
                 }
                 if (scoringState.board[r][c] === 0) {
                     let terrColor = null; // 1 = Black, 2 = White
-
-                    if (scoringState.ruleMode === 'japanese' && locScores) {
+                    const vacated = vacatedTerritory[r][c];
+                    if (vacated !== 0) {
+                        // A re-arranged (lifted) stone's point: its own territory marker ONLY
+                        // when the vacated point sits inside its own marked territory (see the
+                        // VACATED-TERRITORY pass above) — never a blind area-score override.
+                        terrColor = vacated > 0 ? vacated : null;
+                    } else if (scoringState.ruleMode === 'japanese' && locScores) {
                         terrColor = locScores[r][c].isTerritoryFor;
                     } else if (scoringState.ruleMode === 'chinese' && areaScores) {
                         terrColor = areaScores[r][c];
                     }
 
                     renderTerritoryRect(r, c, terrColor);
+                }
+            }
+        }
+
+        // TERRITORY GROUP COUNTS ("w/#"): show each 4-connected territory group's point count at
+        // its centroid. Groups are built from the exact display-truth grid (manual marks win,
+        // lockedSnapshot source while locked, vacated lifted points included), so the count can
+        // never disagree with the squares actually drawn. Centroid = mean member coordinate:
+        // odd-sized groups center on a stone point, even-sized groups on the grid-line crossing.
+        // Text size scales with group size; text color reflects the territory color.
+        if (scoringState.showTerritoryCounts) {
+            const terrGrid = Array.from({ length: 19 }, () => Array(19).fill(0));
+            for (let r = 0; r < 19; r++) {
+                for (let c = 0; c < 19; c++) {
+                    if (scoringState.board[r][c] !== 0) continue;
+                    if (terrManualTerritory[r][c] > 0) { terrGrid[r][c] = terrManualTerritory[r][c]; continue; }
+                    const vacated = vacatedTerritory[r][c];
+                    if (vacated !== 0) { terrGrid[r][c] = vacated > 0 ? vacated : 0; continue; }
+                    if (scoringState.ruleMode === 'japanese' && locScores) {
+                        terrGrid[r][c] = locScores[r][c].isTerritoryFor || 0;
+                    } else if (scoringState.ruleMode === 'chinese' && areaScores) {
+                        terrGrid[r][c] = areaScores[r][c] || 0;
+                    }
+                }
+            }
+            const groupSeen = Array.from({ length: 19 }, () => Array(19).fill(false));
+            for (let r = 0; r < 19; r++) {
+                for (let c = 0; c < 19; c++) {
+                    const color = terrGrid[r][c];
+                    if (color === 0 || groupSeen[r][c]) continue;
+                    const members = [[r, c]];
+                    groupSeen[r][c] = true;
+                    for (let mi = 0; mi < members.length; mi++) {
+                        const [y, x] = members[mi];
+                        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+                        for (let d = 0; d < 4; d++) {
+                            const ny = y + dirs[d][0], nx = x + dirs[d][1];
+                            if (ny < 0 || nx < 0 || ny >= 19 || nx >= 19) continue;
+                            if (groupSeen[ny][nx] || terrGrid[ny][nx] !== color) continue;
+                            groupSeen[ny][nx] = true;
+                            members.push([ny, nx]);
+                        }
+                    }
+                    const count = members.length;
+                    let fr = 0, fc = 0;
+                    for (const [y, x] of members) { fr += y; fc += x; }
+                    fr /= count; fc /= count;
+                    const cx = PADDING + fc * CELL_SIZE;
+                    const cy = PADDING + fr * CELL_SIZE;
+                    ctx.save();
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    const fontPx = Math.min(CELL_SIZE * 0.9, 9 + count * 1.4);
+                    ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
+                    const fillCol = color === 1 ? '#111827' : '#ffffff';
+                    // Contrast halo = a soft shadow at the 0° point (directly behind the text),
+                    // never a stroked border around the digits.
+                    const shadowCol = color === 1 ? 'rgba(255, 255, 255, 0.9)' : 'rgba(17, 24, 39, 0.9)';
+                    ctx.shadowOffsetX = 0;
+                    ctx.shadowOffsetY = 0;
+                    ctx.shadowBlur = Math.max(2, fontPx / 5);
+                    ctx.shadowColor = shadowCol;
+                    ctx.fillStyle = fillCol;
+                    ctx.fillText(String(count), cx, cy);
+                    ctx.restore();
                 }
             }
         }

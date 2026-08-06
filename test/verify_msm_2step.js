@@ -142,6 +142,13 @@ async function main() {
         }
         return null;
       },
+      // Find a live stone of the given color that is NOT at the excluded coordinate.
+      findStoneNot(color, excl) {
+        for (let r = 0; r < 19; r++) for (let c = 0; c < 19; c++) {
+          if (window.scoringState.board[r][c] === color && !(excl && excl.r === r && excl.c === c)) return { r, c };
+        }
+        return null;
+      },
       findEmpty() {
         for (let r = 0; r < 19; r++) for (let c = 0; c < 19; c++) {
           if (window.scoringState.board[r][c] === 0) return { r, c };
@@ -351,7 +358,7 @@ async function main() {
     check('S5 Reset Board restores committed board (stone back)', boardCell === 1);
     check('S5 Reset Board keeps the lock engaged', s.locked === true);
     check('S5 Reset Board cleared the savedBoard playground', s.saved === null);
-    check('S5 Reset Board dropped savedBoard from rec.scoringData', !sd || !sd.savedBoard);
+    check('S5 Reset Board keeps last Saved Board in rec.scoringData', !!sd && !!sd.savedBoard && !!sd.savedBoard.board);
     check('S5 lock still shows Start D&T', lock && lock.text === 'Start D&T');
   }
 
@@ -389,8 +396,8 @@ async function main() {
     check('S6 Reset Score clears all marks', marks === 0);
     check('S6 Reset Score rebuilds the full terminal board', stones > 0);
     check('S6 Reset Score leaves unlocked', s.locked === false);
-    check('S6 Reset Score persisted pristine session', !!sd && sd.markedDead && sd.markedDead.every(row => row.every(v => !v)));
-    check('S6 Reset Score persisted without savedBoard', !sd || !sd.savedBoard);
+    check('S6 Reset Score keeps the last Saved Board (marks NOT reset in persistence)', !!sd && !!sd.savedBoard && !!sd.savedBoard.board && !!sd.markedDead && sd.markedDead.some(row => row.some(v => v)));
+    check('S6 Reset Score keeps savedBoard intact in rec.scoringData', !!sd && !!sd.savedBoard);
   }
 
   // ── S7: pre-engaged lock (file markup) does NOT rewrite the SGF ───────────
@@ -445,6 +452,88 @@ async function main() {
     check('S9 unlock after save clears savedBoard', s.saved === null);
     check('S9 unlock restores unlocked stage', s.locked === false);
     check('S9 unlock retains the pre-lock marks', marksAfter === marksBeforeUnlock);
+  }
+
+  // ── S10: unsaved post-Save edit → close → reopen restores the last Saved Board ──
+  await evalIn(page, (sgf) => __h.loadScenario(sgf, 's10'), fixture);
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  const deadTarget = await evalIn(page, () => __h.findStone(1));
+  await clickStone(page, deadTarget); // mark its connected group dead → pre-lock work
+  // A live black stone OUTSIDE the marked group (the group was lifted by the click, so any
+  // remaining black stone is a safe, never-marked target for the unsaved-edit probe).
+  const editTarget = await evalIn(page, (p) => __h.findStoneNot(1, p), deadTarget);
+  await evalIn(page, () => __h.clickBtn('btn-scoring-lock'));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-save'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+  {
+    const s = await evalIn(page, () => __h.state());
+    const savedCell = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+    check('S10 baseline saved playground holds the untouched stone', savedCell !== 0 && s.frozen === true);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, (p) => __h.removeStoneAt(p.r, p.c), editTarget); // unsaved edit
+  const s10After = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+  await evalIn(page, () => __h.close());
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const s = await evalIn(page, () => __h.state());
+    const save = await evalIn(page, () => __h.btn('btn-scoring-save'));
+    const cell = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+    check('S10 unsaved edit removed the stone live', s10After === 0);
+    check('S10 close→reopen discards the unsaved edit (stone restored)', cell !== 0);
+    check('S10 reopen lands frozen Board Saved ✓', s.frozen === true && save && save.text === 'Board Saved ✓');
+  }
+
+  // ── S11: Reset Board → unsaved change → close → reopen keeps ONLY the last Saved Board ──
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-reset'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-confirm-reset'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+  const s11Before = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+  await evalIn(page, (p) => __h.removeStoneAt(p.r, p.c), editTarget); // unsaved post-reset change
+  const s11After = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+  await evalIn(page, () => __h.close());
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const s = await evalIn(page, () => __h.state());
+    const save = await evalIn(page, () => __h.btn('btn-scoring-save'));
+    const cell = await evalIn(page, (p) => __h.state().board[p.r][p.c], editTarget);
+    check('S11 Reset Board restores the committed board', s11Before !== 0);
+    check('S11 unsaved post-reset change removed the stone live', s11After === 0);
+    check('S11 close→reopen keeps ONLY the last Saved Board (stone restored)', cell !== 0);
+    check('S11 reopen lands frozen Board Saved ✓', s.frozen === true && save && save.text === 'Board Saved ✓');
+  }
+
+  // ── S12: beforeunload warns only when the scoring board has unsaved changes ──
+  const warnProbe = () => evalIn(page, () => {
+    window.state.isSgfDirty = false; // isolate the scoring warning from the SGF-dirty warning
+    const ev = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented, returnValue: ev.returnValue };
+  });
+  {
+    const p = await warnProbe();
+    check('S12 clean (reopened saved) scoring board does NOT warn on refresh', p.prevented === false);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const p = await warnProbe();
+    check('S12 unsaved scoring edit triggers the beforeunload warning', p.prevented === true);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-save'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+  {
+    const p = await warnProbe();
+    check('S12 Save Board clears the unsaved-changes warning', p.prevented === false);
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────

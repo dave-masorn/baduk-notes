@@ -78,6 +78,7 @@ async function main() {
     const board = empty();
     for (let i = 0; i <= 8; i++) { board[0][i] = 1; board[8][i] = 1; board[i][0] = 1; board[i][8] = 1; } // black outer ring
     for (const [r, c] of cage) board[r][c] = 2; // white cage
+    board[4][4] = 2; // a white stone sitting INSIDE the enclosed white territory
     scoringState.board = board;
     scoringState.markedDead = empty();
     scoringState.deadStonesInfo = empty();
@@ -88,6 +89,11 @@ async function main() {
     scoringState.locked = false;
     scoringState.lockedSnapshot = null;
     scoringState.frozen = false;
+    const st = state.scoringBoardStyle || JSON.parse(JSON.stringify(state.initialBoardStyle));
+    st.board = st.board || {};
+    st.board.useColor = true; // solid board so territory-square pixels are identical everywhere
+    state.scoringBoardStyle = st;
+    window.scoringBoardBgImage = null;
     window.drawBoard();
   }, { cage: CAGE });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 250)));
@@ -153,6 +159,15 @@ async function main() {
   check('restore: overlay returns to the original pixels (deterministic redraw)',
     SAMPLES.every((_, i) => samePx(pRest[i], pBase[i])));
 
+  const pStone44 = await probe(4, 4);
+  check('unlocked: interior stone renders as a stone (no square under it)',
+    pStone44[0] > 150 && !samePx(pStone44, pBase[0]), JSON.stringify({ pStone44, sq: pBase[0] }));
+  await setCell(4, 4, 0); // lift it (unlocked → live recompute)
+  const pVacUnlocked = await probe(4, 4);
+  check('unlocked: lifting a stone inside its own territory reveals the square (live)',
+    samePx(pVacUnlocked, pBase[0]), JSON.stringify({ pVacUnlocked, sq: pBase[0] }));
+  await setCell(4, 4, 2); // restore it
+
   // ── Lock: seed a manual territory mark, then commit D&T ──────────────────
   await page.evaluate(() => { scoringState.manualTerritory[9][9] = 2; window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
@@ -184,6 +199,10 @@ async function main() {
   check('FROZEN: manual territory mark still rendered after live clear',
     samePx(pManualAfter, pManual), JSON.stringify({ pManual, pManualAfter }));
 
+  const pCageVac = await probe(2, 3);
+  check('NUANCE: lifting a boundary stone (adjacent to dame) reveals NO square',
+    pCageVac[0] < 100, JSON.stringify(pCageVac));
+
   const totalsAfter = await scoreTotals();
   check('FROZEN: black score total unchanged after playground edit', totalsBefore.b === totalsAfter.b, `${totalsBefore.b} → ${totalsAfter.b}`);
   check('FROZEN: white score total unchanged after playground edit', totalsBefore.w === totalsAfter.w, `${totalsBefore.w} → ${totalsAfter.w}`);
@@ -192,6 +211,36 @@ async function main() {
   check('lockedSnapshot NOT modified by live edit', await lockedBoardCell(2, 3) === 2);
   const actions = await postLockActions();
   check('post-lock work is visible as discardable playground edits', actions && actions.total >= 2, JSON.stringify(actions));
+
+  // ── Phase C: NUANCE — a re-arranged stone inside its own marked territory ──
+  // Restore the boundary stone (sealing the interior again), then lift the interior
+  // stone. Its vacated point is bounded by White territory, so the counting ritual
+  // must reveal a White square there while the frozen totals stay put.
+  await page.evaluate(() => { scoringState.board[2][3] = 2; window.drawBoard(); });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  const pCageBack = await probe(2, 3);
+  check('NUANCE: restored boundary stone renders as a stone again',
+    pCageBack[0] > 150 && !samePx(pCageBack, pBase[0]), JSON.stringify({ pCageBack, sq: pBase[0] }));
+  const pVacStoneBefore = await probe(4, 4);
+  check('NUANCE: interior stone still renders dark while present (frozen)',
+    pVacStoneBefore[0] > 150 && !samePx(pVacStoneBefore, pBase[0]), JSON.stringify({ pVacStoneBefore, sq: pBase[0] }));
+
+  await page.evaluate(() => { scoringState.board[4][4] = 0; window.drawBoard(); });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  const pVacated = await probe(4, 4);
+  check('NUANCE: LOCKED lift of an interior stone reveals its own territory square',
+    samePx(pVacated, pBase[0]), JSON.stringify({ pVacated, sq: pBase[0] }));
+  const pNeighbor = [];
+  for (const [r, c] of [[3, 4], [4, 3], [4, 5], [5, 4]]) pNeighbor.push(await probe(r, c));
+  check('NUANCE: neighbors of the vacated point stay territory squares',
+    pNeighbor.every((p) => p[0] > 150), JSON.stringify(pNeighbor));
+  const pVacSamples = [];
+  for (const [r, c] of SAMPLES) pVacSamples.push(await probe(r, c));
+  check('NUANCE: frozen territory samples unchanged by the vacated-point reveal',
+    SAMPLES.every((_, i) => samePx(pVacSamples[i], pLock[i])));
+  const totalsVac = await scoreTotals();
+  check('NUANCE: score totals still frozen while vacated square is revealed',
+    totalsVac.b === totalsBefore.b && totalsVac.w === totalsBefore.w, `${totalsBefore.b}:${totalsBefore.w} → ${totalsVac.b}:${totalsVac.w}`);
 
   // ── Unlock restores the committed resolution (no permanent leak) ──────────
   await page.evaluate(() => { scoringState.frozen = false; window.applyUnlockReset(); });
