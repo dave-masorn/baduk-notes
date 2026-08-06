@@ -5937,21 +5937,29 @@ function isPosInQuarter(cx, cy, cellSize, qrtNum) {
 }
 
 // ============================================================
-// GO STONE RENDERER — STONE SET C (pure Canvas 2D, no external assets)
+// GO STONE RENDERER v3 — STONE SET C (pure Canvas 2D, no external assets)
 // Added as a self-contained addition; Set A / Set B / image / solid-color
-// paths are untouched. Modeled on the actual materials rather than a
-// generic look:
+// paths are untouched. Modeled on the ACTUAL materials (per Kuroki
+// Goishiten's own material descriptions) rather than a generic look:
 //
 //   WHITE = hamaguri (蛤 clamshell)
 //     - ivory/cream base with a warm, slightly translucent amber
 //       band near the rim (where the shell is thinnest)
 //     - fine concentric "growth ring" lines radiating from an
-//       off-center origin point, like a fingerprint
+//       off-center origin point, like a fingerprint — this is the
+//       single biggest visual signature of a real hamaguri stone
+//     - grade-driven tone + ring density: Snow (~>80% grain coverage,
+//       exceptionally white, delicate/dense rings, only 5–10% of shells
+//       qualify) vs Blossom (wider, coarser grain, warmer tone)
 //
 //   BLACK = slate (那智黒 nachiguro-style)
 //     - matte-glossy near-black with a subtle blue-green mineral
 //       tint, not a glassy "plastic bead" look
-//     - faint, sparse, roughly-parallel mineral grain lines
+//     - real nachiguro is essentially uniform jet-black whose shine
+//       increases with polishing — its variation is in POLISH and TONE
+//       (kuro = neutral-black cast vs ao = blue-green cast), not in
+//       visible surface grain, so the slate render varies the core
+//       tint/polish per stone instead of leaning on the faint grain
 //     - softer, larger, dimmer highlight than glass would have
 // ============================================================
 
@@ -5964,6 +5972,19 @@ function _mulberry32(seed) {
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
+}
+
+// Blends two '#rrggbb' hex colors. Used for continuous variation (tint,
+// whiteness) so stone-to-stone differences look like natural material
+// drift rather than a small fixed set of discrete looks.
+function _lerpColor(hexA, hexB, t) {
+    const a = parseInt(hexA.slice(1), 16), b = parseInt(hexB.slice(1), 16);
+    const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+    const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    const r = Math.round(ar + (br - ar) * t);
+    const g = Math.round(ag + (bg - ag) * t);
+    const bl = Math.round(ab + (bb - ab) * t);
+    return `rgb(${r},${g},${bl})`;
 }
 
 /**
@@ -6112,6 +6133,11 @@ function _getSlateTexture(radius, grainCount = 10) {
  * @param {number} [options.originAngle=-2.3]    - hamaguri ring direction (radians)
  * @param {number} [options.grainCount=10]       - slate grain density
  * @param {number} [options.specularStrength=1]  - highlight brightness multiplier
+ * @param {number} [options.tintAmount=0.5]      - slate kuro↔ao cast: 0 = neutral
+ *                                                 black (kuro), 1 = blue-green (ao)
+ * @param {number} [options.whiteness=0.5]       - hamaguri grade: 0 = Blossom
+ *                                                 (warm, coarse), 1 = Snow
+ *                                                 (pure white, dense)
  */
 function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
     const ringCount = options.ringCount ?? 26;
@@ -6119,6 +6145,8 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
     const originAngle = options.originAngle ?? -2.3;
     const grainCount = options.grainCount ?? 10;
     const specStrength = options.specularStrength ?? 1;
+    const tintAmount = options.tintAmount ?? 0.5;
+    const whiteness = options.whiteness ?? 0.5;
 
     ctx.save();
 
@@ -6130,11 +6158,20 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
 
     if (player === 'B') {
         // ============ SLATE — matte-glossy black with blue-green tint ============
+        // tintAmount blends the core color between a neutral charcoal and a
+        // blue-green-tinted charcoal — real nachiguro slate varies stone to
+        // stone between a purer "kuro" (black) cast and an "ao" (blue-tinted)
+        // cast, per Kuroki Goishiten's own material description. Randomizing
+        // this (see getStoneVariant) is what actually breaks the "every
+        // black stone looks identical" problem — slate's variation is in
+        // tone and polish, not in visible surface grain.
+        const t = tintAmount;
+        const coreColor = _lerpColor('#454a4d', '#4b565a', t); // neutral -> blue-green
         const grad = ctx.createRadialGradient(
             cx - radius * 0.3, cy - radius * 0.35, radius * 0.05,
             cx - radius * 0.05, cy - radius * 0.05, radius * 1.1
         );
-        grad.addColorStop(0.00, '#4b565a'); // faint blue-green core, not neutral grey
+        grad.addColorStop(0.00, coreColor);
         grad.addColorStop(0.2, '#2a3336');
         grad.addColorStop(0.55, '#12171a');
         grad.addColorStop(1.00, '#020303');
@@ -6145,14 +6182,20 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
 
     } else {
         // ============ HAMAGURI — ivory shell with warm translucent rim ============
+        // grade shifts the base tone: Snow grade is described as having
+        // "unparalleled whiteness"; Blossom reads slightly warmer/creamier.
+        // whiteness 1 = brightest/purest (Snow), 0 = warmest (Blossom).
+        const w = whiteness;
+        const midStop = _lerpColor('#efdfbb', '#f6eeda', w);
+        const edgeStop = _lerpColor('#dcc593', '#e6d4a8', w);
         const grad = ctx.createRadialGradient(
             cx - radius * 0.3, cy - radius * 0.35, radius * 0.05,
             cx - radius * 0.05, cy - radius * 0.05, radius * 1.15
         );
         grad.addColorStop(0.00, '#fffdf6');
         grad.addColorStop(0.35, '#f8f0da');
-        grad.addColorStop(0.7, '#efdfbb');
-        grad.addColorStop(1.00, '#dcc593'); // warm amber, not blue-grey
+        grad.addColorStop(0.7, midStop);
+        grad.addColorStop(1.00, edgeStop); // warm amber, not blue-grey
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -6229,6 +6272,23 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
  * originAngle is randomized across the FULL circle so hamaguri stones on
  * the same board show growth rings curving in different directions,
  * rather than every stone sharing one fixed grain direction.
+ *
+ * v0.1.067 adds the two grade/polish params that make Set C match the
+ * actual materials (Kuroki Goishiten material descriptions):
+ *   - whiteness = hamaguri grade, 1 = Snow (~>80% grain coverage,
+ *     exceptionally white, delicate/dense rings, only 5–10% of shells
+ *     qualify) → 0 = Blossom (wider, coarser grain, warmer tone). The
+ *     grade DRIVES ring density, not just direction: Snow rolls many
+ *     tight delicate rings, Blossom rolls few wide coarse ones.
+ *   - tintAmount = slate kuro↔ao cast, 0 = neutral jet-black, 1 =
+ *     blue-green tint. Real nachiguro is essentially uniform jet-black
+ *     whose shine increases with polish — its stone-to-stone variation
+ *     is in tone and polish, so the render varies the core tint rather
+ *     than leaning on surface grain.
+ *
+ * ADJUSTABLE: the min/range values below control how wide a spread of
+ * variants you'll see across a full board. Tighten them for a more
+ * uniform set, widen them for more visible stone-to-stone variety.
  */
 function getStoneVariant(row, col, player) {
     // Distinct seed space per player so black/white don't share patterns
@@ -6236,12 +6296,19 @@ function getStoneVariant(row, col, player) {
     // across different games/positions.
     const seed = (row * 19 + col) * 137 + (player === 'B' ? 911 : 313);
     const rand = _mulberry32(seed);
+    const whiteness = 0.1 + rand() * 0.9;             // hamaguri grade, 0.1–1.0: 1=Snow, 0=Blossom
     return {
-        ringCount: 14 + Math.floor(rand() * 24),   // 14–38, hamaguri only
-        ringJitter: 0.6 + rand() * 1.0,             // 0.6–1.6, hamaguri only
-        originAngle: rand() * Math.PI * 2,          // 0–2π, hamaguri only — shell direction
-        grainCount: 4 + Math.floor(rand() * 14),    // 4–18, slate only
-        specularStrength: rand() * 0.5,             // 0–0.5 HARD CAP (50%)
+        // Hamaguri grade drives ring density & width: a Snow-grade stone
+        // gets many tight delicate rings, a Blossom-grade stone gets few
+        // wide coarse ones (rings always span the same radius band, so
+        // count directly sets ring spacing/width).
+        ringCount: 10 + Math.floor(whiteness * 28),    // 10–38: Snow dense → Blossom sparse
+        ringJitter: 0.6 + rand() * 1.0,                // 0.6–1.6, hamaguri only
+        whiteness: whiteness,                          // hamaguri only — grade drives tone + ring density
+        originAngle: rand() * Math.PI * 2,             // 0–2π, hamaguri only — shell direction
+        tintAmount: 0.15 + rand() * 0.7,               // 0.15–0.85, slate only — kuro(0)↔ao(1) cast
+        grainCount: 4 + Math.floor(rand() * 14),       // 4–18, slate only
+        specularStrength: rand() * 0.5,                // 0–0.5 HARD CAP (50%)
     };
 }
 

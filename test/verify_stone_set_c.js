@@ -65,7 +65,10 @@ async function main() {
       caps: a1.specularStrength >= 0 && a1.specularStrength <= 0.5,
       angleInRange: a1.originAngle >= 0 && a1.originAngle < Math.PI * 2,
       angleDeterministic: a1.originAngle === a2.originAngle,
-      angleDiffersByPos: a1.originAngle !== b.originAngle
+      angleDiffersByPos: a1.originAngle !== b.originAngle,
+      tintInRange: a1.tintAmount >= 0 && a1.tintAmount <= 1 && a1.tintAmount === a2.tintAmount,
+      whiteInRange: a1.whiteness > 0 && a1.whiteness <= 1 && a1.whiteness === a2.whiteness,
+      gradeDrivesDensity: a1.ringCount === 10 + Math.floor(a1.whiteness * 28)
     };
   });
   check('variant deterministic per position', variantCheck.samePosSame);
@@ -75,6 +78,9 @@ async function main() {
   check('originAngle in full-circle range 0–2π', variantCheck.angleInRange);
   check('originAngle deterministic per position', variantCheck.angleDeterministic);
   check('originAngle differs across positions (grain direction variety)', variantCheck.angleDiffersByPos);
+  check('tintAmount (slate kuro↔ao) in 0–1 + deterministic', variantCheck.tintInRange);
+  check('whiteness (hamaguri Snow↔Blossom) in 0–1 + deterministic', variantCheck.whiteInRange);
+  check('hamaguri grade drives ring density (Snow dense, Blossom sparse)', variantCheck.gradeDrivesDensity);
 
   const sampleStones = (page) => page.evaluate(() => {
     const canvas = document.getElementById('go-board-canvas-initial');
