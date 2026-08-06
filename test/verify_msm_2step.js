@@ -536,6 +536,118 @@ async function main() {
     check('S12 Save Board clears the unsaved-changes warning', p.prevented === false);
   }
 
+  // ── S13: user-initiated close ('✕' button / backdrop click) warns on unsaved scoring edits ──
+  await evalIn(page, () => {
+    window.__h.dialog = (id) => getComputedStyle(document.getElementById(id)).display;
+    window.__h.modalOpen = () => {
+      const ov = document.getElementById('scoring-modal-overlay');
+      return getComputedStyle(ov).display !== 'none';
+    };
+    window.__h.backdropClick = () => {
+      const ov = document.getElementById('scoring-modal-overlay');
+      ov.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    };
+  });
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const dirtyProbe = await evalIn(page, () => window._scoringDirty);
+    check('S13 edit on the reopened saved board is dirty', dirtyProbe === true);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    const open = await evalIn(page, () => __h.modalOpen());
+    check('S13 dirty ✕ click shows the close-without-saving dialog', d !== 'none');
+    check('S13 modal stays open behind the dialog', open === true);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-cancel-close'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    const open = await evalIn(page, () => __h.modalOpen());
+    check('S13 Cancel hides the dialog and keeps the modal open', d === 'none' && open === true);
+  }
+  await evalIn(page, () => __h.backdropClick());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    check('S13 dirty backdrop click also shows the close dialog', d !== 'none');
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-confirm-close'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const open = await evalIn(page, () => __h.modalOpen());
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    check('S13 confirm close exits the modal and hides the dialog', open === false && d === 'none');
+  }
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const s = await evalIn(page, () => __h.state());
+    const save = await evalIn(page, () => __h.btn('btn-scoring-save'));
+    check('S13 close-without-saving reopen lands frozen Board Saved ✓', s.frozen === true && save && save.text === 'Board Saved ✓');
+  }
+  await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const open = await evalIn(page, () => __h.modalOpen());
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    check('S13 clean ✕ close skips the dialog and closes directly', open === false && d === 'none');
+  }
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  const s13Target = await evalIn(page, () => __h.findStone(1));
+  await evalIn(page, (p) => __h.removeStoneAt(p.r, p.c), s13Target); // unsaved post-Save edit
+  await evalIn(page, () => __h.backdropClick());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-confirm-close'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const s = await evalIn(page, () => __h.state());
+    const cell = await evalIn(page, (p) => __h.state().board[p.r][p.c], s13Target);
+    check('S13 backdrop close-without-saving discards the unsaved edit', cell !== 0 && s.frozen === true);
+  }
+
+  // ── S14: the pre-Save (first-entry) close also warns ──
+  await evalIn(page, (sgf) => __h.loadScenario(sgf, 's14'), fixture);
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit')); // fresh opens frozen (Edit-first)
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  const s14Target = await evalIn(page, () => __h.findStone(1));
+  await clickStone(page, s14Target); // pre-lock mark → dirty
+  {
+    const dirtyProbe = await evalIn(page, () => window._scoringDirty);
+    const frozen = await evalIn(page, () => window.scoringState.frozen);
+    check('S14 pre-Save first-entry mark is dirty and unlocked', dirtyProbe === true && frozen === false);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const d = await evalIn(page, () => __h.dialog('scoring-close-confirm-dialog'));
+    check('S14 pre-Save dirty ✕ click also shows the close dialog', d !== 'none');
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-confirm-close'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const open = await evalIn(page, () => __h.modalOpen());
+    check('S14 confirm closes the modal pre-Save', open === false);
+  }
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const markCount = await evalIn(page, () => __h.markCount());
+    const open = await evalIn(page, () => __h.modalOpen());
+    const frozen = await evalIn(page, () => window.scoringState.frozen);
+    check('S14 pre-Save close keeps the live marks (reopen restores them)', markCount >= 1 && open === true && frozen === false);
+  }
+
   // ── Summary ───────────────────────────────────────────────────────────────
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;

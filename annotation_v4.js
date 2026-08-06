@@ -15405,13 +15405,21 @@ window.addEventListener('keydown', (e) => {
 function initScoringModal() {
     const btnClose = document.getElementById('btn-close-scoring-modal');
     if (btnClose) {
-        btnClose.addEventListener('click', closeScoringModal);
+        btnClose.addEventListener('click', requestCloseScoringModal);
     }
     const overlay = document.getElementById('scoring-modal-overlay');
     if (overlay) {
         overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) closeScoringModal();
+            if (e.target === overlay) requestCloseScoringModal();
         });
+    }
+    const btnConfirmClose = document.getElementById('btn-scoring-confirm-close');
+    if (btnConfirmClose) {
+        btnConfirmClose.addEventListener('click', confirmScoringClose);
+    }
+    const btnCancelClose = document.getElementById('btn-scoring-cancel-close');
+    if (btnCancelClose) {
+        btnCancelClose.addEventListener('click', cancelScoringClose);
     }
 
     const btnUndo = document.getElementById('btn-scoring-undo');
@@ -16300,6 +16308,38 @@ function closeScoringModal() {
     }
     const dialog = document.getElementById('scoring-color-picker-dialog');
     if (dialog) dialog.style.display = 'none';
+    const closeDialog = document.getElementById('scoring-close-confirm-dialog');
+    if (closeDialog) closeDialog.style.display = 'none';
+}
+
+// User-initiated close (the ✕ button, clicking the backdrop outside the panel). When the
+// scoring board carries unsaved changes (_scoringDirty) the close is intercepted with the
+// close-without-saving confirm dialog — mirroring the beforeunload warning, since a close
+// discards the unsaved edits and the reopen restores the last Saved Board.
+function requestCloseScoringModal() {
+    if (scoringState.active && _scoringDirty) {
+        const dialog = document.getElementById('scoring-close-confirm-dialog');
+        const msg = document.getElementById('scoring-close-confirm-msg');
+        if (dialog && msg) {
+            msg.textContent = _scoringHasSaved
+                ? 'You have unsaved changes on the scoring board. Closing will discard them and restore the last Saved Board on reopen — press Save Board to keep them first.'
+                : 'You have unsaved changes on the scoring board. Close without saving?';
+            dialog.style.display = 'flex';
+            return;
+        }
+    }
+    closeScoringModal();
+}
+
+function confirmScoringClose() {
+    const dialog = document.getElementById('scoring-close-confirm-dialog');
+    if (dialog) dialog.style.display = 'none';
+    closeScoringModal();
+}
+
+function cancelScoringClose() {
+    const dialog = document.getElementById('scoring-close-confirm-dialog');
+    if (dialog) dialog.style.display = 'none';
 }
 
 function setScoringFrozen(frozen) {
@@ -16539,6 +16579,7 @@ function restoreScoringFromSavedData(data) {
 
 window.openScoringModal = openScoringModal;
 window.closeScoringModal = closeScoringModal;
+window.requestCloseScoringModal = requestCloseScoringModal;
 
 function updateScoringUI() {
     const subtitle = document.getElementById('scoring-subtitle');

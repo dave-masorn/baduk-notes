@@ -295,7 +295,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.069</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.070</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -1993,6 +1993,18 @@
                     </div>
                 </div>
 
+                <!-- Close-without-saving Confirmation Dialog -->
+                <div id="scoring-close-confirm-dialog" style="display: none; position: absolute; inset: 0; z-index: 270; background: rgba(5, 20, 16, 0.75); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); align-items: center; justify-content: center;">
+                    <div style="background: #0d2822; border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; padding: 22px 24px; text-align: center; max-width: 360px; width: 90%; box-shadow: 0 20px 50px rgba(0,0,0,0.6);">
+                        <h3 style="margin: 0 0 10px 0; color: #ecfdf5; font-size: 1.05rem; font-weight: 700;">Close without saving?</h3>
+                        <p id="scoring-close-confirm-msg" style="margin: 0 0 20px 0; color: #a7f3d0; font-size: 0.85rem; line-height: 1.45;">You have unsaved changes on the scoring board. Closing will discard them and restore the last Saved Board on reopen.</p>
+                        <div style="display: flex; gap: 12px; justify-content: center;">
+                            <button id="btn-scoring-confirm-close" style="flex: 1; padding: 10px 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">Close Without Saving</button>
+                            <button id="btn-scoring-cancel-close" style="flex: 1; padding: 10px 14px; background: rgba(255,255,255,0.08); color: #ecfdf5; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem;">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -2607,14 +2619,14 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script src="sgf-parser.js?v=0.1.069"></script>
-    <script src="deadstones.bundle.js?v=0.1.069"></script>
-    <script src="board-estimate.js?v=0.1.069"></script>
-    <script src="goscorer.js?v=0.1.069"></script>
-    <script src="liberties.js?v=0.1.069"></script>
-    <script src="move-term-detector.js?v=0.1.069"></script>
-    <script src="phase-detector.js?v=0.1.069"></script>
-    <script src="game-tree.js?v=0.1.069"></script>
-    <script src="annotation_v4.js?v=0.1.069"></script>
+    <script src="sgf-parser.js?v=0.1.070"></script>
+    <script src="deadstones.bundle.js?v=0.1.070"></script>
+    <script src="board-estimate.js?v=0.1.070"></script>
+    <script src="goscorer.js?v=0.1.070"></script>
+    <script src="liberties.js?v=0.1.070"></script>
+    <script src="move-term-detector.js?v=0.1.070"></script>
+    <script src="phase-detector.js?v=0.1.070"></script>
+    <script src="game-tree.js?v=0.1.070"></script>
+    <script src="annotation_v4.js?v=0.1.070"></script>
 </body>
 </html>
