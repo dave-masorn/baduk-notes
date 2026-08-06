@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.067
+version: 0.1.068
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,14 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.068 — Territory is now frozen after D&T Lock: post-lock re-arrange / replace "playground" edits can never move the marked territory overlay or a manually marked territory point — the fix closes the last live-read inside the frozen scoring resolution
+
+Since v0.1.059 the score itself has been frozen at the Lock commit: the formula, totals, result badge, `DD`/`MA`/`TB`/`TW` bars, and every post-lock consumer read `lockedSnapshot`, so the counting-phase Replace / Re-arrange ritual is a pure cosmetic display aid. But the TERRITORY **overlay** still had two live reads. In `renderScoringBoardToCtx`, section 5 built the GoScorer input from the LIVE `scoringState.board` / `markedDead` / `deadStonesInfo` (`locScores`/`areaScores` for the flood-fill squares) and section 7 drew the manual-territory marks from LIVE `scoringState.manualTerritory` — so after Lock, re-arranging or replacing stones would re-flood-fill the playground board and visibly re-draw (move) the marked territory area, contradicting the frozen score sitting next to it.
+
+**One committed source for territory, one live source for the ritual.** The renderer now builds `terrSrc = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState` (`annotation_v4.js:17186`) and derives every territory input from it: `terrBoard`, `terrMarkedDead`, and `terrDeadStonesInfo` feed the GoScorer calc (`:17190-17198`, still restoring dead-stone colors into the stones array because goscorer removes them internally via the markedDead transparency flag), and `terrManualTerritory` drives the manual overlay (`:17283`). The STONES still render from the live playground board (`:17220-17243`) — that is the point of the counting ritual — only the territory/area overlay, the manual territory marks, and the score read-outs are frozen. Persisted/reopened locked sessions freeze correctly because `copySnapshotShape` (`annotation_v4.js:16228`) carries `board`/`markedDead`/`deadStonesInfo`/`manualTerritory` through the Save Board → reopen path.
+
+**Verified both ways (the test must prove the freeze is lock-specific).** Headless-verified against Brave via puppeteer-core with a new harness (`test/verify_territory_freeze.js`, 19 checks): a seeded white cage (interior 3×3 = white territory) bounded by a black ring. While UNLOCKED, lifting one cage stone flips the interior territory 2 → 0 in both the GoScorer read-out and the rendered overlay (the white squares actually disappear — proves the test would catch the old behavior), and restoring the stone brings the overlay back byte-for-byte. A pre-lock manual territory mark renders. After `applyScoringLock` the overlay equals the pre-lock pixels, and after a post-lock live cage removal + manual-mark clear the overlay and the manual mark are byte-for-byte unchanged (FROZEN), black/white score totals are identical, `lockedSnapshot` is unmodified while the live board provably did change, `countPostLockActions()` reports the discarded playground edits, and Unlock restores the committed resolution. All prior suites still pass (replace-click 10, replace-fix 7, rearrange 6, two-step 53) plus the new 19 — 95 checks total. `node --check` clean. annotation_v4.js is now 17,357 lines (territory freeze inside `renderScoringBoardToCtx` 17090–17337, `terrSrc` at 17186), new harness 214 lines, index.html unchanged at 2,615 lines.
 
 ### v0.1.067 — Set C now models the ACTUAL materials, per Kuroki Goishiten's own material descriptions: slate variation comes from POLISH/TONE (kuro neutral-black vs ao blue-green cast), not surface grain, and hamaguri grades (Snow vs Blossom) drive both tone and ring density/width
 

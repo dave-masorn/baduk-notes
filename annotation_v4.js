@@ -17177,12 +17177,21 @@ function renderScoringBoardToCtx(ctx) {
     // IMPORTANT: goscorer requires dead stones to REMAIN in the stones array.
     // It uses markedDead as a transparency flag internally during flood-fill.
     // We must NOT pass a board where dead positions are already 0.
-    // Build stonesWithDead: restore original colors at markedDead positions.
-    const stonesWithDead = scoringState.board.map((row, r) =>
+    //
+    // TERRITORY FREEZE: while LOCKED the territory/area overlay is computed from the
+    // COMMITTED lockedSnapshot (board + markedDead), never from the live playground
+    // board — post-lock re-arranges/replaces are a cosmetic display ritual and must
+    // never move the marked D&T position/area, exactly like the frozen score. Build
+    // stonesWithDead: restore original colors at markedDead positions.
+    const terrSrc = (scoringState.locked && scoringState.lockedSnapshot) ? scoringState.lockedSnapshot : scoringState;
+    const terrBoard = terrSrc.board;
+    const terrMarkedDead = terrSrc.markedDead;
+    const terrDeadStonesInfo = terrSrc.deadStonesInfo || scoringState.deadStonesInfo;
+    const stonesWithDead = terrBoard.map((row, r) =>
         row.map((val, c) => {
-            if (scoringState.markedDead[r][c] && val === 0) {
+            if (terrMarkedDead[r][c] && val === 0) {
                 // Restore original color from deadStonesInfo
-                return scoringState.deadStonesInfo[r][c] || 0;
+                return terrDeadStonesInfo[r][c] || 0;
             }
             return val;
         })
@@ -17194,13 +17203,13 @@ function renderScoringBoardToCtx(ctx) {
     if (window.GoScorer) {
         if (scoringState.ruleMode === 'japanese') {
             try {
-                locScores = window.GoScorer.territoryScoring(stonesWithDead, scoringState.markedDead, false);
+                locScores = window.GoScorer.territoryScoring(stonesWithDead, terrMarkedDead, false);
             } catch(err) {
                 console.error("GoScorer territory error:", err);
             }
         } else {
             try {
-                areaScores = window.GoScorer.areaScoring(stonesWithDead, scoringState.markedDead);
+                areaScores = window.GoScorer.areaScoring(stonesWithDead, terrMarkedDead);
             } catch(err) {
                 console.error("GoScorer area error:", err);
             }
@@ -17269,10 +17278,13 @@ function renderScoringBoardToCtx(ctx) {
         }
     };
     if (scoringState.showTerritory) {
+        // Manual territory is also frozen while LOCKED (reads terrSrc like the algorithm
+        // above), so post-lock playground edits can never move a marked territory point.
+        const terrManualTerritory = terrSrc.manualTerritory || scoringState.manualTerritory;
         for (let r = 0; r < 19; r++) {
             for (let c = 0; c < 19; c++) {
-                if (scoringState.manualTerritory[r][c] > 0) {
-                    renderTerritoryRect(r, c, scoringState.manualTerritory[r][c]);
+                if (terrManualTerritory[r][c] > 0) {
+                    renderTerritoryRect(r, c, terrManualTerritory[r][c]);
                     continue;
                 }
                 if (scoringState.board[r][c] === 0) {
