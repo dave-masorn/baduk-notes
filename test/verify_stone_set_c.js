@@ -62,13 +62,19 @@ async function main() {
       samePosSame: JSON.stringify(a1) === JSON.stringify(a2),
       diffPosDiffers: JSON.stringify(a1) !== JSON.stringify(b),
       diffPlayerDiffers: JSON.stringify(a1) !== JSON.stringify(w),
-      caps: a1.specularStrength >= 0 && a1.specularStrength <= 0.5
+      caps: a1.specularStrength >= 0 && a1.specularStrength <= 0.5,
+      angleInRange: a1.originAngle >= 0 && a1.originAngle < Math.PI * 2,
+      angleDeterministic: a1.originAngle === a2.originAngle,
+      angleDiffersByPos: a1.originAngle !== b.originAngle
     };
   });
   check('variant deterministic per position', variantCheck.samePosSame);
   check('variant differs across positions', variantCheck.diffPosDiffers);
   check('variant differs across players', variantCheck.diffPlayerDiffers);
   check('specular capped at 0–0.5', variantCheck.caps);
+  check('originAngle in full-circle range 0–2π', variantCheck.angleInRange);
+  check('originAngle deterministic per position', variantCheck.angleDeterministic);
+  check('originAngle differs across positions (grain direction variety)', variantCheck.angleDiffersByPos);
 
   const sampleStones = (page) => page.evaluate(() => {
     const canvas = document.getElementById('go-board-canvas-initial');

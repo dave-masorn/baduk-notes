@@ -5976,9 +5976,13 @@ function _mulberry32(seed) {
  * @param {number} radius
  * @param {number} ringCount   - number of growth rings (default 26)
  * @param {number} jitter      - 0–2, how irregular the rings are (default 1)
+ * @param {number} originAngle - radians, direction the rings radiate
+ *                               from/curve toward (default -2.3).
+ *                               Randomize this per stone so not every
+ *                               stone's shell curves the same way.
  */
-function _getHamaguriTexture(radius, ringCount = 26, jitter = 1) {
-    const key = `hamaguri_${Math.round(radius)}_${ringCount}_${jitter}`;
+function _getHamaguriTexture(radius, ringCount = 26, jitter = 1, originAngle = -2.3) {
+    const key = `hamaguri_${Math.round(radius)}_${ringCount}_${jitter}_${originAngle.toFixed(2)}`;
     if (_stoneTextureCache.has(key)) return _stoneTextureCache.get(key);
 
     const size = Math.ceil(radius * 2);
@@ -5994,11 +5998,10 @@ function _getHamaguriTexture(radius, ringCount = 26, jitter = 1) {
     tctx.arc(cx, cy, radius, 0, Math.PI * 2);
     tctx.clip();
 
-    // Origin point sits outside the stone, up and to one side — this is
-    // the "hinge" the growth rings appear to radiate from. Fixed angle
-    // so every stone in a set shares the same grain direction, like
-    // stones cut from the same shell region.
-    const originAngle = -2.3; // radians
+    // Origin point sits outside the stone — the "hinge" the growth rings
+    // appear to radiate from. Passed in per-stone (see getStoneVariant)
+    // so different stones on the board show different grain directions,
+    // like they were each cut from a different spot on a shell.
     const originDist = radius * 1.35;
     const ox = cx + Math.cos(originAngle) * originDist;
     const oy = cy + Math.sin(originAngle) * originDist;
@@ -6106,12 +6109,14 @@ function _getSlateTexture(radius, grainCount = 10) {
  * @param {object} [options]
  * @param {number} [options.ringCount=26]        - hamaguri ring density
  * @param {number} [options.ringJitter=1]        - hamaguri ring irregularity
+ * @param {number} [options.originAngle=-2.3]    - hamaguri ring direction (radians)
  * @param {number} [options.grainCount=10]       - slate grain density
  * @param {number} [options.specularStrength=1]  - highlight brightness multiplier
  */
 function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
     const ringCount = options.ringCount ?? 26;
     const ringJitter = options.ringJitter ?? 1;
+    const originAngle = options.originAngle ?? -2.3;
     const grainCount = options.grainCount ?? 10;
     const specStrength = options.specularStrength ?? 1;
 
@@ -6163,7 +6168,7 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
         ctx.drawImage(tex, cx - radius, cy - radius);
         ctx.globalAlpha = 1.0;
     } else {
-        const tex = _getHamaguriTexture(radius, ringCount, ringJitter);
+        const tex = _getHamaguriTexture(radius, ringCount, ringJitter, originAngle);
         ctx.globalAlpha = 0.9;
         ctx.drawImage(tex, cx - radius, cy - radius);
         ctx.globalAlpha = 1.0;
@@ -6220,6 +6225,10 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
  * Specular is capped at 0–0.5 (50%) as requested: real hamaguri/slate
  * finishes are gentle, and un-capped randomness occasionally rolled a
  * near-glass glint that looked out of place next to the matte ones.
+ *
+ * originAngle is randomized across the FULL circle so hamaguri stones on
+ * the same board show growth rings curving in different directions,
+ * rather than every stone sharing one fixed grain direction.
  */
 function getStoneVariant(row, col, player) {
     // Distinct seed space per player so black/white don't share patterns
@@ -6230,6 +6239,7 @@ function getStoneVariant(row, col, player) {
     return {
         ringCount: 14 + Math.floor(rand() * 24),   // 14–38, hamaguri only
         ringJitter: 0.6 + rand() * 1.0,             // 0.6–1.6, hamaguri only
+        originAngle: rand() * Math.PI * 2,          // 0–2π, hamaguri only — shell direction
         grainCount: 4 + Math.floor(rand() * 14),    // 4–18, slate only
         specularStrength: rand() * 0.5,             // 0–0.5 HARD CAP (50%)
     };
