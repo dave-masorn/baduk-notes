@@ -11485,7 +11485,7 @@ function goToMove(index) {
                 return { text: 'Deterministic JTS from DD/MA/TB/TW endgame markup (SGF).', color: '#facc15' };
             }
             if (snap && snap.provenance === 'Manual Scoring session') {
-                return { text: 'Deterministic JTS from manual dead-stone marks (marked in Manual Scoring).', color: '#ef4444' };
+                return { text: 'Deterministic JTS from manual dead-stone marks (marked in Manual Scoring).', color: '#fbbf24' };
             }
             return { text: 'Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup.', color: '#cbd5e1' };
         };
