@@ -295,7 +295,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.070</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.071</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -2355,11 +2355,12 @@
           <div class="accordion-header">
             <button class="accordion-trigger active" data-target="acc-board">
               <span class="acc-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></span>
-              Board &amp; Border
+              Board, Border &amp; BG
             </button>
             <div class="accordion-header-actions">
               <button class="style-reset-section-btn" data-section="board" title="Reset Board"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg></button>
               <button class="style-reset-section-btn" data-section="border" title="Reset Border" style="margin-left:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg></button>
+              <button class="style-reset-section-btn" data-section="bg" title="Reset BG" style="margin-left:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></svg></button>
             </div>
           </div>
           <div id="acc-board" class="accordion-content" style="max-height:0;">
@@ -2397,19 +2398,24 @@
                   <input type="number" id="ib-board-size" min="100" max="2000" value="600" class="style-num-input-wide">
                   <span class="style-unit">px</span>
                 </div>
-                <div class="style-row" style="border-top:1px dashed rgba(96,165,250,0.15);padding-top:8px;margin-top:4px;">
-                  <span class="style-label-wide">Border</span>
-                  <label class="switch" style="transform:scale(0.72);transform-origin:left center;flex-shrink:0;margin-left:6px;" title="Border Override — ON: use the picked border color · OFF: border takes the board bg/image (size still applies)">
-                    <input type="checkbox" id="ib-border-override" checked>
-                    <span class="slider round"></span>
-                  </label>
-                  <span id="ib-border-override-label" style="font-size:0.62rem;font-weight:700;flex-shrink:0;width:26px;text-align:center;color:#34d399;">ON</span>
-                  <div class="color-picker-wrapper" id="ib-border-color-wrap"><input type="color" id="ib-border-color" value="#dcb35c"></div>
-                  <span id="ib-border-color-val" class="color-code-val">#DCB35C</span>
-                  <input type="range" id="ib-border-size-slider" min="0" max="100" value="100" class="custom-slider">
-                  <input type="number" id="ib-border-size" min="0" max="100" value="100" class="style-num-input">
-                  <span class="style-unit">%</span>
-                </div>
+                  <div class="style-row" style="border-top:1px dashed rgba(96,165,250,0.15);padding-top:8px;margin-top:4px;">
+                    <span class="style-label-wide">Border</span>
+                    <label class="switch" style="transform:scale(0.72);transform-origin:left center;flex-shrink:0;margin-left:6px;" title="Border Override — ON: use the picked border color · OFF: border takes the board bg/image (size still applies)">
+                      <input type="checkbox" id="ib-border-override" checked>
+                      <span class="slider round"></span>
+                    </label>
+                    <span id="ib-border-override-label" style="font-size:0.62rem;font-weight:700;flex-shrink:0;width:26px;text-align:center;color:#34d399;">ON</span>
+                    <div class="color-picker-wrapper" id="ib-border-color-wrap"><input type="color" id="ib-border-color" value="#dcb35c"></div>
+                    <span id="ib-border-color-val" class="color-code-val">#DCB35C</span>
+                    <input type="range" id="ib-border-size-slider" min="0" max="100" value="100" class="custom-slider">
+                    <input type="number" id="ib-border-size" min="0" max="100" value="100" class="style-num-input">
+                    <span class="style-unit">%</span>
+                  </div>
+                  <div class="style-row" style="border-top:1px dashed rgba(96,165,250,0.15);padding-top:8px;margin-top:4px;" title="Canvas BG — the canvas color behind the board and below the coordinates (main &amp; study boards only)">
+                    <span class="style-label-wide">BG</span>
+                    <div class="color-picker-wrapper" style="margin-left:6px;"><input type="color" id="ib-canvas-bg-color" value="#ffffff"></div>
+                    <span id="ib-canvas-bg-color-val" class="color-code-val">#FFFFFF</span>
+                  </div>
               </div>
             </div>
           </div>
@@ -2619,14 +2625,14 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script src="sgf-parser.js?v=0.1.070"></script>
-    <script src="deadstones.bundle.js?v=0.1.070"></script>
-    <script src="board-estimate.js?v=0.1.070"></script>
-    <script src="goscorer.js?v=0.1.070"></script>
-    <script src="liberties.js?v=0.1.070"></script>
-    <script src="move-term-detector.js?v=0.1.070"></script>
-    <script src="phase-detector.js?v=0.1.070"></script>
-    <script src="game-tree.js?v=0.1.070"></script>
-    <script src="annotation_v4.js?v=0.1.070"></script>
+    <script src="sgf-parser.js?v=0.1.071"></script>
+    <script src="deadstones.bundle.js?v=0.1.071"></script>
+    <script src="board-estimate.js?v=0.1.071"></script>
+    <script src="goscorer.js?v=0.1.071"></script>
+    <script src="liberties.js?v=0.1.071"></script>
+    <script src="move-term-detector.js?v=0.1.071"></script>
+    <script src="phase-detector.js?v=0.1.071"></script>
+    <script src="game-tree.js?v=0.1.071"></script>
+    <script src="annotation_v4.js?v=0.1.071"></script>
 </body>
 </html>

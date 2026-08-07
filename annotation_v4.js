@@ -5043,8 +5043,15 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             return { cx, cy };
         };
 
-        // 1. Draw canvas background color (white)
-        ctx.fillStyle = '#ffffff';
+        // 1. Draw canvas background color. The Canvas BG (c-BG) control applies ONLY to the
+        // main (#go-board-canvas-initial) and study (#go-board-canvas-study) boards — the
+        // export preview and the scoring board keep their fixed white fill, so the picked
+        // color is read only for those two canvases.
+        let canvasBgColor = '#ffffff';
+        if ((isInitialCanvas || isStudyMode) && style && style.bg && style.bg.color) {
+            canvasBgColor = style.bg.color;
+        }
+        ctx.fillStyle = canvasBgColor;
         ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
         // 1.1 Draw board background wood color or image
@@ -13454,6 +13461,12 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         color: '#dcb35c',
         size: 100
     },
+    bg: {
+        // Canvas background behind the board and below the coordinates. Rendered ONLY for the
+        // main (#go-board-canvas-initial) and study (#go-board-canvas-study) boards — the
+        // export modal and scoring board keep their own fixed white/dark canvas fills.
+        color: '#ffffff'
+    },
     grid: {
         lineColor: '#1c1917',
         lineSize: 1,
@@ -13615,6 +13628,9 @@ function populateStyleInputs() {
     setInputVal('ib-border-override', style.border.override !== false, true);
     updateBorderOverrideUI();
     
+    // Canvas BG (behind the board, below coordinates)
+    setInputVal('ib-canvas-bg-color', style.bg && style.bg.color ? style.bg.color : '#ffffff');
+    
     // Grids
     setInputVal('ib-grid-line-color', style.grid.lineColor);
     setInputVal('ib-grid-line-size', style.grid.lineSize);
@@ -13723,6 +13739,8 @@ function bindStyleInputsEvents() {
         { id: 'ib-border-color', section: 'border', key: 'color' },
         { id: 'ib-border-size', section: 'border', key: 'size', isNum: true },
         { id: 'ib-border-override', section: 'border', key: 'override', isCheckbox: true },
+        
+        { id: 'ib-canvas-bg-color', section: 'bg', key: 'color' },
         
         { id: 'ib-grid-line-color', section: 'grid', key: 'lineColor' },
         { id: 'ib-grid-line-size', section: 'grid', key: 'lineSize', isNum: true },
@@ -16167,6 +16185,17 @@ function openScoringModal(savedData) {
     if (elResultDefaultTag) {
         const reVal = (state.sgfMetadata && state.sgfMetadata.re) || (state.gameInfo && (state.gameInfo.re || state.gameInfo.RE)) || '';
         elResultDefaultTag.textContent = `${reVal.trim() || 'n/a'} (default)`;
+    }
+
+    // Komi default read-out: the SGF-derived komi is the "(default)" every session compares
+    // against. Set on EVERY open (restore AND first-entry), mirroring the result tag — the
+    // restore path never ran resetScoringBoardFromState, so a reopened modal after a saved
+    // D&T session would otherwise keep the static HTML placeholder ("0 (default)") instead of
+    // the real SGF komi. extractSgfKomi() is the SSOT resolver, so KM[0] games render "0
+    // (default)" correctly and the editable komi input stays whatever the session carries.
+    const elKomiDefaultTag = document.getElementById('scoring-komi-default-tag');
+    if (elKomiDefaultTag) {
+        elKomiDefaultTag.textContent = `${extractSgfKomi()} (default)`;
     }
 
     if (savedData) {

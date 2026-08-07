@@ -167,6 +167,57 @@ async function main() {
       sgfPropsBadgeVisible() {
         const el = document.getElementById('sgf-prop-bars-save-badge');
         return el ? getComputedStyle(el).display !== 'none' : false;
+      },
+      // v0.1.071: komi read-out regression helpers.
+      komiReadout() {
+        const tag = document.getElementById('scoring-komi-default-tag');
+        const input = document.getElementById('scoring-komi-val');
+        return { tag: tag ? tag.textContent : null, val: input ? input.value : null };
+      },
+      whiteFormula() {
+        const el = document.getElementById('scoring-white-formula');
+        return el ? el.textContent : null;
+      },
+      // v0.1.071: c-BG helpers. lightpanda's getImageData returns zeros even for a freshly
+      // filled detached canvas, so we spy on fillStyle at the first fillRect instead of
+      // reading pixels — the canvas bg fill is always the renderer's first draw call.
+      renderFill(id, isPlayer, isStudy, isExport) {
+        const c = document.createElement('canvas');
+        c.width = 600; c.height = 600; c.id = id;
+        const ctx = c.getContext('2d');
+        const fills = [];
+        const orig = ctx.fillRect.bind(ctx);
+        ctx.fillRect = (x, y, w, h) => { fills.push(ctx.fillStyle); return orig(x, y, w, h); };
+        try { window.renderBoardToCtx(ctx, isPlayer, isStudy, isExport, false); }
+        catch (e) { return 'ERR:' + String(e && e.message || e); }
+        return fills.length ? fills[0] : '(no fill)';
+      },
+      scoringFill() {
+        const c = document.createElement('canvas');
+        c.width = 600; c.height = 600; c.id = 'go-board-canvas-scoring';
+        const ctx = c.getContext('2d');
+        const fills = [];
+        const orig = ctx.fillRect.bind(ctx);
+        ctx.fillRect = (x, y, w, h) => { fills.push(ctx.fillStyle); return orig(x, y, w, h); };
+        try { window.renderScoringBoardToCtx(ctx); }
+        catch (e) { return 'ERR:' + String(e && e.message || e); }
+        return fills.length ? fills[0] : '(no fill)';
+      },
+      bgPanel() {
+        const el = document.getElementById('ib-canvas-bg-color');
+        const trigger = document.querySelector('#acc-board');
+        const titleEl = trigger ? trigger.closest('.accordion-item').querySelector('.accordion-trigger') : null;
+        return {
+          title: titleEl ? titleEl.textContent.trim() : null,
+          pickerVal: el ? el.value : null,
+          resetBtn: !!document.querySelector('button[data-section="bg"]')
+        };
+      },
+      setBg(color) {
+        const el = document.getElementById('ib-canvas-bg-color');
+        el.value = color;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
       }
     };
   });
@@ -648,11 +699,203 @@ async function main() {
     check('S14 pre-Save close keeps the live marks (reopen restores them)', markCount >= 1 && open === true && frozen === false);
   }
 
+  // ── S15: komi default-tag regression (v0.1.071) ──────────────────────────
+  // #scoring-komi-default-tag must show the SGF komi on EVERY open path. Regression:
+  // a reopened saved D&T session kept the static HTML placeholder "0 (default)" while
+  // the input/formula/session held the real value, because only resetScoringBoardFromState
+  // (first-entry) wrote the tag and the restore branch never ran it.
+  await evalIn(page, (sgf) => __h.loadScenario(sgf, 's15'), fixture);
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const k = await evalIn(page, () => __h.komiReadout());
+    const f = await evalIn(page, () => __h.whiteFormula());
+    check('S15 fresh open tag = SGF komi (5)', k.tag === '5 (default)', JSON.stringify(k));
+    check('S15 fresh open komi input = SGF value', k.val === '5', k.val);
+    check('S15 fresh open white formula uses 5 (komi)', !!(f && f.includes('5 (komi)')), f);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-edit'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const stone = await evalIn(page, () => __h.findStone(1));
+    await clickStone(page, stone);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-lock'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+  {
+    const save = await evalIn(page, () => __h.btn('btn-scoring-save'));
+    check('S15 Save Board enabled after lock', save && save.disabled === false, save && save.text);
+  }
+  await evalIn(page, () => __h.clickBtn('btn-scoring-save'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
+  {
+    const sd = await evalIn(page, () => __h.scoringData());
+    check('S15 saved session komi = 5', sd && sd.komi === 5, sd && JSON.stringify(sd.komi));
+  }
+  // Same-page reopen (the regression path: Save Board → close → reopen).
+  await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const k = await evalIn(page, () => __h.komiReadout());
+    const f = await evalIn(page, () => __h.whiteFormula());
+    check('S15 same-page reopen tag = 5 (default)', k.tag === '5 (default)', JSON.stringify(k));
+    check('S15 same-page reopen komi input stays 5', k.val === '5', k.val);
+    check('S15 same-page reopen formula keeps 5 (komi)', !!(f && f.includes('5 (komi)')), f);
+  }
+
+  // ── S16: Canvas BG (c-BG) picker + renderer scoping (v0.1.071) ──────────
+  // The c-BG control only appears for the initial/study views; the renderer honors
+  // bg.color ONLY on those two canvases. Export + scoring stay white.
+  await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
+  {
+    const p = await evalIn(page, () => __h.bgPanel());
+    check('S16 panel section titled Board, Border & BG', p.title === 'Board, Border & BG', p.title);
+    check('S16 c-BG picker exists with white default', p.pickerVal === '#ffffff', p.pickerVal);
+    check('S16 c-BG reset button present', p.resetBtn === true);
+  }
+  {
+    const r = await evalIn(page, () => ({
+      initial: __h.renderFill('go-board-canvas-initial', true, false, false),
+      study: __h.renderFill('go-board-canvas-study', false, true, false),
+      export: __h.renderFill('export-tmp', false, false, true),
+      scoring: __h.scoringFill()
+    }));
+    check('S16 default initial render fills white', r.initial === '#ffffff', r.initial);
+    check('S16 default study render fills white', r.study === '#ffffff', r.study);
+    check('S16 export render ignores bg (white)', r.export === '#ffffff', r.export);
+    check('S16 scoring render keeps its own board color', !!r.scoring && r.scoring !== '#ffffff', r.scoring);
+    // stash the pre-bg scoring fill for the scoping comparison below
+    await evalIn(page, (v) => { window.__s16ScoringDefault = v; }, r.scoring);
+  }
+  // Set bg while the panel targets the initial view.
+  await evalIn(page, () => __h.setBg('#123456'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
+  {
+    const r = await evalIn(page, () => ({
+      initial: __h.renderFill('go-board-canvas-initial', true, false, false),
+      study: __h.renderFill('go-board-canvas-study', false, true, false),
+      export: __h.renderFill('export-tmp', false, false, true),
+      scoring: __h.scoringFill()
+    }));
+    const styleBg = await evalIn(page, () => {
+      const s = window.getEffectiveInitialStyle();
+      return s && s.bg ? s.bg.color : null;
+    });
+    const scoringDefault = await evalIn(page, () => window.__s16ScoringDefault);
+    check('S16 initial style.bg.color updated by picker', styleBg === '#123456', styleBg);
+    check('S16 initial render fills the chosen bg', r.initial === '#123456', r.initial);
+    check('S16 study render unaffected (independent style)', r.study === '#ffffff', r.study);
+    check('S16 export render still white (scoped out)', r.export === '#ffffff', r.export);
+    check('S16 scoring render unchanged by bg', r.scoring === scoringDefault, r.scoring);
+  }
+  // Reset the INITIAL view's bg before the study phase so the independence assertions below
+  // prove the two styles do not clobber each other.
+  await evalIn(page, () => document.querySelector('button[data-section="bg"]').click());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
+  {
+    const p = await evalIn(page, () => __h.bgPanel());
+    const r = await evalIn(page, () => __h.renderFill('go-board-canvas-initial', true, false, false));
+    check('S16 initial-view section reset restores white', p.pickerVal === '#ffffff' && r === '#ffffff', `${p.pickerVal}/${r}`);
+  }
+  // Activate the study view: the same picker now targets studyBoardStyle.
+  await evalIn(page, () => {
+    const m = document.getElementById('study-modal-overlay');
+    if (m) { m.classList.remove('hidden'); m.style.display = 'block'; }
+  });
+  {
+    const view = await evalIn(page, () => window.getCurrentBoardView());
+    check('S16 panel targets the study view', view === '#go-board-canvas-study', view);
+  }
+  await evalIn(page, () => __h.setBg('#123456'));
+  await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
+  {
+    const r = await evalIn(page, () => ({
+      study: __h.renderFill('go-board-canvas-study', false, true, false),
+      initial: __h.renderFill('go-board-canvas-initial', true, false, false)
+    }));
+    const styleBg = await evalIn(page, () => {
+      const s = window.state.studyBoardStyle;
+      return s && s.bg ? s.bg.color : null;
+    });
+    check('S16 study style.bg.color updated by picker', styleBg === '#123456', styleBg);
+    check('S16 study render fills the chosen bg', r.study === '#123456', r.study);
+    check('S16 initial render keeps its own white', r.initial === '#ffffff', r.initial);
+  }
+  // Section reset restores the default white on the current (study) view.
+  await evalIn(page, () => document.querySelector('button[data-section="bg"]').click());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
+  {
+    const r = await evalIn(page, () => ({
+      study: __h.renderFill('go-board-canvas-study', false, true, false),
+      initial: __h.renderFill('go-board-canvas-initial', true, false, false)
+    }));
+    const p = await evalIn(page, () => __h.bgPanel());
+    check('S16 study bg reset restores white render', r.study === '#ffffff', r.study);
+    check('S16 picker resets to #ffffff', p.pickerVal === '#ffffff', p.pickerVal);
+    check('S16 initial render untouched by study reset', r.initial === '#ffffff', r.initial);
+  }
+  // Restore the study overlay so later scenarios start clean.
+  await evalIn(page, () => {
+    const m = document.getElementById('study-modal-overlay');
+    if (m) { m.classList.add('hidden'); m.style.display = 'none'; }
+  });
+
+  // ── S17: komi tag survives a fresh-page restore (v0.1.071) ───────────────
+  // The ORIGINAL bug: reopen after a hard refresh (saved session restored from
+  // rec.scoringData) showed "0 (default)". StudyRecordDB is localStorage-backed so the
+  // record survives the reload; reload, re-apply the SGF (to rebuild gameInfo.km), then
+  // reopen the restored session and check the tag.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.scoringState && document.getElementById('btn-scoring-lock'), { timeout: 15000 });
+  await evalIn(page, () => {
+    window.__h = {
+      loadScenario(sgf, id) {
+        window.loadSGF(sgf);
+        if (window.state.sgfMoves && window.state.sgfMoves.length > 0) {
+          window.goToMove(window.state.sgfMoves.length - 1);
+        }
+        const rec = {
+          id, recNo: '0' + (Math.abs(id.length)), fileNm: 'test.sgf',
+          workingSgf: sgf, currentMoveIndex: -1
+        };
+        window.StudyRecordDB.saveRecord(rec);
+        window.state.activeStudyId = rec.id;
+      },
+      open() {
+        const ge = document.getElementById('game-end-popup');
+        if (ge) ge.style.display = 'none';
+        window.openScoringModal();
+      },
+      komiReadout() {
+        const tag = document.getElementById('scoring-komi-default-tag');
+        const input = document.getElementById('scoring-komi-val');
+        return { tag: tag ? tag.textContent : null, val: input ? input.value : null };
+      },
+      scoringData() {
+        const rec = window.StudyRecordDB.getRecord(window.state.activeStudyId);
+        return rec ? rec.scoringData : null;
+      }
+    };
+  });
+  await evalIn(page, (sgf) => __h.loadScenario(sgf, 's15'), fixture);
+  await evalIn(page, () => __h.open());
+  await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
+  {
+    const k = await evalIn(page, () => __h.komiReadout());
+    const sd = await evalIn(page, () => __h.scoringData());
+    check('S17 fresh-page restore tag = 5 (default)', k.tag === '5 (default)', JSON.stringify(k));
+    check('S17 fresh-page restore komi input stays 5', k.val === '5', k.val);
+    check('S17 fresh-page restore kept the saved komi session', sd && sd.komi === 5, sd && JSON.stringify(sd.komi));
+  }
+
   // ── Summary ───────────────────────────────────────────────────────────────
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;
   console.log('\n======================================');
-  console.log(`v0.1.061 harness: ${passed} passed, ${failed} failed (${results.length} checks)`);
+  console.log(`v0.1.071 harness: ${passed} passed, ${failed} failed (${results.length} checks)`);
   if (consoleErrors.length) {
     console.log('\nPage errors captured:');
     consoleErrors.slice(0, 10).forEach(e => console.log('  ', String(e).slice(0, 300)));
