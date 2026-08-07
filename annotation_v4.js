@@ -17601,13 +17601,16 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.textBaseline = 'middle';
                     const fontPx = Math.min(CELL_SIZE * 0.9, 9 + count * 1.4);
                     // Figtree-SemiBold digits (the registered 400-weight 'Figtree' face IS
-                    // Figtree-SemiBold.ttf); while an EDITING mode is active (Replacing Dead
-                    // Stones / re-Arranging Stones) the digits switch to the matching italic
-                    // (Figtree-SemiBoldItalic.ttf) as a visual cue that the counts are still
-                    // adapting to the playground edits. No `bold` keyword: the single registered
-                    // face already carries the semi-bold weight, so `bold` would only trigger a
-                    // faux-bold on top of it.
-                    const countsEditing = scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange';
+                    // Figtree-SemiBold.ttf); while an EDITING state is active (NOT frozen — the
+                    // Replace/re-Arrange counting modes, and the Edit-unfrozen post-Save view)
+                    // the digits switch to the matching italic (Figtree-SemiBoldItalic.ttf) as a
+                    // visual cue that the counts are still adapting; once "Board Saved ✓" freezes
+                    // the session the digits return to REGULAR. The `!frozen` guard matters
+                    // because after Save the lock keeps `interactionMode` forced to 'replace' —
+                    // frozen is the only reliable "not editing" signal. No `bold` keyword: the
+                    // single registered face already carries the semi-bold weight, so `bold`
+                    // would only trigger a faux-bold on top of it.
+                    const countsEditing = !scoringState.frozen && (scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange');
                     ctx.font = `${countsEditing ? 'italic ' : ''}${fontPx}px 'Figtree', sans-serif`;
                     // Pure font text — no border, no shadow, no halo (explicitly clear any shadow
                     // a prior draw op left on the context). Black territories ink in the warm

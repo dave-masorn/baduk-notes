@@ -530,10 +530,17 @@ async function main() {
       return getComputedStyle(ov).display === 'block' &&
         scoringState.showTerritoryCounts === false && scoringState.frozen === true;
     }));
+  await page.evaluate(() => {
+    window.__tcShots = [];
+  });
   await page.click('#scoring-opt-territory-counts');
   await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+  const frozenShots = await shots();
   check('frozen: a real click through the overlay flips w/# (Display Options clickable post-Save)',
     await page.evaluate(() => scoringState.showTerritoryCounts === true));
+  check('font: "Board Saved ✓" renders the w/# digits REGULAR (no italic after Save)',
+    frozenShots.length === 6 && frozenShots.every((s) => /Figtree/.test(s.font) && !/italic/.test(s.font)),
+    JSON.stringify(frozenShots.map((s) => s.font)));
   check('frozen: the board itself is still click-locked (canvas click changes nothing)',
     await page.evaluate(() => {
       const canvas = document.getElementById('go-board-canvas-scoring');
@@ -546,6 +553,12 @@ async function main() {
       return scoringState.board[3][3] === before;
     }));
   await page.evaluate(() => window.setScoringFrozen(false));
+  await page.evaluate(() => { window.__tcShots = []; window.drawBoard(); });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+  const editShots = await shots();
+  check('font: pressing Edit (unfrozen) returns the digits to italic',
+    editShots.length === 6 && editShots.every((s) => /Figtree/.test(s.font) && /italic/.test(s.font)),
+    JSON.stringify(editShots.map((s) => s.font)));
 
   const errs = consoleErrors.filter((e) => !/favicon/i.test(e));
   check('no console/page errors', errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');
