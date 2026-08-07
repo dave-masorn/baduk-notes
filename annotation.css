@@ -39,6 +39,17 @@
 }
 
 @font-face {
+    font-family: 'GoogleSansCode';
+    src: url('f0nts/GoogleSansCode_Proportional-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    ascent-override: 88%;
+    descent-override: 12%;
+    line-gap-override: 0%;
+    font-display: swap;
+}
+
+@font-face {
     font-family: 'Pretendard';
     src: url('f0nts/PretendardEN-RegularItalic.otf') format('opentype');
     font-weight: normal;

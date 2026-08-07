@@ -16,7 +16,7 @@
     <link rel="preload" href="f0nts/PretendardEN-Regular.otf" as="font" type="font/otf" crossorigin>
     <link rel="preload" href="f0nts/GoogleSansCode_Proportional-Regular.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="f0nts/GoogleSansCode_Proportional-Italic.ttf" as="font" type="font/ttf" crossorigin>
-    <link rel="stylesheet" href="annotation.css?v=4.2">
+    <link rel="stylesheet" href="annotation.css?v=4.3">
     <style>
         @font-face {
             font-family: 'Anthropic Sans Bold';
@@ -295,7 +295,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.080</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.1.081</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -1665,7 +1665,7 @@
 
     <!-- Manual Scoring Modal Overlay (#scoring) -->
     <div id="scoring-modal-overlay" class="modal-overlay hidden" style="z-index: 10001; background: rgba(10, 25, 20, 0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: none; align-items: center; justify-content: center; position: fixed; inset: 0;">
-        <div id="scoring-modal" class="sgf-expanded" style="width: min(1230px, 96vw); height: min(880px, 96vh); max-width: 96vw; max-height: 96vh; background: #0d2822; color: #ecfdf5; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; position: relative; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); border: 1px solid rgba(16, 185, 129, 0.25); font-family: system-ui, -apple-system, sans-serif; transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1);">
+        <div id="scoring-modal" class="sgf-expanded" style="width: min(1230px, 96vw); height: min(880px, 96vh); max-width: 96vw; max-height: 96vh; background: #0d2822; color: #ecfdf5; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; position: relative; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); border: 1px solid rgba(16, 185, 129, 0.25); font-family: 'Anthropic Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1);">
             <!-- Header Bar -->
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; background: #061c16; border-bottom: 1px solid rgba(16, 185, 129, 0.2); flex-shrink: 0;">
                 <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
@@ -1915,48 +1915,48 @@
                                 <div style="background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.28); border-radius: 7px; overflow: hidden;">
                                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 4px; background: rgba(239,68,68,0.14); border-bottom: 1px solid rgba(239,68,68,0.22);">
                                         <div style="display: flex; align-items: center; gap: 5px;">
-                                            <span style="font-size: 0.68rem; font-weight: 800; color: #fca5a5; font-family: 'Courier New', monospace; letter-spacing: 0.08em;">DD</span>
+                                            <span style="font-size: 0.68rem; font-weight: 800; color: #fca5a5; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; letter-spacing: 0.08em;">DD</span>
                                             <span style="font-size: 0.6rem; color: #9ca3af; font-style: italic;">Dim</span>
                                         </div>
                                         <span id="sgf-prop-dd-count" style="font-size: 0.62rem; font-weight: 700; color: #fca5a5;">—</span>
                                     </div>
-                                    <div id="sgf-prop-dd-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'Courier New', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
+                                    <div id="sgf-prop-dd-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
                                 </div>
 
                                 <!-- MA Bar: Mark with X -->
                                 <div style="background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.25); border-radius: 7px; overflow: hidden;">
                                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 4px; background: rgba(251,191,36,0.12); border-bottom: 1px solid rgba(251,191,36,0.2);">
                                         <div style="display: flex; align-items: center; gap: 5px;">
-                                            <span style="font-size: 0.68rem; font-weight: 800; color: #fde68a; font-family: 'Courier New', monospace; letter-spacing: 0.08em;">MA</span>
+                                            <span style="font-size: 0.68rem; font-weight: 800; color: #fde68a; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; letter-spacing: 0.08em;">MA</span>
                                             <span style="font-size: 0.6rem; color: #9ca3af; font-style: italic;">Mark ×</span>
                                         </div>
                                         <span id="sgf-prop-ma-count" style="font-size: 0.62rem; font-weight: 700; color: #fde68a;">—</span>
                                     </div>
-                                    <div id="sgf-prop-ma-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'Courier New', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
+                                    <div id="sgf-prop-ma-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
                                 </div>
 
                                 <!-- TB Bar: Territory Black -->
                                 <div style="background: rgba(17,24,39,0.55); border: 1px solid rgba(75,85,99,0.45); border-radius: 7px; overflow: hidden;">
                                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 4px; background: rgba(17,24,39,0.7); border-bottom: 1px solid rgba(55,65,81,0.4);">
                                         <div style="display: flex; align-items: center; gap: 5px;">
-                                            <span style="font-size: 0.68rem; font-weight: 800; color: #e5e7eb; font-family: 'Courier New', monospace; letter-spacing: 0.08em;">TB</span>
+                                            <span style="font-size: 0.68rem; font-weight: 800; color: #e5e7eb; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; letter-spacing: 0.08em;">TB</span>
                                             <span style="font-size: 0.6rem; color: #9ca3af; font-style: italic;">Terr. Black</span>
                                         </div>
                                         <span id="sgf-prop-tb-count" style="font-size: 0.62rem; font-weight: 700; color: #e5e7eb;">—</span>
                                     </div>
-                                    <div id="sgf-prop-tb-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'Courier New', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
+                                    <div id="sgf-prop-tb-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
                                 </div>
 
                                 <!-- TW Bar: Territory White -->
                                 <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(209,213,219,0.22); border-radius: 7px; overflow: hidden;">
                                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 8px 4px; background: rgba(255,255,255,0.08); border-bottom: 1px solid rgba(255,255,255,0.12);">
                                         <div style="display: flex; align-items: center; gap: 5px;">
-                                            <span style="font-size: 0.68rem; font-weight: 800; color: #f9fafb; font-family: 'Courier New', monospace; letter-spacing: 0.08em;">TW</span>
+                                            <span style="font-size: 0.68rem; font-weight: 800; color: #f9fafb; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; letter-spacing: 0.08em;">TW</span>
                                             <span style="font-size: 0.6rem; color: #9ca3af; font-style: italic;">Terr. White</span>
                                         </div>
                                         <span id="sgf-prop-tw-count" style="font-size: 0.62rem; font-weight: 700; color: #f9fafb;">—</span>
                                     </div>
-                                    <div id="sgf-prop-tw-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'Courier New', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
+                                    <div id="sgf-prop-tw-list" style="padding: 5px 8px 6px; font-size: 0.56rem; color: #d1d5db; font-family: 'GoogleSansCode', 'GoogleSansCodeProp', monospace; line-height: 1.65; word-break: break-all; max-height: 80px; overflow-y: auto; scrollbar-width: none;"></div>
                                 </div>
 
                             </div><!-- end sgf-prop-bars-body -->
@@ -2047,7 +2047,7 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#DCB35C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
                     <span class="kifu-section-title" id="kifu-section-title-text">Tracked Go Study Sessions (0 Games)</span>
                 </div>
-                <span class="kifu-section-hint" style="color: #295D2F; font-weight: 600; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;">Ready for new SGF uploads</span>
+                <span class="kifu-section-hint" style="color: #295D2F; font-weight: 600; font-size: 12px; font-family: 'Anthropic Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">Ready for new SGF uploads</span>
             </div>
 
             <!-- Table Body Container -->
@@ -2625,14 +2625,14 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script src="sgf-parser.js?v=0.1.080"></script>
-    <script src="deadstones.bundle.js?v=0.1.080"></script>
-    <script src="board-estimate.js?v=0.1.080"></script>
-    <script src="goscorer.js?v=0.1.080"></script>
-    <script src="liberties.js?v=0.1.080"></script>
-    <script src="move-term-detector.js?v=0.1.080"></script>
-    <script src="phase-detector.js?v=0.1.080"></script>
-    <script src="game-tree.js?v=0.1.080"></script>
-    <script src="annotation_v4.js?v=0.1.080"></script>
+    <script src="sgf-parser.js?v=0.1.081"></script>
+    <script src="deadstones.bundle.js?v=0.1.081"></script>
+    <script src="board-estimate.js?v=0.1.081"></script>
+    <script src="goscorer.js?v=0.1.081"></script>
+    <script src="liberties.js?v=0.1.081"></script>
+    <script src="move-term-detector.js?v=0.1.081"></script>
+    <script src="phase-detector.js?v=0.1.081"></script>
+    <script src="game-tree.js?v=0.1.081"></script>
+    <script src="annotation_v4.js?v=0.1.081"></script>
 </body>
 </html>
