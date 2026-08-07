@@ -17592,16 +17592,16 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowBlur = 0;
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
                     const label = String(count);
-                    // Adaptive rounded badge behind the count: a CROSSWORD-STYLE shape that hugs the
-                    // actual territory area of its group — every territory square it owns drawn as a
-                    // rounded cell centered on its grid intersection, all merged into one path (nonzero
-                    // winding) so the box follows the group's outline: rounded outer corners, notched
-                    // inner corners, no empty bounding-box padding. Filled with 40% of the territory
-                    // color (black box on black territory, white box on white territory). The badge
-                    // pops in with a smooth ease-out-back scale (pivoting about the group's
-                    // intersection midpoint) on its first draw, on a count change, or when the
-                    // group's extent changes — and the draw schedules follow-up redraws so the pop
-                    // completes even when no other redraw is triggered.
+                    // Adaptive rounded badge behind the count: a CROSSWORD-STYLE box per territory
+                    // intersection — every territory square the group owns gets its own rounded cell
+                    // (CELL-sized, centered on its grid intersection), filled 40%-translucent with the
+                    // territory color (black box on black territory, white box on white territory), so
+                    // the cluster of cells follows the group's actual territory area like letter cells
+                    // in a crossword. Each cell is drawn and filled on its own (roundedRectPath starts
+                    // a fresh path per call). The badge pops in with a smooth ease-out-back scale
+                    // (pivoting about the group's intersection midpoint) on its first draw, on a count
+                    // change, or when the group's extent changes — and the draw schedules follow-up
+                    // redraws so the pop completes even when no other redraw is triggered.
                     const boxCX = PADDING + (fcMin + fcMax) / 2 * CELL_SIZE;
                     const boxCY = PADDING + (frMin + frMax) / 2 * CELL_SIZE;
                     const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
@@ -17617,14 +17617,13 @@ function renderScoringBoardToCtx(ctx) {
                     const cellPx = CELL_SIZE * boxScale;
                     const sqHalf = cellPx / 2;
                     const sqRad = Math.min(CELL_SIZE * 0.45, CELL_SIZE / 2) * boxScale;
-                    ctx.beginPath();
                     for (const [my, mx] of members) {
                         const sqCX = boxCX + (PADDING + mx * CELL_SIZE - boxCX) * boxScale;
                         const sqCY = boxCY + (PADDING + my * CELL_SIZE - boxCY) * boxScale;
                         roundedRectPath(ctx, sqCX - sqHalf, sqCY - sqHalf, cellPx, cellPx, sqRad);
+                        ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+                        ctx.fill();
                     }
-                    ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
-                    ctx.fill();
                     ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';
                     ctx.fillText(label, cx, cy);
                     ctx.restore();

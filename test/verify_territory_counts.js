@@ -235,13 +235,14 @@ async function main() {
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
-  // CROSSWORD-STYLE BADGES — one merged shape per territory group, hugging its actual area: every
-  // territory square the group owns is drawn as a rounded cell centered on its grid intersection
-  // (CELL-sized, radius CELL*0.45), all unioned into ONE fill with the nonzero winding rule, so
-  // the box follows the group's outline (rounded outer corners, notched inner corners) instead of
-  // a bounding rectangle. Filled 40%-translucent with the territory color. Group scan order is
-  // row-major, so fill order below is deterministic. The pop-in scales each cell about the group's
-  // intersection midpoint; at full scale every cell lands exactly on its intersection.
+  // CROSSWORD-STYLE BADGES — one box per territory intersection: every territory square the group
+  // owns draws as its OWN rounded cell centered on its grid intersection (CELL-sized, radius
+  // CELL*0.45) and filled 40%-translucent with the territory color, so each group shows a cluster
+  // of boxes following its actual territory area like letter cells in a crossword. Group scan
+  // order is row-major; within a group the cells draw in BFS member order, and each cell's fill
+  // call immediately follows its path call, so __tcBoxes[i] pairs 1:1 with __tcBoxFills[i]. The
+  // pop-in scales each cell about the group's intersection midpoint; at full scale every cell
+  // lands exactly on its intersection.
   const groups = [
     { label: '6', color: 'black', cells: [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [2, 1]] },
     { label: '9', color: 'white', cells: [[4, 10], [4, 11], [4, 12], [5, 10], [5, 11], [5, 12], [6, 10], [6, 11], [6, 12]] },
@@ -254,6 +255,10 @@ async function main() {
   const WHITE_FILL = 'rgba(255, 255, 255, 0.4)';
   const cellCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
   const squareAt = (list, r, c) => list.find((b) => near(cellCenter(b), [PADDING + c * CELL, PADDING + r * CELL]));
+  const fillForCell = (b) => {
+    const g = groups.find((gr) => gr.cells.some(([r, c]) => near(cellCenter(b), [PADDING + c * CELL, PADDING + r * CELL])));
+    return g ? (g.color === 'black' ? BLACK_FILL : WHITE_FILL) : null;
+  };
   const extent = (list, g) => {
     const s = g.cells.map(([r, c]) => squareAt(list, r, c)).filter(Boolean);
     const minX = Math.min(...s.map((b) => b.x));
@@ -273,8 +278,8 @@ async function main() {
     })),
     JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
 
-  check('box: black territories get a black 40% badge, white a white 40% badge',
-    fillList.length === 6 && fillList.every((f, i) => f === (groups[i].color === 'black' ? BLACK_FILL : WHITE_FILL)),
+  check('box: every cell gets a black 40% badge on black territory, white 40% on white',
+    fillList.length === 24 && fillList.every((f, i) => f === fillForCell(boxList[i])),
     JSON.stringify(fillList));
 
   // Settle the animation deterministically (the pop is ~350ms; forcing t0=0 renders every badge
@@ -362,8 +367,8 @@ async function main() {
   check('dame: clearing the 3x3 white group removes its "9" (5 groups remain)',
     shrunk.length === 5 && !findShot(shrunk, '9', PADDING + 11 * CELL, PADDING + 5 * CELL),
     `drew ${shrunk.length}`);
-  check('dame: its crossword badge disappears too (15 member squares, 5 fills remain)',
-    await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 5));
+  check('dame: its crossword badge disappears too (15 member squares, 15 fills remain)',
+    await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 15));
   check('anim: clearing a group drops its pop-in entry (map shrinks to 5)',
     await page.evaluate(() => territoryBoxAnims.size === 5));
 
@@ -393,7 +398,7 @@ async function main() {
     lockedShots.length === 6 && !!findShot(lockedShots, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL),
     `drew ${lockedShots.length}`);
   check('post-lock: badges render for all 6 locked groups',
-    await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 6));
+    await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 24));
   const scoreBefore = await scoreText();
   check('post-lock: lock commits (locked + snapshot)',
     await page.evaluate(() => scoringState.locked && !!scoringState.lockedSnapshot));
