@@ -190,6 +190,39 @@ async function main() {
       const full = window.__tcBoxes.filter((b) => Math.abs(b.w - cell) <= 1);
       return `framesDrew=${window.__tcBoxes.length} fullScaleCells=${full.length} shots=${window.__tcShots.length} anims=${territoryBoxAnims.size}`;
     }, CELL));
+  // RE-POP REGRESSION: the pop-in is NOT first-click-only — every w/# toggle-ON must replay it.
+  // Toggle off then back on with NO data change (same count, same extent): the map entries must
+  // get fresh t0 timestamps and the badges must be visibly mid-animation right after the re-enable
+  // draw, not silently settled at full scale. The app's own self-driving loop then finishes the
+  // replay on its own.
+  await page.evaluate(() => {
+    window.__tcBoxes = [];
+    document.getElementById('scoring-opt-territory-counts').click(); // off
+    window.__tcBoxes = [];
+    document.getElementById('scoring-opt-territory-counts').click(); // back on -> must re-pop
+  });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 120)));
+  check('re-pop: every w/# toggle-ON replays the pop-in (badges mid-animation, not settled)',
+    await page.evaluate((cell) => {
+      const mid = window.__tcBoxes.filter((b) => b.w > cell * 0.05 && b.w < cell * 0.99);
+      const nowT = performance.now();
+      const animating = [...territoryBoxAnims.values()].every((a) => (nowT - a.t0) / 350 < 1);
+      return mid.length >= 24 && animating && territoryBoxAnims.size === 6;
+    }, CELL),
+    await page.evaluate((cell) => {
+      const mid = window.__tcBoxes.filter((b) => b.w > cell * 0.05 && b.w < cell * 0.99);
+      const nowT = performance.now();
+      const ages = [...territoryBoxAnims.values()].map((a) => Math.round((nowT - a.t0) / 10) / 10);
+      return `midScale=${mid.length} anims=${territoryBoxAnims.size} ages=${JSON.stringify(ages)}`;
+    }, CELL));
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 350)));
+  check('re-pop: the replay completes to full scale on its own',
+    await page.evaluate((cell) => {
+      const full = window.__tcBoxes.filter((b) => Math.abs(b.w - cell) <= 1 && Math.abs(b.h - cell) <= 1);
+      const nowT = performance.now();
+      return full.length >= 24 && [...territoryBoxAnims.values()].every((a) => (nowT - a.t0) / 350 >= 1);
+    }, CELL));
+
   // From here on the harness draws manually; stop the app's animation loop so captures stay
   // deterministic (one draw = exactly the records that draw emits).
   await page.evaluate(() => { window.__tcDisableTerritoryAnim = true; });

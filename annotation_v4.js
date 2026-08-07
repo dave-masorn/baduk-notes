@@ -15473,6 +15473,14 @@ function initScoringModal() {
     if (optTerrCounts) {
         optTerrCounts.addEventListener('change', (e) => {
             scoringState.showTerritoryCounts = e.target.checked;
+            // Every w/# toggle-ON replays the pop-in: bump every existing badge's start time so
+            // the very next draw starts the ease-out-back scale over, even when no count or extent
+            // changed. (Turning the toggle off draws nothing; fresh badges on a first-ever ON click
+            // create their own animation entries.)
+            if (e.target.checked) {
+                const nowT = performance.now();
+                for (const a of territoryBoxAnims.values()) a.t0 = nowT;
+            }
             drawBoard();
         });
     }
@@ -17612,9 +17620,9 @@ function renderScoringBoardToCtx(ctx) {
                     // seams, no empty bounding-box padding. Filled 40%-translucent with the
                     // territory color (black box on black territory, white box on white territory).
                     // The box pops in with a smooth ease-out-back scale (pivoting about the group's
-                    // intersection midpoint) on its first draw, on a count change, or when the
-                    // group's extent changes — and the draw schedules follow-up redraws so the pop
-                    // completes even when no other redraw is triggered.
+                    // intersection midpoint) on its first draw, on a count change, when the group's
+                    // extent changes, or on every w/# toggle-ON — and the draw schedules follow-up
+                    // redraws so the pop completes even when no other redraw is triggered.
                     const boxCX = PADDING + (fcMin + fcMax) / 2 * CELL_SIZE;
                     const boxCY = PADDING + (frMin + frMax) / 2 * CELL_SIZE;
                     const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
