@@ -17593,13 +17593,14 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
                     const label = String(count);
                     // Adaptive rounded badge behind the count: a rounded box that COVERS THE WHOLE
-                    // territory area of its group — the full-cell bounding box of the group's points
-                    // (PADDING + col*CELL .. PADDING + (col+1)*CELL) — filled with 40% of the
-                    // territory color (black box on black territory, white box on white territory).
-                    // The badge pops in with a smooth ease-out-back scale on its first draw, on a
-                    // count change, or when the group's extent changes.
-                    const boxX0 = PADDING + fcMin * CELL_SIZE;
-                    const boxY0 = PADDING + frMin * CELL_SIZE;
+                    // territory area of its group — the group's bounding box anchored to the grid
+                    // INTERSECTIONS (edges midway between grid lines, half a grid spacing outside the
+                    // outermost intersections: PADDING + (col-0.5)*CELL .. PADDING + (col+0.5)*CELL) —
+                    // filled with 40% of the territory color (black box on black territory, white box
+                    // on white territory). The badge pops in with a smooth ease-out-back scale on its
+                    // first draw, on a count change, or when the group's extent changes.
+                    const boxX0 = PADDING + (fcMin - 0.5) * CELL_SIZE;
+                    const boxY0 = PADDING + (frMin - 0.5) * CELL_SIZE;
                     const boxW = (fcMax - fcMin + 1) * CELL_SIZE;
                     const boxH = (frMax - frMin + 1) * CELL_SIZE;
                     const boxCX = boxX0 + boxW / 2;

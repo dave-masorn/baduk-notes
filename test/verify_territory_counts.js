@@ -217,29 +217,30 @@ async function main() {
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
   // ADAPTIVE ROUNDED BADGES — one rounded box behind every number, COVERING the whole territory
-  // area of its group (the full-cell bounding box of the group's points), filled 40%-translucent
-  // with the territory color, with a smooth pop-in scale animation. Box centers equal each
-  // group's bbox center and stay fixed under the scale animation (which pivots about that
-  // center), so they are identifiable even mid-pop.
-  const expectedBoxes = [ // [x0, y0, w, h] canvas units — full-cell bbox of each fixture group
-    [PADDING + 0 * CELL, PADDING + 0 * CELL, 2 * CELL, 3 * CELL],   // black "6": rows 0-2, cols 0-1
-    [PADDING + 14 * CELL, PADDING + 18 * CELL, 5 * CELL, CELL],    // white "5": row 18, cols 14-18
-    [PADDING + 10 * CELL, PADDING + 4 * CELL, 3 * CELL, 3 * CELL], // white "9": rows 4-6, cols 10-12
-    [PADDING + 4 * CELL, PADDING + 8 * CELL, CELL, CELL],          // black "1" at (8,4)
-    [PADDING + 5 * CELL, PADDING + 9 * CELL, CELL, CELL],          // black "1" at (9,5)
-    [PADDING + 4 * CELL, PADDING + 11 * CELL, 2 * CELL, CELL]      // black "2": row 11, cols 4-5
+  // area of its group (the bounding box anchored to the grid INTERSECTIONS — edges midway
+  // between grid lines, half a grid spacing outside the outermost intersections), filled
+  // 40%-translucent with the territory color, with a smooth pop-in scale animation. Box
+  // centers equal each group's intersection midpoint and stay fixed under the scale animation
+  // (which pivots about that center), so they are identifiable even mid-pop.
+  const expectedBoxes = [ // [x0, y0, w, h] canvas units — intersection-oriented bbox of each fixture group
+    [PADDING - 0.5 * CELL, PADDING - 0.5 * CELL, 2 * CELL, 3 * CELL],   // black "6": rows 0-2, cols 0-1
+    [PADDING + 13.5 * CELL, PADDING + 17.5 * CELL, 5 * CELL, CELL],    // white "5": row 18, cols 14-18
+    [PADDING + 9.5 * CELL, PADDING + 3.5 * CELL, 3 * CELL, 3 * CELL],  // white "9": rows 4-6, cols 10-12
+    [PADDING + 3.5 * CELL, PADDING + 7.5 * CELL, CELL, CELL],          // black "1" at (8,4)
+    [PADDING + 4.5 * CELL, PADDING + 8.5 * CELL, CELL, CELL],          // black "1" at (9,5)
+    [PADDING + 3.5 * CELL, PADDING + 10.5 * CELL, 2 * CELL, CELL]      // black "2": row 11, cols 4-5
   ];
   let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
   let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
   const boxCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
   const boxOf = (list, x0, y0, w, h) => list.find((b) => near(boxCenter(b), [x0 + w / 2, y0 + h / 2]));
   const boxColorIsBlack = (b) => {
-    if (near(boxCenter(b), [PADDING + 1.0 * CELL, PADDING + 1.5 * CELL])) return true;   // black "6"
-    if (near(boxCenter(b), [PADDING + 16.5 * CELL, PADDING + 18.5 * CELL])) return false; // white "5"
-    if (near(boxCenter(b), [PADDING + 11.5 * CELL, PADDING + 5.5 * CELL])) return false;  // white "9"
-    if (near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 8.5 * CELL])) return true;    // black "1"
-    if (near(boxCenter(b), [PADDING + 5.5 * CELL, PADDING + 9.5 * CELL])) return true;    // black "1"
-    if (near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 11.5 * CELL])) return true;     // black "2"
+    if (near(boxCenter(b), [PADDING + 0.5 * CELL, PADDING + 1.0 * CELL])) return true;   // black "6"
+    if (near(boxCenter(b), [PADDING + 16 * CELL, PADDING + 18 * CELL])) return false;    // white "5"
+    if (near(boxCenter(b), [PADDING + 11 * CELL, PADDING + 5 * CELL])) return false;     // white "9"
+    if (near(boxCenter(b), [PADDING + 4 * CELL, PADDING + 8 * CELL])) return true;       // black "1"
+    if (near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 9 * CELL])) return true;       // black "1"
+    if (near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 11 * CELL])) return true;    // black "2"
     return null;
   };
 
@@ -268,10 +269,10 @@ async function main() {
 
   check('box: badge size scales with territory size (6/9 boxes 3 cells tall, 5 box 5 cells wide)',
     (() => {
-      const b6 = boxOf(settledBoxes, PADDING, PADDING, 2 * CELL, 3 * CELL);
-      const b9 = boxOf(settledBoxes, PADDING + 10 * CELL, PADDING + 4 * CELL, 3 * CELL, 3 * CELL);
-      const b5 = boxOf(settledBoxes, PADDING + 14 * CELL, PADDING + 18 * CELL, 5 * CELL, CELL);
-      const b2 = boxOf(settledBoxes, PADDING + 4 * CELL, PADDING + 11 * CELL, 2 * CELL, CELL);
+      const b6 = boxOf(settledBoxes, PADDING - 0.5 * CELL, PADDING - 0.5 * CELL, 2 * CELL, 3 * CELL);
+      const b9 = boxOf(settledBoxes, PADDING + 9.5 * CELL, PADDING + 3.5 * CELL, 3 * CELL, 3 * CELL);
+      const b5 = boxOf(settledBoxes, PADDING + 13.5 * CELL, PADDING + 17.5 * CELL, 5 * CELL, CELL);
+      const b2 = boxOf(settledBoxes, PADDING + 3.5 * CELL, PADDING + 10.5 * CELL, 2 * CELL, CELL);
       return !!b6 && !!b9 && !!b5 && !!b2 &&
         Math.abs(b6.h - b9.h) <= 1 && b6.h > b5.h && b6.h > b2.h &&
         b5.w > b9.w && b9.w > b2.w;
