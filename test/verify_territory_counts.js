@@ -97,10 +97,31 @@ async function main() {
         }
         return origStroke.call(this, text, x, y, maxW);
       };
+      // Adaptive rounded badges: roundedRectPath is a global classic-script function, so it is
+      // patchable here. Every 40%-translucent fill (black box / white box) is unique to these
+      // badges (no other draw op uses a 0.4 alpha), so capturing fill() with those colors
+      // isolates exactly the badge fills.
+      window.__tcBoxes = [];
+      const origRR = window.roundedRectPath;
+      window.roundedRectPath = function (ctx, x, y, w, h, r) {
+        window.__tcBoxes.push({ x, y, w, h, r });
+        return origRR.call(this, ctx, x, y, w, h, r);
+      };
+      window.__tcBoxFills = [];
+      const origFill = CanvasRenderingContext2D.prototype.fill;
+      CanvasRenderingContext2D.prototype.fill = function () {
+        const fs = String(this.fillStyle);
+        if (fs === 'rgba(17, 24, 39, 0.4)' || fs === 'rgba(255, 255, 255, 0.4)') {
+          window.__tcBoxFills.push(fs);
+        }
+        return origFill.apply(this, arguments);
+      };
       window.__tcPatched = true;
     }
     window.__tcShots = [];
     window.__tcStrokes = [];
+    window.__tcBoxes = [];
+    window.__tcBoxFills = [];
   });
 
   // Fixture: EMPTY board (no algorithmic territory) + manual territory marks only.
@@ -153,7 +174,7 @@ async function main() {
   await page.evaluate(() => document.getElementById('scoring-opt-territory-counts').click());
   check('toggle: clicking w/# sets scoringState.showTerritoryCounts',
     await page.evaluate(() => scoringState.showTerritoryCounts === true));
-  await page.evaluate(() => { window.__tcShots = []; window.drawBoard(); });
+  await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.__tcBoxFills = []; window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
 
   let shotList = await shots();
@@ -195,6 +216,48 @@ async function main() {
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
+  // ADAPTIVE ROUNDED BADGES — one rounded box behind every number, sized to the text, filled
+  // 40%-translucent with the territory color, with a smooth pop-in scale animation.
+  let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
+  let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
+  const boxCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+
+  check('box: one rounded badge behind each of the 6 numbers, centered on it',
+    boxList.length === 6 && expected.every(([, x, y]) => !!boxList.find((b) => near(boxCenter(b), [x, y]))),
+    JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
+
+  const boxAt = (list, x, y) => list.find((b) => near(boxCenter(b), [x, y]));
+  check('box: black territories get a black 40% badge, white a white 40% badge',
+    fillList.length === 6 && boxList.every((b, i) => {
+      const isBlack = near(boxCenter(b), [PADDING + 0.5 * CELL, PADDING + 1.0 * CELL]) ||
+        near(boxCenter(b), [PADDING + 4 * CELL, PADDING + 8 * CELL]) ||
+        near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 9 * CELL]) ||
+        near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 11 * CELL]);
+      return isBlack ? fillList[i] === 'rgba(17, 24, 39, 0.4)' : fillList[i] === 'rgba(255, 255, 255, 0.4)';
+    }),
+    JSON.stringify(fillList));
+
+  // The badge box sizes adapt to the text: full-size box height = fontPx + 2 * (0.34 * fontPx).
+  // Settle the animation (pop-in runs ~350ms) so boxes are measured at full size.
+  await page.evaluate(() => { territoryBoxAnims.clear(); window.drawBoard(); });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 450)));
+  await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.drawBoard(); });
+  const settledBoxes = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
+  const b9 = boxAt(settledBoxes, PADDING + 11 * CELL, PADDING + 5 * CELL);
+  const b6 = boxAt(settledBoxes, PADDING + 0.5 * CELL, PADDING + 1.0 * CELL);
+  const b5 = boxAt(settledBoxes, PADDING + 16 * CELL, PADDING + 18 * CELL);
+  const settledShots = await shots();
+  const fullH = (b) => sizeOf(settledShots.find((s) => near([s.x, s.y], boxCenter(b))).font) * 1.68;
+  check('box: badge sizes adapt to group size (9 > 6 > 5) at full scale',
+    !!b9 && !!b6 && !!b5 &&
+      b9.h > b6.h && b6.h > b5.h &&
+      [b9, b6, b5].every((b) => Math.abs(b.h - fullH(b)) <= 3),
+    `9@${b9 && Math.round(b9.h)} 6@${b6 && Math.round(b6.h)} 5@${b5 && Math.round(b5.h)} (expected ${b9 && Math.round(fullH(b9))}/${b6 && Math.round(fullH(b6))}/${b5 && Math.round(fullH(b5))})`);
+
+  check('anim: pop-in bookkeeping holds one entry per group',
+    await page.evaluate(() => territoryBoxAnims instanceof Map && territoryBoxAnims.size === 6),
+    'territoryBoxAnims has 6 entries after a full draw');
+
   // TOGGLE off: no numbers.
   await page.evaluate(() => {
     window.__tcShots = [];
@@ -221,6 +284,8 @@ async function main() {
     scoringState.showTerritory = true;
     for (const r of [4, 5, 6]) for (const c of [10, 11, 12]) scoringState.manualTerritory[r][c] = 0;
     window.__tcShots = [];
+    window.__tcBoxes = [];
+    window.__tcBoxFills = [];
     window.drawBoard();
   });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
@@ -228,6 +293,10 @@ async function main() {
   check('dame: clearing the 3x3 white group removes its "9" (5 groups remain)',
     shrunk.length === 5 && !findShot(shrunk, '9', PADDING + 11 * CELL, PADDING + 5 * CELL),
     `drew ${shrunk.length}`);
+  check('dame: its rounded badge disappears too (5 badges remain)',
+    await page.evaluate(() => window.__tcBoxes.length === 5 && window.__tcBoxFills.length === 5));
+  check('anim: clearing a group drops its pop-in entry (map shrinks to 5)',
+    await page.evaluate(() => territoryBoxAnims.size === 5));
 
   // POST-LOCK ADAPTABILITY: w/# is the ONLY value that adapts after D&T Lock. Restore the
   // fixture, lock (commits manual territory into the frozen resolution), then replace a stone
@@ -237,6 +306,8 @@ async function main() {
     for (const r of [4, 5, 6]) for (const c of [10, 11, 12]) scoringState.manualTerritory[r][c] = 2;
     scoringState.board[0][1] = 0; // restore (not a replaced stone yet)
     window.__tcShots = [];
+    window.__tcBoxes = [];
+    window.__tcBoxFills = [];
     window.applyScoringLock();
   });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 250)));
@@ -252,12 +323,20 @@ async function main() {
   check('post-lock: counter still counts frozen manual territory (6 groups)',
     lockedShots.length === 6 && !!findShot(lockedShots, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL),
     `drew ${lockedShots.length}`);
+  check('post-lock: badges render for all 6 locked groups',
+    await page.evaluate(() => window.__tcBoxes.length === 6 && window.__tcBoxFills.length === 6));
   const scoreBefore = await scoreText();
   check('post-lock: lock commits (locked + snapshot)',
     await page.evaluate(() => scoringState.locked && !!scoringState.lockedSnapshot));
 
   // Simulate a Replace fill: a stone now occupies (0,1) of the black 6-group.
-  await page.evaluate(() => { window.__tcShots = []; scoringState.board[0][1] = 1; window.drawBoard(); });
+  await page.evaluate(() => {
+    window.__tcShots = [];
+    window.__tcBoxes = [];
+    window.__tcBoxFills = [];
+    scoringState.board[0][1] = 1;
+    window.drawBoard();
+  });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
   const adapted = await shots();
   // Remaining 5 black points (0,0),(1,0),(1,1),(2,0),(2,1): centroid r1.2 c0.4.
@@ -265,6 +344,15 @@ async function main() {
     adapted.length === 6 && !findShot(adapted, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL) &&
       !!findShot(adapted, '5', PADDING + 0.4 * CELL, PADDING + 1.2 * CELL),
     JSON.stringify(adapted.map((s) => [s.text, Math.round(s.x), Math.round(s.y)])));
+  check('post-lock replace: a fresh badge re-keys to the adapted group (old entry gone)',
+    await page.evaluate(() => {
+      const counts = [...territoryBoxAnims.values()].map((a) => a.count);
+      return territoryBoxAnims.size === 6 &&
+        !territoryBoxAnims.has('10,5') &&          // old black "6" centroid (fr1.0 fc0.5)
+        territoryBoxAnims.has('12,4') &&           // adapted black "5" centroid (fr1.2 fc0.4)
+        counts.includes(5) && !counts.includes(6);
+    }),
+    await page.evaluate(() => JSON.stringify([...territoryBoxAnims.entries()].map(([k, v]) => [k, v.count]))));
   const scoreAfter = await scoreText();
   check('post-lock replace: frozen score text does NOT move',
     scoreAfter === scoreBefore, scoreBefore === scoreAfter ? scoreBefore : `${scoreBefore} -> ${scoreAfter}`);

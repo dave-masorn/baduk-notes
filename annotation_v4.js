@@ -17284,6 +17284,22 @@ function handleScoringBoardClick(e) {
     }
 }
 
+// Territory-counter badge pop-in animation: each w/# count label draws a rounded box that
+// pops in (scale 0 → 1, ease-out-back) once, keyed by group centroid + count, so a fresh draw
+// or a changed count re-animates while steady redraws leave the boxes settled.
+const territoryBoxAnims = new Map();
+
+function roundedRectPath(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+}
+
 function renderScoringBoardToCtx(ctx) {
     if (typeof window.scoringState === 'undefined' || !window.scoringState) return;
     const scoringState = window.scoringState;
@@ -17516,6 +17532,7 @@ function renderScoringBoardToCtx(ctx) {
         // odd-sized groups center on a stone point, even-sized groups on the grid-line crossing.
         // Text size scales with group size; text color reflects the territory color.
         if (scoringState.showTerritoryCounts) {
+            const seenKeys = new Set();
             const terrGrid = Array.from({ length: 19 }, () => Array(19).fill(0));
             for (let r = 0; r < 19; r++) {
                 for (let c = 0; c < 19; c++) {
@@ -17567,10 +17584,39 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowOffsetY = 0;
                     ctx.shadowBlur = 0;
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
+                    const label = String(count);
+                    // Adaptive rounded badge behind the count: sized to the measured text, filled
+                    // with 40% of the territory color (black box on black territory, white box on
+                    // white territory). The badge pops in with a smooth ease-out-back scale on
+                    // its first draw / first count change.
+                    const padX = fontPx * 0.42;
+                    const padY = fontPx * 0.34;
+                    const boxW = ctx.measureText(label).width + padX * 2;
+                    const boxH = fontPx + padY * 2;
+                    const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
+                    seenKeys.add(key);
+                    let anim = territoryBoxAnims.get(key);
+                    if (!anim || anim.count !== count) {
+                        anim = { count, t0: performance.now() };
+                        territoryBoxAnims.set(key, anim);
+                    }
+                    const t = Math.min(1, (performance.now() - anim.t0) / 350);
+                    const easeBack = t === 1 ? 1 : 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+                    const boxScale = Math.max(0.05, easeBack);
+                    const bx = cx - boxW / 2;
+                    const by = cy - boxH / 2;
+                    const bw = boxW * boxScale;
+                    const bh = boxH * boxScale;
+                    roundedRectPath(ctx, cx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
+                    ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.fill();
                     ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';
-                    ctx.fillText(String(count), cx, cy);
+                    ctx.fillText(label, cx, cy);
                     ctx.restore();
                 }
+            }
+            for (const key of territoryBoxAnims.keys()) {
+                if (!seenKeys.has(key)) territoryBoxAnims.delete(key);
             }
         }
     }
