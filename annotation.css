@@ -2414,16 +2414,6 @@ input:checked + .slider:before {
 
 .custom-stones-section.expanded .custom-stones-body { opacity: 1; }
 
-.custom-stones-section.locked .custom-stones-header {
-    cursor: not-allowed;
-    opacity: 0.38;
-}
-
-.custom-stones-section.locked .custom-stones-header:hover {
-    background: rgba(15,23,42,0.55);
-    border-color: var(--fp-border-subtle);
-}
-
 /* ── Image Upload Thumb ──────────────────────────────────────────────── */
 .custom-upload-thumb {
     cursor: pointer;

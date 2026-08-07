@@ -13052,21 +13052,8 @@ function initFloatingToolbar() {
     document.querySelectorAll('.custom-stones-header').forEach(header => {
         header.addEventListener('click', () => {
             const section = header.closest('.custom-stones-section');
-            if (!section || section.classList.contains('locked')) return;
-            const body = section.querySelector('.custom-stones-body');
-            if (section.classList.contains('expanded')) {
-                section.classList.remove('expanded');
-                if (body) body.style.maxHeight = '0';
-            } else {
-                section.classList.add('expanded');
-                if (body) {
-                    body.style.maxHeight = 'none';
-                    const h = body.scrollHeight;
-                    body.style.maxHeight = '0';
-                    body.offsetHeight;
-                    body.style.maxHeight = h + 'px';
-                }
-            }
+            if (!section) return;
+            setCustomStonesExpanded(section, !section.classList.contains('expanded'));
         });
     });
 
@@ -13230,39 +13217,44 @@ function initFloatingToolbar() {
     });
 }
 
+function setCustomStonesExpanded(section, expanded) {
+    if (!section) return;
+    const body = section.querySelector('.custom-stones-body');
+    if (!body) return;
+    if (expanded) {
+        section.classList.add('expanded');
+        // The Custom Stones body lives inside the "Stones" accordion, which opens by setting a
+        // FIXED inline max-height measured at open time (initAccordion). When a stone set is
+        // active the custom body starts collapsed, so an accordion opened in that state measures
+        // SHORT — expanding Custom Stones then clips its growth behind the accordion's
+        // overflow:hidden, so it appears to never expand. Re-fit the enclosing accordion to its
+        // final content height in the same frame the body expands.
+        const accordion = section.closest('.accordion-content');
+        const accordionOpen = !!(accordion && accordion.classList.contains('open'));
+        // Measure the final heights while the body is at natural size — a measurement during the
+        // max-height transition would capture the still-clipped starting height.
+        body.style.maxHeight = 'none';
+        const bodyH = body.scrollHeight;
+        const accH = (accordionOpen && accordion) ? accordion.scrollHeight : null;
+        // Start the body and the enclosing accordion expanding from the same frame.
+        body.style.maxHeight = '0';
+        body.offsetHeight;
+        body.style.maxHeight = bodyH + 'px';
+        if (accH !== null) accordion.style.maxHeight = accH + 'px';
+    } else {
+        section.classList.remove('expanded');
+        body.style.maxHeight = '0';
+    }
+}
+
 function syncCustomStonesSection() {
     const section = document.querySelector('.custom-stones-section');
     if (!section) return;
     const hasActive = !!document.querySelector('.stone-set-option.active');
-    const body = section.querySelector('.custom-stones-body');
-    // The Custom Stones body lives inside the "Stones" accordion, which opens by setting a
-    // FIXED inline max-height measured at open time (initAccordion). When a stone set is
-    // active the custom body is collapsed, so an accordion opened in that state measures
-    // SHORT — unselecting the stone set then expands Custom Stones but the accordion's
-    // overflow:hidden clips the growth, so it appears to never expand. Re-fit the enclosing
-    // accordion to its final content height in the same frame the body expands.
-    const accordion = section.closest('.accordion-content');
-    const accordionOpen = !!(accordion && accordion.classList.contains('open'));
-    if (hasActive) {
-        section.classList.add('locked');
-        section.classList.remove('expanded');
-        if (body) body.style.maxHeight = '0';
-    } else {
-        section.classList.remove('locked');
-        section.classList.add('expanded');
-        if (body) {
-            // Measure the final heights while the body is at natural size — a measurement
-            // during the max-height transition would capture the still-clipped starting height.
-            body.style.maxHeight = 'none';
-            const bodyH = body.scrollHeight;
-            const accH = (accordionOpen && accordion) ? accordion.scrollHeight : null;
-            // Start the body and the enclosing accordion expanding from the same frame.
-            body.style.maxHeight = '0';
-            body.offsetHeight;
-            body.style.maxHeight = bodyH + 'px';
-            if (accH !== null) accordion.style.maxHeight = accH + 'px';
-        }
-    }
+    // The Custom Stones controls are available for every Default Stone Set (A/B/C) — when a set
+    // is selected the section auto-collapses but stays expandable, and it auto-expands when no
+    // set is active.
+    setCustomStonesExpanded(section, !hasActive);
 }
 
 function applyCustomPanelState() {
