@@ -17289,15 +17289,25 @@ function handleScoringBoardClick(e) {
 // or a changed count re-animates while steady redraws leave the boxes settled.
 const territoryBoxAnims = new Map();
 
-function roundedRectPath(ctx, x, y, w, h, r) {
-    const rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
+// Rounded rectangle path with INDEPENDENT per-corner radii. Does NOT beginPath: callers that
+// merge cells into one shape call beginPath() once, add each cell's subpath, then fill() once —
+// the nonzero winding rule fills the union with no seams between abutting cells. A radius of 0
+// yields a sharp corner (arcTo with radius 0 draws straight through the corner point).
+function roundedRectPathCorners(ctx, x, y, w, h, rTL, rTR, rBR, rBL) {
+    const clamp = (r) => Math.max(0, Math.min(r, w / 2, h / 2));
+    rTL = clamp(rTL); rTR = clamp(rTR); rBR = clamp(rBR); rBL = clamp(rBL);
+    ctx.moveTo(x + rTL, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rTR);
+    ctx.arcTo(x + w, y + h, x, y + h, rBR);
+    ctx.arcTo(x, y + h, x, y, rBL);
+    ctx.arcTo(x, y, x + w, y, rTL);
     ctx.closePath();
+}
+
+// Single-radius rounded rectangle (all four corners the same); starts a fresh path.
+function roundedRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    roundedRectPathCorners(ctx, x, y, w, h, r, r, r, r);
 }
 
 function renderScoringBoardToCtx(ctx) {
@@ -17592,16 +17602,19 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowBlur = 0;
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
                     const label = String(count);
-                    // Adaptive rounded badge behind the count: a CROSSWORD-STYLE box per territory
-                    // intersection — every territory square the group owns gets its own rounded cell
-                    // (CELL-sized, centered on its grid intersection), filled 40%-translucent with the
-                    // territory color (black box on black territory, white box on white territory), so
-                    // the cluster of cells follows the group's actual territory area like letter cells
-                    // in a crossword. Each cell is drawn and filled on its own (roundedRectPath starts
-                    // a fresh path per call). The badge pops in with a smooth ease-out-back scale
-                    // (pivoting about the group's intersection midpoint) on its first draw, on a count
-                    // change, or when the group's extent changes — and the draw schedules follow-up
-                    // redraws so the pop completes even when no other redraw is triggered.
+                    // Adaptive rounded badge behind the count: ONE MERGED BOX PER TERRITORY AREA —
+                    // every member square is a CELL-sized cell centered on its grid intersection,
+                    // and all cells join into a single path (one fill, nonzero winding) so the box
+                    // is a continuous crossword-block shape: corners are ROUNDED only at exposed
+                    // outer corners (where BOTH the orthogonal neighbor and the next cell along the
+                    // edge are outside the group), a cell with all four orthogonal neighbors in the
+                    // group is a plain SQUARE, and corners along straight edges stay square — no
+                    // seams, no empty bounding-box padding. Filled 40%-translucent with the
+                    // territory color (black box on black territory, white box on white territory).
+                    // The box pops in with a smooth ease-out-back scale (pivoting about the group's
+                    // intersection midpoint) on its first draw, on a count change, or when the
+                    // group's extent changes — and the draw schedules follow-up redraws so the pop
+                    // completes even when no other redraw is triggered.
                     const boxCX = PADDING + (fcMin + fcMax) / 2 * CELL_SIZE;
                     const boxCY = PADDING + (frMin + frMax) / 2 * CELL_SIZE;
                     const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
@@ -17617,13 +17630,20 @@ function renderScoringBoardToCtx(ctx) {
                     const cellPx = CELL_SIZE * boxScale;
                     const sqHalf = cellPx / 2;
                     const sqRad = Math.min(CELL_SIZE * 0.45, CELL_SIZE / 2) * boxScale;
+                    const inGroup = (rr, cc) => rr >= 0 && cc >= 0 && rr < 19 && cc < 19 && terrGrid[rr][cc] === color;
+                    ctx.beginPath();
                     for (const [my, mx] of members) {
                         const sqCX = boxCX + (PADDING + mx * CELL_SIZE - boxCX) * boxScale;
                         const sqCY = boxCY + (PADDING + my * CELL_SIZE - boxCY) * boxScale;
-                        roundedRectPath(ctx, sqCX - sqHalf, sqCY - sqHalf, cellPx, cellPx, sqRad);
-                        ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
-                        ctx.fill();
+                        const x = sqCX - sqHalf, y = sqCY - sqHalf;
+                        const rTL = (!inGroup(my - 1, mx) && !inGroup(my, mx - 1)) ? sqRad : 0;
+                        const rTR = (!inGroup(my - 1, mx) && !inGroup(my, mx + 1)) ? sqRad : 0;
+                        const rBR = (!inGroup(my + 1, mx) && !inGroup(my, mx + 1)) ? sqRad : 0;
+                        const rBL = (!inGroup(my + 1, mx) && !inGroup(my, mx - 1)) ? sqRad : 0;
+                        roundedRectPathCorners(ctx, x, y, cellPx, cellPx, rTL, rTR, rBR, rBL);
                     }
+                    ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.fill();
                     ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';
                     ctx.fillText(label, cx, cy);
                     ctx.restore();

@@ -97,15 +97,15 @@ async function main() {
         }
         return origStroke.call(this, text, x, y, maxW);
       };
-      // Adaptive rounded badges: roundedRectPath is a global classic-script function, so it is
-      // patchable here. Every 40%-translucent fill (black box / white box) is unique to these
+      // Merged crossword badges: roundedRectPathCorners is a global classic-script function, so it
+      // is patchable here. Every 40%-translucent fill (black box / white box) is unique to these
       // badges (no other draw op uses a 0.4 alpha), so capturing fill() with those colors
       // isolates exactly the badge fills.
       window.__tcBoxes = [];
-      const origRR = window.roundedRectPath;
-      window.roundedRectPath = function (ctx, x, y, w, h, r) {
-        window.__tcBoxes.push({ x, y, w, h, r });
-        return origRR.call(this, ctx, x, y, w, h, r);
+      const origRRC = window.roundedRectPathCorners;
+      window.roundedRectPathCorners = function (ctx, x, y, w, h, rTL, rTR, rBR, rBL) {
+        window.__tcBoxes.push({ x, y, w, h, rTL, rTR, rBR, rBL });
+        return origRRC.call(this, ctx, x, y, w, h, rTL, rTR, rBR, rBL);
       };
       window.__tcBoxFills = [];
       const origFill = CanvasRenderingContext2D.prototype.fill;
@@ -235,14 +235,15 @@ async function main() {
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
-  // CROSSWORD-STYLE BADGES — one box per territory intersection: every territory square the group
-  // owns draws as its OWN rounded cell centered on its grid intersection (CELL-sized, radius
-  // CELL*0.45) and filled 40%-translucent with the territory color, so each group shows a cluster
-  // of boxes following its actual territory area like letter cells in a crossword. Group scan
-  // order is row-major; within a group the cells draw in BFS member order, and each cell's fill
-  // call immediately follows its path call, so __tcBoxes[i] pairs 1:1 with __tcBoxFills[i]. The
-  // pop-in scales each cell about the group's intersection midpoint; at full scale every cell
-  // lands exactly on its intersection.
+  // MERGED CROSSWORD-STYLE BADGES — ONE continuous box per territory area: every member square is a
+  // CELL-sized cell centered on its grid intersection, and all of a group's cells join into a
+  // single path + single fill (nonzero winding) so the box is a solid crossword-block shape — no
+  // seams between cells, no empty bounding-box padding. A cell's corner is ROUNDED only at an
+  // exposed outer corner (both the orthogonal neighbor AND the next cell along that edge are
+  // outside the group); corners along straight edges and cells with all four orthogonal neighbors
+  // in the group (interior cells) are plain SQUARE (radius 0). Group scan order is row-major, so
+  // the six fills come in that order. The pop-in scales the whole shape about the group's
+  // intersection midpoint; at full scale every cell lands exactly on its intersection.
   const groups = [
     { label: '6', color: 'black', cells: [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [2, 1]] },
     { label: '9', color: 'white', cells: [[4, 10], [4, 11], [4, 12], [5, 10], [5, 11], [5, 12], [6, 10], [6, 11], [6, 12]] },
@@ -255,9 +256,17 @@ async function main() {
   const WHITE_FILL = 'rgba(255, 255, 255, 0.4)';
   const cellCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
   const squareAt = (list, r, c) => list.find((b) => near(cellCenter(b), [PADDING + c * CELL, PADDING + r * CELL]));
-  const fillForCell = (b) => {
-    const g = groups.find((gr) => gr.cells.some(([r, c]) => near(cellCenter(b), [PADDING + c * CELL, PADDING + r * CELL])));
-    return g ? (g.color === 'black' ? BLACK_FILL : WHITE_FILL) : null;
+  const inGroup = (g, r, c) => g.cells.some(([gr, gc]) => gr === r && gc === c);
+  const cornerRadii = (g, r, c) => ({
+    rTL: (!inGroup(g, r - 1, c) && !inGroup(g, r, c - 1)) ? CELL * 0.45 : 0,
+    rTR: (!inGroup(g, r - 1, c) && !inGroup(g, r, c + 1)) ? CELL * 0.45 : 0,
+    rBR: (!inGroup(g, r + 1, c) && !inGroup(g, r, c + 1)) ? CELL * 0.45 : 0,
+    rBL: (!inGroup(g, r + 1, c) && !inGroup(g, r, c - 1)) ? CELL * 0.45 : 0
+  });
+  const radiiMatch = (b, g, r, c) => {
+    const e = cornerRadii(g, r, c);
+    return Math.abs(b.rTL - e.rTL) <= 1.5 && Math.abs(b.rTR - e.rTR) <= 1.5 &&
+      Math.abs(b.rBR - e.rBR) <= 1.5 && Math.abs(b.rBL - e.rBL) <= 1.5;
   };
   const extent = (list, g) => {
     const s = g.cells.map(([r, c]) => squareAt(list, r, c)).filter(Boolean);
@@ -271,15 +280,22 @@ async function main() {
   let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
   let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
 
-  check('box: one crossword cell per territory square (24 cells, each centered on its intersection)',
+  check('box: one merged box per territory area — 24 member cells, each CELL-sized on its intersection',
     boxList.length === 24 && groups.every((g) => g.cells.every(([r, c]) => {
       const sq = squareAt(boxList, r, c);
-      return !!sq && Math.abs(sq.w - CELL) <= 1 && Math.abs(sq.h - CELL) <= 1 && Math.abs(sq.r - CELL * 0.45) <= 1.5;
+      return !!sq && Math.abs(sq.w - CELL) <= 1 && Math.abs(sq.h - CELL) <= 1;
     })),
     JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
 
-  check('box: every cell gets a black 40% badge on black territory, white 40% on white',
-    fillList.length === 24 && fillList.every((f, i) => f === fillForCell(boxList[i])),
+  check('box: exposed outer corners are rounded, straight-edge and interior corners stay square',
+    boxList.length === 24 && groups.every((g) => g.cells.every(([r, c]) => {
+      const sq = squareAt(boxList, r, c);
+      return !!sq && radiiMatch(sq, g, r, c);
+    })),
+    JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), b.rTL, b.rTR, b.rBR, b.rBL])));
+
+  check('box: each territory area is ONE merged fill — black 40% on black, white 40% on white',
+    fillList.length === 6 && fillList.every((f, i) => f === (groups[i].color === 'black' ? BLACK_FILL : WHITE_FILL)),
     JSON.stringify(fillList));
 
   // Settle the animation deterministically (the pop is ~350ms; forcing t0=0 renders every badge
@@ -367,8 +383,8 @@ async function main() {
   check('dame: clearing the 3x3 white group removes its "9" (5 groups remain)',
     shrunk.length === 5 && !findShot(shrunk, '9', PADDING + 11 * CELL, PADDING + 5 * CELL),
     `drew ${shrunk.length}`);
-  check('dame: its crossword badge disappears too (15 member squares, 15 fills remain)',
-    await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 15));
+  check('dame: its crossword badge disappears too (15 member squares, 5 merged fills remain)',
+    await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 5));
   check('anim: clearing a group drops its pop-in entry (map shrinks to 5)',
     await page.evaluate(() => territoryBoxAnims.size === 5));
 
@@ -398,7 +414,7 @@ async function main() {
     lockedShots.length === 6 && !!findShot(lockedShots, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL),
     `drew ${lockedShots.length}`);
   check('post-lock: badges render for all 6 locked groups',
-    await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 24));
+    await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 6));
   const scoreBefore = await scoreText();
   check('post-lock: lock commits (locked + snapshot)',
     await page.evaluate(() => scoringState.locked && !!scoringState.lockedSnapshot));
