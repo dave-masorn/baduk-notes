@@ -17567,7 +17567,14 @@ function renderScoringBoardToCtx(ctx) {
                     }
                     const count = members.length;
                     let fr = 0, fc = 0;
-                    for (const [y, x] of members) { fr += y; fc += x; }
+                    let frMin = 19, frMax = -1, fcMin = 19, fcMax = -1;
+                    for (const [y, x] of members) {
+                        fr += y; fc += x;
+                        if (y < frMin) frMin = y;
+                        if (y > frMax) frMax = y;
+                        if (x < fcMin) fcMin = x;
+                        if (x > fcMax) fcMax = x;
+                    }
                     fr /= count; fc /= count;
                     const cx = PADDING + fc * CELL_SIZE;
                     const cy = PADDING + fr * CELL_SIZE;
@@ -17585,29 +17592,32 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowBlur = 0;
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
                     const label = String(count);
-                    // Adaptive rounded badge behind the count: sized to the measured text, filled
-                    // with 40% of the territory color (black box on black territory, white box on
-                    // white territory). The badge pops in with a smooth ease-out-back scale on
-                    // its first draw / first count change.
-                    const padX = fontPx * 0.42;
-                    const padY = fontPx * 0.34;
-                    const boxW = ctx.measureText(label).width + padX * 2;
-                    const boxH = fontPx + padY * 2;
+                    // Adaptive rounded badge behind the count: a rounded box that COVERS THE WHOLE
+                    // territory area of its group — the full-cell bounding box of the group's points
+                    // (PADDING + col*CELL .. PADDING + (col+1)*CELL) — filled with 40% of the
+                    // territory color (black box on black territory, white box on white territory).
+                    // The badge pops in with a smooth ease-out-back scale on its first draw, on a
+                    // count change, or when the group's extent changes.
+                    const boxX0 = PADDING + fcMin * CELL_SIZE;
+                    const boxY0 = PADDING + frMin * CELL_SIZE;
+                    const boxW = (fcMax - fcMin + 1) * CELL_SIZE;
+                    const boxH = (frMax - frMin + 1) * CELL_SIZE;
+                    const boxCX = boxX0 + boxW / 2;
+                    const boxCY = boxY0 + boxH / 2;
                     const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
                     seenKeys.add(key);
                     let anim = territoryBoxAnims.get(key);
-                    if (!anim || anim.count !== count) {
-                        anim = { count, t0: performance.now() };
+                    if (!anim || anim.count !== count || anim.frMin !== frMin || anim.frMax !== frMax || anim.fcMin !== fcMin || anim.fcMax !== fcMax) {
+                        anim = { count, t0: performance.now(), frMin, frMax, fcMin, fcMax };
                         territoryBoxAnims.set(key, anim);
                     }
                     const t = Math.min(1, (performance.now() - anim.t0) / 350);
                     const easeBack = t === 1 ? 1 : 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
                     const boxScale = Math.max(0.05, easeBack);
-                    const bx = cx - boxW / 2;
-                    const by = cy - boxH / 2;
                     const bw = boxW * boxScale;
                     const bh = boxH * boxScale;
-                    roundedRectPath(ctx, cx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
+                    const rad = Math.min(CELL_SIZE * 0.45, boxW / 2, boxH / 2);
+                    roundedRectPath(ctx, boxCX - bw / 2, boxCY - bh / 2, bw, bh, rad);
                     ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
                     ctx.fill();
                     ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';

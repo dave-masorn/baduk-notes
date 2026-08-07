@@ -216,43 +216,73 @@ async function main() {
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
-  // ADAPTIVE ROUNDED BADGES — one rounded box behind every number, sized to the text, filled
-  // 40%-translucent with the territory color, with a smooth pop-in scale animation.
+  // ADAPTIVE ROUNDED BADGES — one rounded box behind every number, COVERING the whole territory
+  // area of its group (the full-cell bounding box of the group's points), filled 40%-translucent
+  // with the territory color, with a smooth pop-in scale animation. Box centers equal each
+  // group's bbox center and stay fixed under the scale animation (which pivots about that
+  // center), so they are identifiable even mid-pop.
+  const expectedBoxes = [ // [x0, y0, w, h] canvas units — full-cell bbox of each fixture group
+    [PADDING + 0 * CELL, PADDING + 0 * CELL, 2 * CELL, 3 * CELL],   // black "6": rows 0-2, cols 0-1
+    [PADDING + 14 * CELL, PADDING + 18 * CELL, 5 * CELL, CELL],    // white "5": row 18, cols 14-18
+    [PADDING + 10 * CELL, PADDING + 4 * CELL, 3 * CELL, 3 * CELL], // white "9": rows 4-6, cols 10-12
+    [PADDING + 4 * CELL, PADDING + 8 * CELL, CELL, CELL],          // black "1" at (8,4)
+    [PADDING + 5 * CELL, PADDING + 9 * CELL, CELL, CELL],          // black "1" at (9,5)
+    [PADDING + 4 * CELL, PADDING + 11 * CELL, 2 * CELL, CELL]      // black "2": row 11, cols 4-5
+  ];
   let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
   let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
   const boxCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+  const boxOf = (list, x0, y0, w, h) => list.find((b) => near(boxCenter(b), [x0 + w / 2, y0 + h / 2]));
+  const boxColorIsBlack = (b) => {
+    if (near(boxCenter(b), [PADDING + 1.0 * CELL, PADDING + 1.5 * CELL])) return true;   // black "6"
+    if (near(boxCenter(b), [PADDING + 16.5 * CELL, PADDING + 18.5 * CELL])) return false; // white "5"
+    if (near(boxCenter(b), [PADDING + 11.5 * CELL, PADDING + 5.5 * CELL])) return false;  // white "9"
+    if (near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 8.5 * CELL])) return true;    // black "1"
+    if (near(boxCenter(b), [PADDING + 5.5 * CELL, PADDING + 9.5 * CELL])) return true;    // black "1"
+    if (near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 11.5 * CELL])) return true;     // black "2"
+    return null;
+  };
 
-  check('box: one rounded badge behind each of the 6 numbers, centered on it',
-    boxList.length === 6 && expected.every(([, x, y]) => !!boxList.find((b) => near(boxCenter(b), [x, y]))),
+  check('box: one rounded badge per group (6 badges), each covering its territory area',
+    boxList.length === 6 && expectedBoxes.every(([x0, y0, w, h]) => !!boxOf(boxList, x0, y0, w, h)),
     JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
 
-  const boxAt = (list, x, y) => list.find((b) => near(boxCenter(b), [x, y]));
   check('box: black territories get a black 40% badge, white a white 40% badge',
     fillList.length === 6 && boxList.every((b, i) => {
-      const isBlack = near(boxCenter(b), [PADDING + 0.5 * CELL, PADDING + 1.0 * CELL]) ||
-        near(boxCenter(b), [PADDING + 4 * CELL, PADDING + 8 * CELL]) ||
-        near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 9 * CELL]) ||
-        near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 11 * CELL]);
-      return isBlack ? fillList[i] === 'rgba(17, 24, 39, 0.4)' : fillList[i] === 'rgba(255, 255, 255, 0.4)';
+      const black = boxColorIsBlack(b);
+      return black !== null ? (black ? fillList[i] === 'rgba(17, 24, 39, 0.4)' : fillList[i] === 'rgba(255, 255, 255, 0.4)') : false;
     }),
     JSON.stringify(fillList));
 
-  // The badge box sizes adapt to the text: full-size box height = fontPx + 2 * (0.34 * fontPx).
-  // Settle the animation (pop-in runs ~350ms) so boxes are measured at full size.
+  // Settle the animation (pop-in runs ~350ms) so boxes are measured at full scale.
   await page.evaluate(() => { territoryBoxAnims.clear(); window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 450)));
   await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.drawBoard(); });
   const settledBoxes = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
-  const b9 = boxAt(settledBoxes, PADDING + 11 * CELL, PADDING + 5 * CELL);
-  const b6 = boxAt(settledBoxes, PADDING + 0.5 * CELL, PADDING + 1.0 * CELL);
-  const b5 = boxAt(settledBoxes, PADDING + 16 * CELL, PADDING + 18 * CELL);
   const settledShots = await shots();
-  const fullH = (b) => sizeOf(settledShots.find((s) => near([s.x, s.y], boxCenter(b))).font) * 1.68;
-  check('box: badge sizes adapt to group size (9 > 6 > 5) at full scale',
-    !!b9 && !!b6 && !!b5 &&
-      b9.h > b6.h && b6.h > b5.h &&
-      [b9, b6, b5].every((b) => Math.abs(b.h - fullH(b)) <= 3),
-    `9@${b9 && Math.round(b9.h)} 6@${b6 && Math.round(b6.h)} 5@${b5 && Math.round(b5.h)} (expected ${b9 && Math.round(fullH(b9))}/${b6 && Math.round(fullH(b6))}/${b5 && Math.round(fullH(b5))})`);
+  check('box: at full scale each badge rect equals the group\'s full territory bbox',
+    settledBoxes.length === 6 && expectedBoxes.every(([x0, y0, w, h]) =>
+      !!settledBoxes.find((b) => Math.abs(b.x - x0) <= 1 && Math.abs(b.y - y0) <= 1 &&
+        Math.abs(b.w - w) <= 1 && Math.abs(b.h - h) <= 1)),
+    JSON.stringify(settledBoxes.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
+
+  check('box: badge size scales with territory size (6/9 boxes 3 cells tall, 5 box 5 cells wide)',
+    (() => {
+      const b6 = boxOf(settledBoxes, PADDING, PADDING, 2 * CELL, 3 * CELL);
+      const b9 = boxOf(settledBoxes, PADDING + 10 * CELL, PADDING + 4 * CELL, 3 * CELL, 3 * CELL);
+      const b5 = boxOf(settledBoxes, PADDING + 14 * CELL, PADDING + 18 * CELL, 5 * CELL, CELL);
+      const b2 = boxOf(settledBoxes, PADDING + 4 * CELL, PADDING + 11 * CELL, 2 * CELL, CELL);
+      return !!b6 && !!b9 && !!b5 && !!b2 &&
+        Math.abs(b6.h - b9.h) <= 1 && b6.h > b5.h && b6.h > b2.h &&
+        b5.w > b9.w && b9.w > b2.w;
+    })());
+
+  check('box: every count digit renders inside its territory box',
+    settledShots.length === 6 && expected.every(([, x, y], i) => {
+      const [x0, y0, w, h] = expectedBoxes[i];
+      const b = boxOf(settledBoxes, x0, y0, w, h);
+      return !!b && x >= b.x - 1 && x <= b.x + b.w + 1 && y >= b.y - 1 && y <= b.y + b.h + 1;
+    }));
 
   check('anim: pop-in bookkeeping holds one entry per group',
     await page.evaluate(() => territoryBoxAnims instanceof Map && territoryBoxAnims.size === 6),
