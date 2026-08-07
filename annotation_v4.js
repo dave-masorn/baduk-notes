@@ -1282,7 +1282,8 @@ function init() {
         Promise.all([
             document.fonts.load("12px 'iGoRodinPro'"),
             document.fonts.load("12px 'Figtree'"),
-            document.fonts.load("italic 12px 'Figtree'")
+            document.fonts.load("italic 12px 'Figtree'"),
+            document.fonts.load("bold 12px 'Pretendard'")
         ]).then(() => {
             drawBoard();
         });
@@ -17557,16 +17558,16 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     const fontPx = Math.min(CELL_SIZE * 0.9, 9 + count * 1.4);
-                    ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
-                    const fillCol = color === 1 ? '#111827' : '#ffffff';
-                    // Contrast halo = a soft shadow at the 0° point (directly behind the text),
-                    // never a stroked border around the digits.
-                    const shadowCol = color === 1 ? 'rgba(255, 255, 255, 0.9)' : 'rgba(17, 24, 39, 0.9)';
+                    ctx.font = `bold ${fontPx}px 'Pretendard', sans-serif`;
+                    // Pure font text — no border, no shadow, no halo (explicitly clear any shadow
+                    // a prior draw op left on the context). Black territories ink in the warm
+                    // yellow, White territories in the deep blue, both chosen to sit on their
+                    // territory-square fill.
                     ctx.shadowOffsetX = 0;
                     ctx.shadowOffsetY = 0;
-                    ctx.shadowBlur = Math.max(2, fontPx / 5);
-                    ctx.shadowColor = shadowCol;
-                    ctx.fillStyle = fillCol;
+                    ctx.shadowBlur = 0;
+                    ctx.shadowColor = 'rgba(0, 0, 0, 0)';
+                    ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';
                     ctx.fillText(String(count), cx, cy);
                     ctx.restore();
                 }

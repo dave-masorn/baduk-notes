@@ -6,7 +6,9 @@
 //             horizontal line 18 between columns A/B; P1..T1 = "5" over R1.)
 //   SPLIT    — points touching only diagonally are NOT one group.
 //   MERGE    — orthogonally adjacent points join into one group.
-//   COLOR    — number fill color = territory color (black #111827, white #ffffff).
+//   COLOR    — number fill color = territory color (black #FCD102, white #101389), rendered
+//             as PURE font text in 'Pretendard' (bold → PretendardEN-Medium.otf): no shadow,
+//             no halo, no stroked border.
 //   SIZE     — text size scales with group size.
 //   TOGGLE   — the w/# checkbox wires scoringState.showTerritoryCounts and redraws; with
 //             it off (or "Show territory" off) no numbers render.
@@ -171,19 +173,23 @@ async function main() {
   const s5 = findShot(shotList, '5', PADDING + 16 * CELL, PADDING + 18 * CELL);
   const s9 = findShot(shotList, '9', PADDING + 11 * CELL, PADDING + 5 * CELL);
 
-  check('halo: numbers use a soft shadow at the 0° point (no stroked border)',
+  check('pure: numbers render with NO shadow, NO border (pure font text)',
     shotList.length === 6 &&
-      shotList.every((s) => s.shadowOffsetX === 0 && s.shadowOffsetY === 0 && s.shadowBlur > 0) &&
-      shotList.every((s) => typeof s.shadowColor === 'string' && s.shadowColor.indexOf('rgba') === 0) &&
+      shotList.every((s) => s.shadowOffsetX === 0 && s.shadowOffsetY === 0 && s.shadowBlur === 0) &&
+      shotList.every((s) => s.shadowColor === 'rgba(0, 0, 0, 0)') &&
       (await page.evaluate(() => window.__tcStrokes)).length === 0,
     JSON.stringify(shotList.map((s) => [s.text, s.shadowOffsetX, s.shadowOffsetY, s.shadowBlur, s.shadowColor])));
 
-  check('color: black territory numbers fill black (#111827)',
-    shotList.filter((s) => ['6', '1', '2'].includes(s.text)).every((s) => s.fillStyle === '#111827'),
-    'black numbers use #111827');
-  check('color: white territory numbers fill white (#ffffff)',
-    shotList.filter((s) => ['5', '9'].includes(s.text)).every((s) => s.fillStyle === '#ffffff'),
-    'white numbers use #ffffff');
+  check('color: black territory numbers fill warm yellow (#FCD102)',
+    shotList.filter((s) => ['6', '1', '2'].includes(s.text)).every((s) => String(s.fillStyle).toUpperCase() === '#FCD102'),
+    'black numbers use #FCD102');
+  check('color: white territory numbers fill deep blue (#101389)',
+    shotList.filter((s) => ['5', '9'].includes(s.text)).every((s) => s.fillStyle === '#101389'),
+    'white numbers use #101389');
+
+  check('font: numbers use Pretendard (bold → PretendardEN-Medium.otf)',
+    shotList.length === 6 && shotList.every((s) => /Pretendard/.test(s.font) && /bold/.test(s.font)),
+    JSON.stringify(shotList.map((s) => s.font)));
 
   check('size: font scales with group size (9 > 6 > 5)',
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
