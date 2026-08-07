@@ -17592,19 +17592,18 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.shadowBlur = 0;
                     ctx.shadowColor = 'rgba(0, 0, 0, 0)';
                     const label = String(count);
-                    // Adaptive rounded badge behind the count: a rounded box that COVERS THE WHOLE
-                    // territory area of its group — the group's bounding box anchored to the grid
-                    // INTERSECTIONS (edges midway between grid lines, half a grid spacing outside the
-                    // outermost intersections: PADDING + (col-0.5)*CELL .. PADDING + (col+0.5)*CELL) —
-                    // filled with 40% of the territory color (black box on black territory, white box
-                    // on white territory). The badge pops in with a smooth ease-out-back scale on its
-                    // first draw, on a count change, or when the group's extent changes.
-                    const boxX0 = PADDING + (fcMin - 0.5) * CELL_SIZE;
-                    const boxY0 = PADDING + (frMin - 0.5) * CELL_SIZE;
-                    const boxW = (fcMax - fcMin + 1) * CELL_SIZE;
-                    const boxH = (frMax - frMin + 1) * CELL_SIZE;
-                    const boxCX = boxX0 + boxW / 2;
-                    const boxCY = boxY0 + boxH / 2;
+                    // Adaptive rounded badge behind the count: a CROSSWORD-STYLE shape that hugs the
+                    // actual territory area of its group — every territory square it owns drawn as a
+                    // rounded cell centered on its grid intersection, all merged into one path (nonzero
+                    // winding) so the box follows the group's outline: rounded outer corners, notched
+                    // inner corners, no empty bounding-box padding. Filled with 40% of the territory
+                    // color (black box on black territory, white box on white territory). The badge
+                    // pops in with a smooth ease-out-back scale (pivoting about the group's
+                    // intersection midpoint) on its first draw, on a count change, or when the
+                    // group's extent changes — and the draw schedules follow-up redraws so the pop
+                    // completes even when no other redraw is triggered.
+                    const boxCX = PADDING + (fcMin + fcMax) / 2 * CELL_SIZE;
+                    const boxCY = PADDING + (frMin + frMax) / 2 * CELL_SIZE;
                     const key = `${Math.round(fr * 10)},${Math.round(fc * 10)}`;
                     seenKeys.add(key);
                     let anim = territoryBoxAnims.get(key);
@@ -17615,10 +17614,15 @@ function renderScoringBoardToCtx(ctx) {
                     const t = Math.min(1, (performance.now() - anim.t0) / 350);
                     const easeBack = t === 1 ? 1 : 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
                     const boxScale = Math.max(0.05, easeBack);
-                    const bw = boxW * boxScale;
-                    const bh = boxH * boxScale;
-                    const rad = Math.min(CELL_SIZE * 0.45, boxW / 2, boxH / 2);
-                    roundedRectPath(ctx, boxCX - bw / 2, boxCY - bh / 2, bw, bh, rad);
+                    const cellPx = CELL_SIZE * boxScale;
+                    const sqHalf = cellPx / 2;
+                    const sqRad = Math.min(CELL_SIZE * 0.45, CELL_SIZE / 2) * boxScale;
+                    ctx.beginPath();
+                    for (const [my, mx] of members) {
+                        const sqCX = boxCX + (PADDING + mx * CELL_SIZE - boxCX) * boxScale;
+                        const sqCY = boxCY + (PADDING + my * CELL_SIZE - boxCY) * boxScale;
+                        roundedRectPath(ctx, sqCX - sqHalf, sqCY - sqHalf, cellPx, cellPx, sqRad);
+                    }
                     ctx.fillStyle = color === 1 ? 'rgba(17, 24, 39, 0.4)' : 'rgba(255, 255, 255, 0.4)';
                     ctx.fill();
                     ctx.fillStyle = color === 1 ? '#FCD102' : '#101389';
@@ -17628,6 +17632,21 @@ function renderScoringBoardToCtx(ctx) {
             }
             for (const key of territoryBoxAnims.keys()) {
                 if (!seenKeys.has(key)) territoryBoxAnims.delete(key);
+            }
+            // Drive the pop-in to completion: the first draw of a fresh badge starts at a tiny
+            // scale (boxScale 0.05), so without follow-up frames the badge would stay invisible
+            // until the next unrelated redraw. While any entry is still animating, schedule a
+            // full redraw so the ease-out-back pop plays out on its own. The loop self-terminates:
+            // once every entry reaches t = 1 no further frame is scheduled. Test harnesses may
+            // disable it (__tcDisableTerritoryAnim) to keep draws deterministic.
+            if (!window.__tcDisableTerritoryAnim) {
+                const nowT = performance.now();
+                for (const a of territoryBoxAnims.values()) {
+                    if ((nowT - a.t0) / 350 < 1) {
+                        requestAnimationFrame(() => window.drawBoard());
+                        break;
+                    }
+                }
             }
         }
     }

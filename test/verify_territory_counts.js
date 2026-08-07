@@ -174,6 +174,25 @@ async function main() {
   await page.evaluate(() => document.getElementById('scoring-opt-territory-counts').click());
   check('toggle: clicking w/# sets scoringState.showTerritoryCounts',
     await page.evaluate(() => scoringState.showTerritoryCounts === true));
+
+  // BUG-1 REGRESSION: the toggle's own redraw starts each fresh badge at boxScale 0.05 (nearly
+  // invisible). The app must schedule its own follow-up redraws so the boxes become visible
+  // WITHOUT any further user interaction. Wait out the 350ms pop with NO manual drawBoard, then
+  // verify the boxes landed at full scale — proving the pop-in loop drew them to completion.
+  await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.__tcBoxFills = []; });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 450)));
+  check('first-click pop: boxes draw themselves to full scale (no manual redraw needed)',
+    await page.evaluate((cell) => {
+      const full = window.__tcBoxes.filter((b) => Math.abs(b.w - cell) <= 1 && Math.abs(b.h - cell) <= 1);
+      return full.length >= 24 && window.__tcShots.length >= 6 && territoryBoxAnims.size === 6;
+    }, CELL),
+    await page.evaluate((cell) => {
+      const full = window.__tcBoxes.filter((b) => Math.abs(b.w - cell) <= 1);
+      return `framesDrew=${window.__tcBoxes.length} fullScaleCells=${full.length} shots=${window.__tcShots.length} anims=${territoryBoxAnims.size}`;
+    }, CELL));
+  // From here on the harness draws manually; stop the app's animation loop so captures stay
+  // deterministic (one draw = exactly the records that draw emits).
+  await page.evaluate(() => { window.__tcDisableTerritoryAnim = true; });
   await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.__tcBoxFills = []; window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
 
@@ -216,74 +235,93 @@ async function main() {
     sizeOf(s9.font) > sizeOf(s6.font) && sizeOf(s6.font) > sizeOf(s5.font),
     `9@${sizeOf(s9.font)} 6@${sizeOf(s6.font)} 5@${sizeOf(s5.font)}`);
 
-  // ADAPTIVE ROUNDED BADGES — one rounded box behind every number, COVERING the whole territory
-  // area of its group (the bounding box anchored to the grid INTERSECTIONS — edges midway
-  // between grid lines, half a grid spacing outside the outermost intersections), filled
-  // 40%-translucent with the territory color, with a smooth pop-in scale animation. Box
-  // centers equal each group's intersection midpoint and stay fixed under the scale animation
-  // (which pivots about that center), so they are identifiable even mid-pop.
-  const expectedBoxes = [ // [x0, y0, w, h] canvas units — intersection-oriented bbox of each fixture group
-    [PADDING - 0.5 * CELL, PADDING - 0.5 * CELL, 2 * CELL, 3 * CELL],   // black "6": rows 0-2, cols 0-1
-    [PADDING + 13.5 * CELL, PADDING + 17.5 * CELL, 5 * CELL, CELL],    // white "5": row 18, cols 14-18
-    [PADDING + 9.5 * CELL, PADDING + 3.5 * CELL, 3 * CELL, 3 * CELL],  // white "9": rows 4-6, cols 10-12
-    [PADDING + 3.5 * CELL, PADDING + 7.5 * CELL, CELL, CELL],          // black "1" at (8,4)
-    [PADDING + 4.5 * CELL, PADDING + 8.5 * CELL, CELL, CELL],          // black "1" at (9,5)
-    [PADDING + 3.5 * CELL, PADDING + 10.5 * CELL, 2 * CELL, CELL]      // black "2": row 11, cols 4-5
+  // CROSSWORD-STYLE BADGES — one merged shape per territory group, hugging its actual area: every
+  // territory square the group owns is drawn as a rounded cell centered on its grid intersection
+  // (CELL-sized, radius CELL*0.45), all unioned into ONE fill with the nonzero winding rule, so
+  // the box follows the group's outline (rounded outer corners, notched inner corners) instead of
+  // a bounding rectangle. Filled 40%-translucent with the territory color. Group scan order is
+  // row-major, so fill order below is deterministic. The pop-in scales each cell about the group's
+  // intersection midpoint; at full scale every cell lands exactly on its intersection.
+  const groups = [
+    { label: '6', color: 'black', cells: [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [2, 1]] },
+    { label: '9', color: 'white', cells: [[4, 10], [4, 11], [4, 12], [5, 10], [5, 11], [5, 12], [6, 10], [6, 11], [6, 12]] },
+    { label: '1a', color: 'black', cells: [[8, 4]] },
+    { label: '1b', color: 'black', cells: [[9, 5]] },
+    { label: '2', color: 'black', cells: [[11, 4], [11, 5]] },
+    { label: '5', color: 'white', cells: [[18, 14], [18, 15], [18, 16], [18, 17], [18, 18]] }
   ];
-  let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
-  let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
-  const boxCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
-  const boxOf = (list, x0, y0, w, h) => list.find((b) => near(boxCenter(b), [x0 + w / 2, y0 + h / 2]));
-  const boxColorIsBlack = (b) => {
-    if (near(boxCenter(b), [PADDING + 0.5 * CELL, PADDING + 1.0 * CELL])) return true;   // black "6"
-    if (near(boxCenter(b), [PADDING + 16 * CELL, PADDING + 18 * CELL])) return false;    // white "5"
-    if (near(boxCenter(b), [PADDING + 11 * CELL, PADDING + 5 * CELL])) return false;     // white "9"
-    if (near(boxCenter(b), [PADDING + 4 * CELL, PADDING + 8 * CELL])) return true;       // black "1"
-    if (near(boxCenter(b), [PADDING + 5 * CELL, PADDING + 9 * CELL])) return true;       // black "1"
-    if (near(boxCenter(b), [PADDING + 4.5 * CELL, PADDING + 11 * CELL])) return true;    // black "2"
-    return null;
+  const BLACK_FILL = 'rgba(17, 24, 39, 0.4)';
+  const WHITE_FILL = 'rgba(255, 255, 255, 0.4)';
+  const cellCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+  const squareAt = (list, r, c) => list.find((b) => near(cellCenter(b), [PADDING + c * CELL, PADDING + r * CELL]));
+  const extent = (list, g) => {
+    const s = g.cells.map(([r, c]) => squareAt(list, r, c)).filter(Boolean);
+    const minX = Math.min(...s.map((b) => b.x));
+    const minY = Math.min(...s.map((b) => b.y));
+    const maxX = Math.max(...s.map((b) => b.x + b.w));
+    const maxY = Math.max(...s.map((b) => b.y + b.h));
+    return [minX, minY, maxX - minX, maxY - minY];
   };
 
-  check('box: one rounded badge per group (6 badges), each covering its territory area',
-    boxList.length === 6 && expectedBoxes.every(([x0, y0, w, h]) => !!boxOf(boxList, x0, y0, w, h)),
+  let boxList = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
+  let fillList = await page.evaluate(() => window.__tcBoxFills.slice());
+
+  check('box: one crossword cell per territory square (24 cells, each centered on its intersection)',
+    boxList.length === 24 && groups.every((g) => g.cells.every(([r, c]) => {
+      const sq = squareAt(boxList, r, c);
+      return !!sq && Math.abs(sq.w - CELL) <= 1 && Math.abs(sq.h - CELL) <= 1 && Math.abs(sq.r - CELL * 0.45) <= 1.5;
+    })),
     JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
 
   check('box: black territories get a black 40% badge, white a white 40% badge',
-    fillList.length === 6 && boxList.every((b, i) => {
-      const black = boxColorIsBlack(b);
-      return black !== null ? (black ? fillList[i] === 'rgba(17, 24, 39, 0.4)' : fillList[i] === 'rgba(255, 255, 255, 0.4)') : false;
-    }),
+    fillList.length === 6 && fillList.every((f, i) => f === (groups[i].color === 'black' ? BLACK_FILL : WHITE_FILL)),
     JSON.stringify(fillList));
 
-  // Settle the animation (pop-in runs ~350ms) so boxes are measured at full scale.
-  await page.evaluate(() => { territoryBoxAnims.clear(); window.drawBoard(); });
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 450)));
-  await page.evaluate(() => { window.__tcShots = []; window.__tcBoxes = []; window.drawBoard(); });
+  // Settle the animation deterministically (the pop is ~350ms; forcing t0=0 renders every badge
+  // at full scale on the very next draw, no waiting needed) so boxes are measured settled.
+  await page.evaluate(() => {
+    for (const a of territoryBoxAnims.values()) a.t0 = 0;
+    window.__tcShots = [];
+    window.__tcBoxes = [];
+    window.__tcBoxFills = [];
+    window.drawBoard();
+  });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
   const settledBoxes = await page.evaluate(() => window.__tcBoxes.map((b) => ({ ...b })));
   const settledShots = await shots();
-  check('box: at full scale each badge rect equals the group\'s full territory bbox',
-    settledBoxes.length === 6 && expectedBoxes.every(([x0, y0, w, h]) =>
-      !!settledBoxes.find((b) => Math.abs(b.x - x0) <= 1 && Math.abs(b.y - y0) <= 1 &&
-        Math.abs(b.w - w) <= 1 && Math.abs(b.h - h) <= 1)),
+
+  const expectedExtents = [ // [x0, y0, w, h] canvas units — intersection-oriented bbox of each group
+    [PADDING - 0.5 * CELL, PADDING - 0.5 * CELL, 2 * CELL, 3 * CELL],   // black "6": rows 0-2, cols 0-1
+    [PADDING + 9.5 * CELL, PADDING + 3.5 * CELL, 3 * CELL, 3 * CELL],  // white "9": rows 4-6, cols 10-12
+    [PADDING + 3.5 * CELL, PADDING + 7.5 * CELL, CELL, CELL],          // black "1" at (8,4)
+    [PADDING + 4.5 * CELL, PADDING + 8.5 * CELL, CELL, CELL],          // black "1" at (9,5)
+    [PADDING + 3.5 * CELL, PADDING + 10.5 * CELL, 2 * CELL, CELL],     // black "2": row 11, cols 4-5
+    [PADDING + 13.5 * CELL, PADDING + 17.5 * CELL, 5 * CELL, CELL]     // white "5": row 18, cols 14-18
+  ];
+
+  check('box: at full scale the badge covers exactly the group\'s territory bbox',
+    settledBoxes.length === 24 && expectedExtents.every(([x0, y0, w, h], i) => {
+      const [ex, ey, ew, eh] = extent(settledBoxes, groups[i]);
+      return Math.abs(ex - x0) <= 1 && Math.abs(ey - y0) <= 1 && Math.abs(ew - w) <= 1 && Math.abs(eh - h) <= 1;
+    }),
     JSON.stringify(settledBoxes.map((b) => [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)])));
 
   check('box: badge size scales with territory size (6/9 boxes 3 cells tall, 5 box 5 cells wide)',
     (() => {
-      const b6 = boxOf(settledBoxes, PADDING - 0.5 * CELL, PADDING - 0.5 * CELL, 2 * CELL, 3 * CELL);
-      const b9 = boxOf(settledBoxes, PADDING + 9.5 * CELL, PADDING + 3.5 * CELL, 3 * CELL, 3 * CELL);
-      const b5 = boxOf(settledBoxes, PADDING + 13.5 * CELL, PADDING + 17.5 * CELL, 5 * CELL, CELL);
-      const b2 = boxOf(settledBoxes, PADDING + 3.5 * CELL, PADDING + 10.5 * CELL, 2 * CELL, CELL);
-      return !!b6 && !!b9 && !!b5 && !!b2 &&
-        Math.abs(b6.h - b9.h) <= 1 && b6.h > b5.h && b6.h > b2.h &&
-        b5.w > b9.w && b9.w > b2.w;
+      const e6 = extent(settledBoxes, groups[0]);
+      const e9 = extent(settledBoxes, groups[1]);
+      const e5 = extent(settledBoxes, groups[5]);
+      const e2 = extent(settledBoxes, groups[4]);
+      return Math.abs(e6[3] - e9[3]) <= 1 && e6[3] > e5[3] && e6[3] > e2[3] &&
+        e5[2] > e9[2] && e9[2] > e2[2];
     })());
 
   check('box: every count digit renders inside its territory box',
-    settledShots.length === 6 && expected.every(([, x, y], i) => {
-      const [x0, y0, w, h] = expectedBoxes[i];
-      const b = boxOf(settledBoxes, x0, y0, w, h);
-      return !!b && x >= b.x - 1 && x <= b.x + b.w + 1 && y >= b.y - 1 && y <= b.y + b.h + 1;
-    }));
+    settledShots.length === 6 && settledShots.every((s) =>
+      groups.some((g) => {
+        const [ex, ey, ew, eh] = extent(settledBoxes, g);
+        return s.x >= ex - 1 && s.x <= ex + ew + 1 && s.y >= ey - 1 && s.y <= ey + eh + 1;
+      })));
 
   check('anim: pop-in bookkeeping holds one entry per group',
     await page.evaluate(() => territoryBoxAnims instanceof Map && territoryBoxAnims.size === 6),
@@ -324,8 +362,8 @@ async function main() {
   check('dame: clearing the 3x3 white group removes its "9" (5 groups remain)',
     shrunk.length === 5 && !findShot(shrunk, '9', PADDING + 11 * CELL, PADDING + 5 * CELL),
     `drew ${shrunk.length}`);
-  check('dame: its rounded badge disappears too (5 badges remain)',
-    await page.evaluate(() => window.__tcBoxes.length === 5 && window.__tcBoxFills.length === 5));
+  check('dame: its crossword badge disappears too (15 member squares, 5 fills remain)',
+    await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 5));
   check('anim: clearing a group drops its pop-in entry (map shrinks to 5)',
     await page.evaluate(() => territoryBoxAnims.size === 5));
 
@@ -355,7 +393,7 @@ async function main() {
     lockedShots.length === 6 && !!findShot(lockedShots, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL),
     `drew ${lockedShots.length}`);
   check('post-lock: badges render for all 6 locked groups',
-    await page.evaluate(() => window.__tcBoxes.length === 6 && window.__tcBoxFills.length === 6));
+    await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 6));
   const scoreBefore = await scoreText();
   check('post-lock: lock commits (locked + snapshot)',
     await page.evaluate(() => scoringState.locked && !!scoringState.lockedSnapshot));
