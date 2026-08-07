@@ -513,6 +513,40 @@ async function main() {
       return before === after;
     }));
 
+  // FROZEN ("Board Saved ✓") DISPLAY OPTIONS: the #scoring-frozen-overlay must NOT swallow
+  // sidebar clicks. The overlay is shown (dimming the board), but the sidebar rides above it
+  // (z-index 101) so a REAL browser hit-test click on the w/# checkbox still lands — proving
+  // Display Options are usable after Save. The board canvas itself stays click-locked via
+  // handleScoringBoardClick's own frozen gate.
+  await page.evaluate(() => {
+    window.setScoringFrozen(true);
+    scoringState.showTerritoryCounts = false;
+    document.getElementById('scoring-opt-territory-counts').checked = false;
+  });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+  check('frozen: overlay is visible ("Board Saved ✓") and w/# is unchecked',
+    await page.evaluate(() => {
+      const ov = document.getElementById('scoring-frozen-overlay');
+      return getComputedStyle(ov).display === 'block' &&
+        scoringState.showTerritoryCounts === false && scoringState.frozen === true;
+    }));
+  await page.click('#scoring-opt-territory-counts');
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+  check('frozen: a real click through the overlay flips w/# (Display Options clickable post-Save)',
+    await page.evaluate(() => scoringState.showTerritoryCounts === true));
+  check('frozen: the board itself is still click-locked (canvas click changes nothing)',
+    await page.evaluate(() => {
+      const canvas = document.getElementById('go-board-canvas-scoring');
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + (36 + 3 * ((600 - 72) / 18)) / 600 * rect.width;
+      const y = rect.top + (36 + 3 * ((600 - 72) / 18)) / 600 * rect.height;
+      const before = scoringState.board[3][3];
+      const ev = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y });
+      canvas.dispatchEvent(ev);
+      return scoringState.board[3][3] === before;
+    }));
+  await page.evaluate(() => window.setScoringFrozen(false));
+
   const errs = consoleErrors.filter((e) => !/favicon/i.test(e));
   check('no console/page errors', errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');
 
