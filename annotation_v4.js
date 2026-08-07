@@ -17600,7 +17600,15 @@ function renderScoringBoardToCtx(ctx) {
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     const fontPx = Math.min(CELL_SIZE * 0.9, 9 + count * 1.4);
-                    ctx.font = `bold ${fontPx}px 'Pretendard', sans-serif`;
+                    // Figtree-SemiBold digits (the registered 400-weight 'Figtree' face IS
+                    // Figtree-SemiBold.ttf); while an EDITING mode is active (Replacing Dead
+                    // Stones / re-Arranging Stones) the digits switch to the matching italic
+                    // (Figtree-SemiBoldItalic.ttf) as a visual cue that the counts are still
+                    // adapting to the playground edits. No `bold` keyword: the single registered
+                    // face already carries the semi-bold weight, so `bold` would only trigger a
+                    // faux-bold on top of it.
+                    const countsEditing = scoringState.interactionMode === 'replace' || scoringState.interactionMode === 'rearrange';
+                    ctx.font = `${countsEditing ? 'italic ' : ''}${fontPx}px 'Figtree', sans-serif`;
                     // Pure font text — no border, no shadow, no halo (explicitly clear any shadow
                     // a prior draw op left on the context). Black territories ink in the warm
                     // yellow, White territories in the deep blue, both chosen to sit on their

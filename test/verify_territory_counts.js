@@ -7,8 +7,10 @@
 //   SPLIT    — points touching only diagonally are NOT one group.
 //   MERGE    — orthogonally adjacent points join into one group.
 //   COLOR    — number fill color = territory color (black #FCD102, white #101389), rendered
-//             as PURE font text in 'Pretendard' (bold → PretendardEN-Medium.otf): no shadow,
-//             no halo, no stroked border.
+//             as PURE font text in 'Figtree' (the registered 400-weight face IS
+//             Figtree-SemiBold.ttf): no shadow, no halo, no stroked border; while an EDITING
+//             mode is active (Replacing Dead Stones / re-Arranging Stones) the digits switch
+//             to the matching italic (Figtree-SemiBoldItalic.ttf) as an editing cue.
 //   SIZE     — text size scales with group size.
 //   TOGGLE   — the w/# checkbox wires scoringState.showTerritoryCounts and redraws; with
 //             it off (or "Show territory" off) no numbers render.
@@ -71,15 +73,17 @@ async function main() {
   });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
 
-  // Patch fillText BEFORE drawing: capture count draws (font resolves to bold) with position,
-  // font, color. The coordinate labels render weight 500 / plain, never bold, so bold digits
-  // are exactly the territory-group numbers.
+  // Patch fillText BEFORE drawing: capture count draws (Figtree non-`normal` digits — the
+  // `normal ... 'Figtree'` coordinate labels and any `normal` text are excluded) with position,
+  // font, color. The scoring canvas coordinate row labels render in `system-ui`, never Figtree,
+  // so Figtree digits are exactly the territory-group numbers.
   await page.evaluate(() => {
     if (!window.__tcPatched) {
       window.__tcShots = [];
+      const isCount = (ctx) => ctx.font && /Figtree/.test(ctx.font) && !/normal/.test(ctx.font);
       const orig = CanvasRenderingContext2D.prototype.fillText;
       CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxW) {
-        if (this.font && /bold|700/.test(this.font) && /^\d+$/.test(String(text))) {
+        if (isCount(this) && /^\d+$/.test(String(text))) {
           window.__tcShots.push({
             text: String(text), x, y, font: this.font, fillStyle: this.fillStyle,
             shadowOffsetX: this.shadowOffsetX, shadowOffsetY: this.shadowOffsetY,
@@ -88,11 +92,11 @@ async function main() {
         }
         return orig.call(this, text, x, y, maxW);
       };
-      // Count-number borders must NOT be drawn: any bold-digit strokeText is a regression.
+      // Count-number borders must NOT be drawn: any count-digit strokeText is a regression.
       window.__tcStrokes = [];
       const origStroke = CanvasRenderingContext2D.prototype.strokeText;
       CanvasRenderingContext2D.prototype.strokeText = function (text, x, y, maxW) {
-        if (this.font && /bold|700/.test(this.font) && /^\d+$/.test(String(text))) {
+        if (isCount(this) && /^\d+$/.test(String(text))) {
           window.__tcStrokes.push(String(text));
         }
         return origStroke.call(this, text, x, y, maxW);
@@ -260,8 +264,8 @@ async function main() {
     shotList.filter((s) => ['5', '9'].includes(s.text)).every((s) => s.fillStyle === '#101389'),
     'white numbers use #101389');
 
-  check('font: numbers use Pretendard (bold → PretendardEN-Medium.otf)',
-    shotList.length === 6 && shotList.every((s) => /Pretendard/.test(s.font) && /bold/.test(s.font)),
+  check('font: numbers use Figtree-SemiBold (no `bold` faux-weight, no Pretendard) — non-italic while marking',
+    shotList.length === 6 && shotList.every((s) => /Figtree/.test(s.font) && !/bold/.test(s.font) && !/normal/.test(s.font) && !/italic/.test(s.font) && !/Pretendard/.test(s.font)),
     JSON.stringify(shotList.map((s) => s.font)));
 
   check('size: font scales with group size (9 > 6 > 5)',
@@ -448,6 +452,9 @@ async function main() {
     `drew ${lockedShots.length}`);
   check('post-lock: badges render for all 6 locked groups',
     await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 6));
+  check('font: post-lock editing mode (Replacing) renders the digits in Figtree italic',
+    lockedShots.length === 6 && lockedShots.every((s) => /Figtree/.test(s.font) && /italic/.test(s.font)),
+    JSON.stringify(lockedShots.map((s) => s.font)));
   const scoreBefore = await scoreText();
   check('post-lock: lock commits (locked + snapshot)',
     await page.evaluate(() => scoringState.locked && !!scoringState.lockedSnapshot));
@@ -476,6 +483,21 @@ async function main() {
         counts.includes(5) && !counts.includes(6);
     }),
     await page.evaluate(() => JSON.stringify([...territoryBoxAnims.entries()].map(([k, v]) => [k, v.count]))));
+  check('font: replace editing keeps the italic after the board adapts',
+    adapted.length === 6 && adapted.every((s) => /Figtree/.test(s.font) && /italic/.test(s.font)),
+    JSON.stringify(adapted.map((s) => s.font)));
+  // re-Arranging Stones is the OTHER editing mode — it must italicize the digits too.
+  await page.evaluate(() => {
+    scoringState.interactionMode = 'rearrange';
+    window.__tcShots = [];
+    window.drawBoard();
+  });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  const rearrangeShots = await shots();
+  check('font: re-Arranging mode renders the Figtree italic as well',
+    rearrangeShots.length === 6 && rearrangeShots.every((s) => /Figtree/.test(s.font) && /italic/.test(s.font)),
+    JSON.stringify(rearrangeShots.map((s) => s.font)));
+  await page.evaluate(() => { scoringState.interactionMode = 'replace'; });
   const scoreAfter = await scoreText();
   check('post-lock replace: frozen score text does NOT move',
     scoreAfter === scoreBefore, scoreBefore === scoreAfter ? scoreBefore : `${scoreBefore} -> ${scoreAfter}`);
