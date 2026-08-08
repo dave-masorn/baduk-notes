@@ -6211,30 +6211,52 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
     if (player === 'B') {
         // ============ SLATE — matte, mottled, near-uniform black ============
         // Rebuilt against a high-res photo: real nachiguro has almost NO
-        // gloss (no tight bright core) and almost NO rim darkening (the
-        // whole disk stays close to one dark value; the previous version's
-        // drop to near-black #020303 at the edge and bright glassy core
-        // were both wrong). What actually varies is the subtle mottled
-        // cloudiness (handled by _getSlateTexture) plus a very gentle
-        // overall tone/value drift (tintAmount/valueShift below).
+        // tight gloss and NO drop to near-black #020303 at the rim (a bright
+        // glassy core and a #020303 edge were both wrong). But the stone is
+        // still a SPHERE: convexity comes from a broad, soft highlight high
+        // on the upper-left plus a gentle falloff across the disk into a soft
+        // ambient shadow on the lower-right — all within a matte dark range
+        // (never near-black, never glassy). The visible variation stays
+        // POLISH/TONE (tintAmount/valueShift below) plus the mottled
+        // cloudiness handled by _getSlateTexture, which is drawn unchanged.
         let coreColor = _lerpColor('#333739', '#37403f', tintAmount);
         if (valueShift !== 0) {
             const lightenTarget = valueShift > 0 ? '#565d60' : '#0a0b0c';
             coreColor = _lerpColor(coreColor, lightenTarget, Math.abs(valueShift) * 0.35);
         }
-        // specStrength now only lifts the core a little — this is matte
-        // stone, not glass, so keep the ceiling low even at full 0.5 cap.
-        const brightCore = _lerpColor(coreColor, '#4a5153', specStrength * 0.6);
-        const rimColor = _lerpColor(coreColor, '#000000', 0.4);
+        // Broad soft highlight, not a tight glint — specStrength caps it so
+        // even a full 0.5 roll stays well short of glassy.
+        const brightCore = _lerpColor(coreColor, '#4a5153', specStrength * 0.75);
+        // Soft ambient shadow for the sphere's lower-right, kept mid-dark.
+        const shadowStop = _lerpColor(coreColor, '#0a0b0c', 0.45);
+        const rimColor = _lerpColor(coreColor, '#000000', 0.5);
 
         const grad = ctx.createRadialGradient(
-            cx - radius * 0.25, cy - radius * 0.3, radius * 0.1,
-            cx, cy, radius * 1.15
+            cx - radius * 0.28, cy - radius * 0.32, radius * 0.15,
+            cx - radius * 0.05, cy - radius * 0.05, radius * 1.6
         );
         grad.addColorStop(0.00, brightCore);
-        grad.addColorStop(0.45, coreColor);
+        grad.addColorStop(0.25, coreColor);
+        grad.addColorStop(0.65, shadowStop);
         grad.addColorStop(1.00, rimColor);
         ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Set B top-left light, adapted as a soft transparent sheen. Set B's
+        // black peaks at #6b7280 high on the upper-left; here the same
+        // directional light is layered over Set C's material base with the
+        // peak turned into a gentle translucent lift (and a fully transparent
+        // edge) so the stone reads as lit without going glossy.
+        const light = ctx.createRadialGradient(
+            cx - radius * 0.28, cy - radius * 0.3, radius * 0.05,
+            cx - radius * 0.1, cy - radius * 0.1, radius * 1.2
+        );
+        light.addColorStop(0.0, 'rgba(190,200,210,0.28)');
+        light.addColorStop(0.35, 'rgba(150,160,170,0.10)');
+        light.addColorStop(1.0, 'rgba(140,150,160,0)');
+        ctx.fillStyle = light;
         ctx.beginPath();
         ctx.arc(cx, cy, radius, 0, Math.PI * 2);
         ctx.fill();
@@ -12830,11 +12852,11 @@ function setupStudyMode() {
                     #study-opponent-term.study-term-w::after { border-color: transparent #101389 transparent transparent; }
                 </style>
                 <div id="study-opponent-term-container" style="margin-top: 12px; position: relative; height: 24px; visibility: hidden; width: 100%;">
-                    <div style="position: absolute; left: 0; top: 0; width: 96px; height: 100%; display: flex; align-items: center; justify-content: flex-end;">
-                        <span id="study-opponent-name" style="font-family: 'Anthropic Sans Bold', sans-serif; font-size: 16px; color: black;">Player:</span>
+                    <div style="position: absolute; left: 50px; top: 0; width: 96px; height: 100%; display: flex; align-items: center; justify-content: flex-end;">
+                        <span id="study-opponent-name" style="font-family: 'Anthropic Sans Bold', sans-serif; font-size: 16px; color: black; flex-shrink: 0; white-space: nowrap; position: absolute; right: 0;">Player:</span>
                     </div>
-                    <div style="position: absolute; left: 105px; top: 50%; transform: translateY(-50%); z-index: 30; display: flex; align-items: center;">
-                        <span id="study-opponent-term" style="cursor: pointer; padding: 4px 10px; border-radius: 4px; font-size: 14px; font-weight: 600; font-family: 'Anthropic Sans Medium Italic', sans-serif; display: inline-block; position: relative; max-width: 170px; line-height: 1.2; text-align: left; box-shadow: 0 2px 5px rgba(0,0,0,0.2); animation: study-bounce 2s infinite ease-in-out;">Term</span>
+                    <div style="position: absolute; left: 165px; top: 50%; transform: translateY(-50%); z-index: 30; display: flex; align-items: center;">
+                        <span id="study-opponent-term" style="cursor: pointer; padding: 4px 10px; border-radius: 4px; font-size: 14px; font-weight: 600; font-family: 'Anthropic Sans Medium Italic', sans-serif; display: inline-block; position: relative; max-width: 170px; line-height: 1.2; text-align: left; box-shadow: 0 2px 5px rgba(0,0,0,0.2); animation: study-bounce 2s infinite ease-in-out; border-color: transparent;">Term</span>
                     </div>
                 </div>
             `;
