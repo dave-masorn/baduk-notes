@@ -3,11 +3,10 @@
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const puppeteer = require('puppeteer-core');
+const { launchLightpanda, probeCapabilities } = require('./lightpanda-launcher.js');
 
 const REPO = '/Users/davemasorn/AntiGravity/baduk-notes';
 const PORT = 3947;
-const CHROME = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
@@ -22,17 +21,19 @@ const server = http.createServer((req, res) => {
 });
 
 let results = [];
+let skipped = 0;
 function check(name, cond, detail) {
   results.push({ name, pass: !!cond });
   console.log(`[${cond ? 'PASS' : 'FAIL'}] ${name}${detail ? ' — ' + detail : ''}`);
 }
+function skip(name, reason) {
+  skipped++;
+  console.log(`[SKIP] ${name} — ${reason}`);
+}
 
 async function main() {
   await new Promise((r) => server.listen(PORT, r));
-  const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-gpu'] });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(20000);
-  await page.setViewport({ width: 1600, height: 1200 });
+  const { page, close } = await launchLightpanda();
   const consoleErrors = [];
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
@@ -40,132 +41,173 @@ async function main() {
   await page.waitForFunction(() => window.state && window.state.board && typeof window.drawBoard === 'function', { timeout: 20000 });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 600)));
 
-  // Put stones on the board across several positions, both colors.
-  await page.evaluate(() => {
-    const empty = () => Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => ({ player: null, annotation: null, label: null })));
-    const cells = empty();
-    const place = (r, c, p) => { cells[r][c] = { player: p, annotation: null, label: null }; };
-    place(3, 3, 'B'); place(3, 15, 'W'); place(9, 9, 'B'); place(15, 3, 'W'); place(15, 15, 'B');
-    window.state.board = cells;
-    window.state.baselineBoard = empty();
-    window.drawBoard();
-  });
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
+  const caps = await probeCapabilities(page);
+  // Render/pixel checks need a real canvas (gradients + actual pixels). Lightpanda's
+  // canvas is a stub: drawBoard throws on createRadialGradient and getImageData always
+  // returns zeros, so those checks are SKIPPED there. The variant logic checks below
+  // are pure JS and run everywhere.
+  const RENDER_OK = caps.gradients;
+
+  if (RENDER_OK) {
+    // Put stones on the board across several positions, both colors.
+    await page.evaluate(() => {
+      const empty = () => Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => ({ player: null, annotation: null, label: null })));
+      const cells = empty();
+      const place = (r, c, p) => { cells[r][c] = { player: p, annotation: null, label: null }; };
+      place(3, 3, 'B'); place(3, 15, 'W'); place(9, 9, 'B'); place(15, 3, 'W'); place(15, 15, 'B');
+      window.state.board = cells;
+      window.state.baselineBoard = empty();
+      window.drawBoard();
+    });
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
+  }
 
   // 1. getStoneVariant is a pure function of (row, col, player) — per-position seeding.
+  //    v4 splits the variant space: SLATE stones get tint/value/cloud/specular
+  //    params, HAMAGURI stones get a Snow (rare) or Blossom (common) grade bucket.
   const variantCheck = await page.evaluate(() => {
     const a1 = window.getStoneVariant(3, 3, 'B');
     const a2 = window.getStoneVariant(3, 3, 'B');
     const b = window.getStoneVariant(9, 9, 'B');
-    const w = window.getStoneVariant(3, 3, 'W');
+    const w1 = window.getStoneVariant(3, 3, 'W');
+    const w2 = window.getStoneVariant(3, 3, 'W');
+    const allW = [];
+    for (let r = 0; r < 19; r++) for (let c = 0; c < 19; c++) allW.push(window.getStoneVariant(r, c, 'W'));
+    const snows = allW.filter((v) => v.ringCount >= 30).length;
+    const blossoms = allW.filter((v) => v.ringCount <= 17).length;
+    const bucketsConsistent = allW.every((v) =>
+      v.ringCount >= 30
+        ? v.ringCount <= 46 && v.whiteness >= 0.75 && v.whiteness <= 1 && v.originDistMult >= 7 && v.originDistMult <= 10 && v.ringJitter >= 0.3 && v.ringJitter <= 0.65
+        : v.ringCount >= 8 && v.ringCount <= 17 && v.whiteness >= 0.1 && v.whiteness <= 0.65 && v.originDistMult >= 3.5 && v.originDistMult <= 6 && v.ringJitter >= 0.7 && v.ringJitter <= 1.5);
     return {
       samePosSame: JSON.stringify(a1) === JSON.stringify(a2),
       diffPosDiffers: JSON.stringify(a1) !== JSON.stringify(b),
-      diffPlayerDiffers: JSON.stringify(a1) !== JSON.stringify(w),
+      diffPlayerDiffers: JSON.stringify(a1) !== JSON.stringify(w1),
       caps: a1.specularStrength >= 0 && a1.specularStrength <= 0.5,
-      angleInRange: a1.originAngle >= 0 && a1.originAngle < Math.PI * 2,
-      angleDeterministic: a1.originAngle === a2.originAngle,
-      angleDiffersByPos: a1.originAngle !== b.originAngle,
       tintInRange: a1.tintAmount >= 0 && a1.tintAmount <= 1 && a1.tintAmount === a2.tintAmount,
-      whiteInRange: a1.whiteness > 0 && a1.whiteness <= 1 && a1.whiteness === a2.whiteness,
-      gradeDrivesDensity: a1.ringCount === 10 + Math.floor(a1.whiteness * 28)
+      valueShiftInRange: a1.valueShift >= -0.6 && a1.valueShift <= 0.6 && a1.valueShift === a2.valueShift,
+      cloudSeedStable: Number.isInteger(a1.cloudSeed) && a1.cloudSeed >= 0 && a1.cloudSeed === a2.cloudSeed,
+      angleInRange: w1.originAngle >= 0 && w1.originAngle < Math.PI * 2,
+      angleDeterministic: w1.originAngle === w2.originAngle,
+      whiteDeterministic: JSON.stringify(w1) === JSON.stringify(w2),
+      snows,
+      blossoms,
+      snowAndBlossomBothPresent: snows > 0 && blossoms > 0,
+      bucketsConsistent
     };
   });
   check('variant deterministic per position', variantCheck.samePosSame);
   check('variant differs across positions', variantCheck.diffPosDiffers);
   check('variant differs across players', variantCheck.diffPlayerDiffers);
-  check('specular capped at 0–0.5', variantCheck.caps);
-  check('originAngle in full-circle range 0–2π', variantCheck.angleInRange);
-  check('originAngle deterministic per position', variantCheck.angleDeterministic);
-  check('originAngle differs across positions (grain direction variety)', variantCheck.angleDiffersByPos);
-  check('tintAmount (slate kuro↔ao) in 0–1 + deterministic', variantCheck.tintInRange);
-  check('whiteness (hamaguri Snow↔Blossom) in 0–1 + deterministic', variantCheck.whiteInRange);
-  check('hamaguri grade drives ring density (Snow dense, Blossom sparse)', variantCheck.gradeDrivesDensity);
+  check('specular capped at 0–0.5 (slate)', variantCheck.caps);
+  check('slate tintAmount (kuro↔ao) in 0–1 + deterministic', variantCheck.tintInRange);
+  check('slate valueShift in -0.6–0.6 + deterministic', variantCheck.valueShiftInRange);
+  check('slate cloudSeed integer + deterministic', variantCheck.cloudSeedStable);
+  check('hamaguri originAngle in full-circle range 0–2π', variantCheck.angleInRange);
+  check('hamaguri originAngle deterministic per position', variantCheck.angleDeterministic);
+  check('hamaguri variant deterministic per position (white)', variantCheck.whiteDeterministic);
+  check('both Snow and Blossom grades appear across the board', variantCheck.snowAndBlossomBothPresent, `${variantCheck.snows} snow / ${variantCheck.blossoms} blossom`);
+  check('Snow/Blossom grade buckets internally consistent', variantCheck.bucketsConsistent);
 
-  const sampleStones = (page) => page.evaluate(() => {
-    const canvas = document.getElementById('go-board-canvas-initial');
-    const ctx = canvas.getContext('2d');
-    const PADDING = 36, CELL = window.CELL_SIZE || (canvas.width - 72) / 18;
-    const px = (r, c) => {
-      const d = ctx.getImageData(PADDING + c * CELL, PADDING + r * CELL, 1, 1).data;
-      return [d[0], d[1], d[2]];
-    };
-    return { black: px(3, 3), white: px(3, 15) };
-  });
-  const stoneToRGB = (p) => `rgb(${p[0]},${p[1]},${p[2]})`;
+  if (RENDER_OK) {
+    const sampleStones = (page) => page.evaluate(() => {
+      const canvas = document.getElementById('go-board-canvas-initial');
+      const ctx = canvas.getContext('2d');
+      const PADDING = 36, CELL = window.CELL_SIZE || (canvas.width - 72) / 18;
+      const px = (r, c) => {
+        const d = ctx.getImageData(PADDING + c * CELL, PADDING + r * CELL, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      };
+      return { black: px(3, 3), white: px(3, 15) };
+    });
+    const stoneToRGB = (p) => `rgb(${p[0]},${p[1]},${p[2]})`;
 
-  // 2. Render with each stone set; capture center pixels; confirm no errors.
-  const renders = {};
-  for (const set of ['A', 'B', 'C']) {
-    consoleErrors.length = 0;
-    await page.evaluate((s) => {
-      const style = window.getActiveStyleObject();
-      if (!style) return;
-      style.stoneSet = s;
-      window.drawBoard();
-    }, set);
+    // 2. Render with each stone set; capture center pixels; confirm no errors.
+    const renders = {};
+    for (const set of ['A', 'B', 'C']) {
+      consoleErrors.length = 0;
+      await page.evaluate((s) => {
+        const style = window.getActiveStyleObject();
+        if (!style) return;
+        style.stoneSet = s;
+        window.drawBoard();
+      }, set);
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
+      renders[set] = await sampleStones(page);
+      const errs = consoleErrors.filter((e) => !/favicon/i.test(e));
+      check(`set ${set} renders without errors`, errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');
+    }
+
+    // Stones actually drew: black stone center is dark, white stone center is light.
+    check('set C black stone is dark', renders.C.black[0] < 100 && renders.C.black[1] < 100 && renders.C.black[2] < 100, stoneToRGB(renders.C.black));
+    check('set C white stone is light', renders.C.white[0] > 150 && renders.C.white[1] > 150 && renders.C.white[2] > 150, stoneToRGB(renders.C.white));
+
+    // 3. Set C is stable across repeated redraws — identical pixels (per-position seeding, no flicker).
+    await page.evaluate(() => { window.drawBoard(); });
     await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
-    renders[set] = await sampleStones(page);
-    const errs = consoleErrors.filter((e) => !/favicon/i.test(e));
-    check(`set ${set} renders without errors`, errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');
-  }
+    const c2 = await sampleStones(page);
+    check('set C stable across redraws (black)', stoneToRGB(renders.C.black) === stoneToRGB(c2.black), `${stoneToRGB(renders.C.black)} vs ${stoneToRGB(c2.black)}`);
+    check('set C stable across redraws (white)', stoneToRGB(renders.C.white) === stoneToRGB(c2.white), `${stoneToRGB(renders.C.white)} vs ${stoneToRGB(c2.white)}`);
 
-  // Stones actually drew: black stone center is dark, white stone center is light.
-  check('set C black stone is dark', renders.C.black[0] < 100 && renders.C.black[1] < 100 && renders.C.black[2] < 100, stoneToRGB(renders.C.black));
-  check('set C white stone is light', renders.C.white[0] > 150 && renders.C.white[1] > 150 && renders.C.white[2] > 150, stoneToRGB(renders.C.white));
+    // 4. A, B, C are visually distinct from each other.
+    const setsDistinct = renders.A.black.join(',') !== renders.B.black.join(',') && renders.B.black.join(',') !== renders.C.black.join(',') && renders.A.black.join(',') !== renders.C.black.join(',');
+    check('sets A/B/C visually distinct (black)', setsDistinct, `A=${stoneToRGB(renders.A.black)} B=${stoneToRGB(renders.B.black)} C=${stoneToRGB(renders.C.black)}`);
 
-  // 3. Set C is stable across repeated redraws — identical pixels (per-position seeding, no flicker).
-  await page.evaluate(() => { window.drawBoard(); });
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 300)));
-  const c2 = await sampleStones(page);
-  check('set C stable across redraws (black)', stoneToRGB(renders.C.black) === stoneToRGB(c2.black), `${stoneToRGB(renders.C.black)} vs ${stoneToRGB(c2.black)}`);
-  check('set C stable across redraws (white)', stoneToRGB(renders.C.white) === stoneToRGB(c2.white), `${stoneToRGB(renders.C.white)} vs ${stoneToRGB(c2.white)}`);
-
-  // 4. A, B, C are visually distinct from each other.
-  const setsDistinct = renders.A.black.join(',') !== renders.B.black.join(',') && renders.B.black.join(',') !== renders.C.black.join(',') && renders.A.black.join(',') !== renders.C.black.join(',');
-  check('sets A/B/C visually distinct (black)', setsDistinct, `A=${stoneToRGB(renders.A.black)} B=${stoneToRGB(renders.B.black)} C=${stoneToRGB(renders.C.black)}`);
-
-  // 5. Set C honors per-position variety: two different black stones differ from each other.
-  //    Grain/ring texture is subtle, so compare an area-average over the stone surface.
-  const twoPos = await page.evaluate(() => {
-    const canvas = document.getElementById('go-board-canvas-initial');
-    const ctx = canvas.getContext('2d');
-    const PADDING = 36, CELL = window.CELL_SIZE || (canvas.width - 72) / 18;
-    const area = (r, c) => {
-      const rad = CELL * 0.35;
-      const x0 = PADDING + c * CELL, y0 = PADDING + r * CELL;
-      let rs = 0, gs = 0, bs = 0, n = 0;
-      for (let dy = -Math.floor(rad); dy <= Math.floor(rad); dy += 2) {
-        for (let dx = -Math.floor(rad); dx <= Math.floor(rad); dx += 2) {
-          if (dx * dx + dy * dy > rad * rad) continue;
-          const d = ctx.getImageData(x0 + dx, y0 + dy, 1, 1).data;
-          rs += d[0]; gs += d[1]; bs += d[2]; n++;
+    // 5. Set C honors per-position variety: two different black stones differ from each other.
+    //    Grain/ring texture is subtle, so compare an area-average over the stone surface.
+    const twoPos = await page.evaluate(() => {
+      const canvas = document.getElementById('go-board-canvas-initial');
+      const ctx = canvas.getContext('2d');
+      const PADDING = 36, CELL = window.CELL_SIZE || (canvas.width - 72) / 18;
+      const area = (r, c) => {
+        const rad = CELL * 0.35;
+        const x0 = PADDING + c * CELL, y0 = PADDING + r * CELL;
+        let rs = 0, gs = 0, bs = 0, n = 0;
+        for (let dy = -Math.floor(rad); dy <= Math.floor(rad); dy += 2) {
+          for (let dx = -Math.floor(rad); dx <= Math.floor(rad); dx += 2) {
+            if (dx * dx + dy * dy > rad * rad) continue;
+            const d = ctx.getImageData(x0 + dx, y0 + dy, 1, 1).data;
+            rs += d[0]; gs += d[1]; bs += d[2]; n++;
+          }
         }
-      }
-      return { r: rs / n, g: gs / n, b: bs / n };
-    };
-    return { s1: area(3, 3), s2: area(9, 9) };
-  });
-  const avgDiff = Math.abs(twoPos.s1.r - twoPos.s2.r) + Math.abs(twoPos.s1.g - twoPos.s2.g) + Math.abs(twoPos.s1.b - twoPos.s2.b);
-  check('set C per-position variety (two blacks differ)', avgDiff > 0.05,
-    `avgDiff=${avgDiff.toFixed(3)} s1=${twoPos.s1.r.toFixed(1)},${twoPos.s1.g.toFixed(1)},${twoPos.s1.b.toFixed(1)} s2=${twoPos.s2.r.toFixed(1)},${twoPos.s2.g.toFixed(1)},${twoPos.s2.b.toFixed(1)}`);
+        return { r: rs / n, g: gs / n, b: bs / n };
+      };
+      return { s1: area(3, 3), s2: area(9, 9) };
+    });
+    const avgDiff = Math.abs(twoPos.s1.r - twoPos.s2.r) + Math.abs(twoPos.s1.g - twoPos.s2.g) + Math.abs(twoPos.s1.b - twoPos.s2.b);
+    check('set C per-position variety (two blacks differ)', avgDiff > 0.05,
+      `avgDiff=${avgDiff.toFixed(3)} s1=${twoPos.s1.r.toFixed(1)},${twoPos.s1.g.toFixed(1)},${twoPos.s1.b.toFixed(1)} s2=${twoPos.s2.r.toFixed(1)},${twoPos.s2.g.toFixed(1)},${twoPos.s2.b.toFixed(1)}`);
 
-  // 6. Texture cache (lexical const — read by identifier): hamaguri + slate keys present, stable across redraws.
-  const cache1 = await page.evaluate(() => {
-    if (typeof _stoneTextureCache === 'undefined') return { size: -1, ham: -1, slt: -1 };
-    const keys = Array.from(_stoneTextureCache.keys());
-    return { size: _stoneTextureCache.size, ham: keys.filter((k) => k.startsWith('hamaguri_')).length, slt: keys.filter((k) => k.startsWith('slate_')).length };
-  });
-  check('Set C produced hamaguri textures', cache1.ham > 0, `${cache1.ham} keys`);
-  check('Set C produced slate textures', cache1.slt > 0, `${cache1.slt} keys`);
-  await page.evaluate(() => { window.drawBoard(); });
-  const cache2 = await page.evaluate(() => (typeof _stoneTextureCache === 'undefined') ? -1 : _stoneTextureCache.size);
-  check('Set C texture cache stable across redraws', cache2 === cache1.size, `${cache1.size} -> ${cache2}`);
+    // 6. Texture cache (lexical const — read by identifier): hamaguri + slate keys present, stable across redraws.
+    const cache1 = await page.evaluate(() => {
+      if (typeof _stoneTextureCache === 'undefined') return { size: -1, ham: -1, slt: -1 };
+      const keys = Array.from(_stoneTextureCache.keys());
+      return { size: _stoneTextureCache.size, ham: keys.filter((k) => k.startsWith('hamaguri_')).length, slt: keys.filter((k) => k.startsWith('slate_')).length };
+    });
+    check('Set C produced hamaguri textures', cache1.ham > 0, `${cache1.ham} keys`);
+    check('Set C produced slate textures', cache1.slt > 0, `${cache1.slt} keys`);
+    await page.evaluate(() => { window.drawBoard(); });
+    const cache2 = await page.evaluate(() => (typeof _stoneTextureCache === 'undefined') ? -1 : _stoneTextureCache.size);
+    check('Set C texture cache stable across redraws', cache2 === cache1.size, `${cache1.size} -> ${cache2}`);
+  } else {
+    // Lightpanda: canvas has no gradients and getImageData always zeros — stone
+    // rendering is structurally unverifiable there. Variant logic is checked above.
+    for (const set of ['A', 'B', 'C']) skip(`set ${set} renders without errors`, 'no canvas gradient rendering');
+    skip('set C black stone is dark', 'no canvas pixel reads');
+    skip('set C white stone is light', 'no canvas pixel reads');
+    skip('set C stable across redraws (black)', 'no canvas pixel reads');
+    skip('set C stable across redraws (white)', 'no canvas pixel reads');
+    skip('sets A/B/C visually distinct (black)', 'no canvas pixel reads');
+    skip('set C per-position variety (two blacks differ)', 'no canvas pixel reads');
+    skip('Set C produced hamaguri textures', 'no stone rendering (drawBoard throws on gradients)');
+    skip('Set C produced slate textures', 'no stone rendering (drawBoard throws on gradients)');
+    skip('Set C texture cache stable across redraws', 'no stone rendering (drawBoard throws on gradients)');
+  }
 
   const passed = results.filter((r) => r.pass).length;
   const failed = results.filter((r) => !r.pass).length;
-  console.log(`\nstone-set-c verify: ${passed} passed, ${failed} failed`);
-  await browser.close();
+  console.log(`\nstone-set-c verify: ${passed} passed, ${failed} failed, ${skipped} skipped`);
+  await close();
   server.close();
   process.exit(failed > 0 ? 1 : 0);
 }

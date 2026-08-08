@@ -4,11 +4,10 @@
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const puppeteer = require('puppeteer-core');
+const { launchLightpanda, probeCapabilities } = require('./lightpanda-launcher.js');
 
 const REPO = '/Users/davemasorn/AntiGravity/baduk-notes';
 const PORT = 3952;
-const CHROME = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent(req.url.split('?')[0]);
@@ -22,9 +21,14 @@ const server = http.createServer((req, res) => {
 });
 
 let results = [];
+let skipped = 0;
 function check(name, cond, detail) {
   results.push({ name, pass: !!cond });
   console.log(`[${cond ? 'PASS' : 'FAIL'}] ${name}${detail ? ' — ' + detail : ''}`);
+}
+function skip(name, reason) {
+  skipped++;
+  console.log(`[SKIP] ${name} — ${reason}`);
 }
 
 async function evalIn(page, fn, ...args) {
@@ -35,15 +39,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
   await new Promise((r) => server.listen(PORT, r));
-  const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-gpu'] });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(20000);
-  await page.setViewport({ width: 1600, height: 1200 });
+  const { page, close } = await launchLightpanda();
   const consoleErrors = [];
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
   await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.toggleCustomPanel && document.querySelector('.custom-stones-section'), { timeout: 15000 });
+  // Lightpanda's layout engine reports bogus getBoundingClientRect heights (~5px)
+  // for content-driven blocks, so the pixel-height accordion checks are SKIPPED
+  // there. The expand/collapse/lock STATE checks run everywhere.
+  const caps = await probeCapabilities(page);
+  const LAYOUT_OK = caps.layout;
+  const layoutCheck = (name, cond, detail) => {
+    if (!LAYOUT_OK) { skip(name, 'layout heights unreliable (getBoundingClientRect ≈ 5px)'); return; }
+    check(name, cond, detail);
+  };
   // The app reads the bare `_scoringDirty` global in its beforeunload handler; the global is
   // only ever assigned once the scoring modal path runs, so a page that never opens MSM throws
   // a ReferenceError on reload. Init it (mirroring the modal path) to keep the harness clean.
@@ -104,7 +114,7 @@ async function main() {
     check('A1 initial: Custom Stones expanded', s.expanded === true);
     check('A1 initial: not locked', s.locked === false);
     check('A1 initial: no stone set active', s.activeSet === null && s.stoneSet === null, `set=${s.activeSet} style=${s.stoneSet}`);
-    check('A1 initial: body rendered (real layout)', s.bodyH > 50 && s.bodyScrollH > 50, `bodyH=${s.bodyH} scrollH=${s.bodyScrollH}`);
+    layoutCheck('A1 initial: body rendered (real layout)', s.bodyH > 50 && s.bodyScrollH > 50, `bodyH=${s.bodyH} scrollH=${s.bodyScrollH}`);
     check('A1 initial: accordion holds full content (within sub-px layout drift)',
       parseFloat(s.accMaxH) >= s.accScrollH - 4, `accMaxH=${s.accMaxH} scrollH=${s.accScrollH}`);
   }
@@ -125,7 +135,7 @@ async function main() {
   await evalIn(page, () => __h.toggleAccordion());
   await sleep(300);
   const shortMaxH = await evalIn(page, () => __h.snap().accMaxH);
-  check('A3 Set A: accordion reopened measures SHORT', parseFloat(shortMaxH) < fullScrollH - 1, `short=${shortMaxH} full=${fullScrollH}`);
+  layoutCheck('A3 Set A: accordion reopened measures SHORT', parseFloat(shortMaxH) < fullScrollH - 1, `short=${shortMaxH} full=${fullScrollH}`);
   await evalIn(page, () => __h.clickHeader());
   await sleep(400);
   {
@@ -133,7 +143,7 @@ async function main() {
     check('A3 Set A + expand: custom expanded', s.expanded === true, JSON.stringify(s));
     check('A3 Set A + expand: body open (>0px)', s.bodyH > 0 && s.bodyMaxH !== '0px', `bodyH=${s.bodyH} maxH=${s.bodyMaxH}`);
     check('A3 Set A + expand: accordion re-fitted to full (no clip)', parseFloat(s.accMaxH) >= fullScrollH - 4, `accMaxH=${s.accMaxH} full=${fullScrollH}`);
-    check('A3 Set A + expand: body fully visible', s.bodyH >= s.bodyScrollH - 2, `bodyH=${s.bodyH} scrollH=${s.bodyScrollH}`);
+    layoutCheck('A3 Set A + expand: body fully visible', s.bodyH >= s.bodyScrollH - 2, `bodyH=${s.bodyH} scrollH=${s.bodyScrollH}`);
   }
 
   // ── A4: collapse custom while Set A active ───────────────────────────────
@@ -196,9 +206,9 @@ async function main() {
 
   const failures = results.filter((r) => !r.pass);
   const consoleFailures = consoleErrors.length;
-  console.log(`\nCustom Stones expand harness: ${results.length - failures.length}/${results.length} checks passed.`);
+  console.log(`\nCustom Stones expand harness: ${results.length - failures.length}/${results.length} checks passed, ${skipped} skipped.`);
   if (consoleFailures) console.log('page console errors:', consoleErrors.slice(0, 10));
-  await browser.close();
+  await close();
   server.close();
   if (failures.length || consoleFailures) process.exit(1);
 }

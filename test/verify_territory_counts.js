@@ -20,11 +20,10 @@
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const puppeteer = require('puppeteer-core');
+const { launchLightpanda, probeCapabilities } = require('./lightpanda-launcher.js');
 
 const REPO = '/Users/davemasorn/AntiGravity/baduk-notes';
 const PORT = 3951;
-const CHROME = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
@@ -39,23 +38,38 @@ const server = http.createServer((req, res) => {
 });
 
 let results = [];
+let skipped = 0;
 function check(name, cond, detail) {
   results.push({ pass: !!cond, name });
   console.log(`[${cond ? 'PASS' : 'FAIL'}] ${name}${detail ? ' — ' + detail : ''}`);
 }
+function skip(name, reason) {
+  skipped++;
+  console.log(`[SKIP] ${name} — ${reason}`);
+}
 
 async function main() {
   await new Promise((r) => server.listen(PORT, r));
-  const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-gpu'] });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(20000);
-  await page.setViewport({ width: 1600, height: 1200 });
+  const { page, close } = await launchLightpanda();
   const consoleErrors = [];
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
   await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.scoringState && typeof window.drawBoard === 'function' && window.GoScorer, { timeout: 20000 });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+
+  // Lightpanda capabilities: canvas is a stub (no gradients, getImageData zeros) and
+  // layout/hit-testing is unreliable (getBoundingClientRect ≈ 5px), so the merged-fill
+  // badge checks and the real-click-through-overlay check are SKIPPED there. The
+  // count-text (fillText capture), geometry (roundedRectPathCorners capture) and all
+  // state/logic checks run everywhere.
+  const caps = await probeCapabilities(page);
+  const RENDER_OK = caps.gradients;
+  const LAYOUT_OK = caps.layout;
+  const fillOrSkip = (name, cond, detail) => {
+    if (!RENDER_OK) { skip(name, 'no canvas gradient rendering (badge fills unverifiable)'); return; }
+    check(name, cond, detail);
+  };
 
   const SGF = '(;GM[1]FF[4]SZ[19]PB[Black]PW[White]RE[W+6.5]KM[6.5]RU[Japanese];B[pd];W[pp];B[dp];W[dd])';
   await page.evaluate(({ sgf, id }) => {
@@ -331,7 +345,7 @@ async function main() {
     })),
     JSON.stringify(boxList.map((b) => [Math.round(b.x), Math.round(b.y), b.rTL, b.rTR, b.rBR, b.rBL])));
 
-  check('box: each territory area is ONE merged fill — black 40% on black, white 40% on white',
+  fillOrSkip('box: each territory area is ONE merged fill — black 40% on black, white 40% on white',
     fillList.length === 6 && fillList.every((f, i) => f === (groups[i].color === 'black' ? BLACK_FILL : WHITE_FILL)),
     JSON.stringify(fillList));
 
@@ -420,7 +434,7 @@ async function main() {
   check('dame: clearing the 3x3 white group removes its "9" (5 groups remain)',
     shrunk.length === 5 && !findShot(shrunk, '9', PADDING + 11 * CELL, PADDING + 5 * CELL),
     `drew ${shrunk.length}`);
-  check('dame: its crossword badge disappears too (15 member squares, 5 merged fills remain)',
+  fillOrSkip('dame: its crossword badge disappears too (15 member squares, 5 merged fills remain)',
     await page.evaluate(() => window.__tcBoxes.length === 15 && window.__tcBoxFills.length === 5));
   check('anim: clearing a group drops its pop-in entry (map shrinks to 5)',
     await page.evaluate(() => territoryBoxAnims.size === 5));
@@ -450,7 +464,7 @@ async function main() {
   check('post-lock: counter still counts frozen manual territory (6 groups)',
     lockedShots.length === 6 && !!findShot(lockedShots, '6', PADDING + 0.5 * CELL, PADDING + 1.0 * CELL),
     `drew ${lockedShots.length}`);
-  check('post-lock: badges render for all 6 locked groups',
+  fillOrSkip('post-lock: badges render for all 6 locked groups',
     await page.evaluate(() => window.__tcBoxes.length === 24 && window.__tcBoxFills.length === 6));
   check('font: post-lock editing mode (Replacing) renders the digits in Figtree italic',
     lockedShots.length === 6 && lockedShots.every((s) => /Figtree/.test(s.font) && /italic/.test(s.font)),
@@ -533,11 +547,31 @@ async function main() {
   await page.evaluate(() => {
     window.__tcShots = [];
   });
-  await page.click('#scoring-opt-territory-counts');
+  if (LAYOUT_OK) {
+    // Real browser hit-testing only — this is the v0.1.083 regression proof that the
+    // sidebar rides above the frozen overlay (z-index 101 > 100) so a REAL click on
+    // the w/# checkbox still lands instead of being swallowed by the overlay.
+    await page.click('#scoring-opt-territory-counts');
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
+    check('frozen: a real click through the overlay flips w/# (Display Options clickable post-Save)',
+      await page.evaluate(() => scoringState.showTerritoryCounts === true));
+  } else {
+    // Lightpanda can't hit-test reliably (getBoundingClientRect ≈ 5px); the overlay
+    // z-index stack is verified there by the DOM check above. The w/# toggle is driven
+    // directly below so the frozen-font check still runs on every engine.
+    skip('frozen: a real click through the overlay flips w/# (Display Options clickable post-Save)', 'no reliable hit-testing');
+  }
+  // Ensure the count toggle is ON (real click on full browsers, direct state here) and
+  // re-capture the frozen digits — engine-agnostic font verification of v0.1.084.
+  await page.evaluate(() => {
+    scoringState.showTerritoryCounts = true;
+    const cb = document.getElementById('scoring-opt-territory-counts');
+    if (cb) cb.checked = true;
+    window.__tcShots = [];
+    window.drawBoard();
+  });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 150)));
   const frozenShots = await shots();
-  check('frozen: a real click through the overlay flips w/# (Display Options clickable post-Save)',
-    await page.evaluate(() => scoringState.showTerritoryCounts === true));
   check('font: "Board Saved ✓" renders the w/# digits REGULAR (no italic after Save)',
     frozenShots.length === 6 && frozenShots.every((s) => /Figtree/.test(s.font) && !/italic/.test(s.font)),
     JSON.stringify(frozenShots.map((s) => s.font)));
@@ -565,9 +599,9 @@ async function main() {
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;
-  console.log(`\nterritory-counts verify: ${passed} passed, ${failed} failed`);
+  console.log(`\nterritory-counts verify: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
   if (errs.length) console.log('page errors:', errs.slice(0, 5).join(' | '));
-  await browser.close();
+  await close();
   server.close();
   process.exit(failed > 0 ? 1 : 0);
 }

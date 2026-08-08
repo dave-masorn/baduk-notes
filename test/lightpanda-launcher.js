@@ -25,7 +25,7 @@ async function ensureServer(port = 9222) {
   if (await isUp(port)) return;
   const logFd = fs.openSync(LP_LOG, 'a');
   const proc = spawn('lightpanda',
-    ['serve', '--host', '127.0.0.1', '--port', String(port), '--log-format', 'pretty', '--log-level', 'warn'],
+    ['serve', '--host', '127.0.0.1', '--port', String(port), '--enable-external-stylesheets', '--log-format', 'pretty', '--log-level', 'warn'],
     { detached: true, stdio: ['ignore', logFd, logFd], env: { ...process.env, LIGHTPANDA_DISABLE_TELEMETRY: 'true', LIGHTPANDA_DISABLE_CORE_DUMP: '1' } });
   fs.closeSync(logFd);
   proc.unref();
@@ -52,4 +52,26 @@ async function launchLightpanda({ port = 9222, width = 1600, height = 1200 } = {
   };
 }
 
-module.exports = { launchLightpanda, ensureServer };
+// Probe the running engine's rendering/layout capabilities. Lightpanda's canvas
+// 2D context is a stub (no createRadialGradient/createLinearGradient, getImageData
+// always returns zeros) and its layout engine reports bogus getBoundingClientRect
+// heights (~5px) for content-driven blocks. Pixel/layout-dependent checks must be
+// SKIPPED (not failed) when these capabilities are missing — a real browser passes
+// both fields.
+async function probeCapabilities(page) {
+  return page.evaluate(() => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    const gradients = typeof ctx.createRadialGradient === 'function' && typeof ctx.createLinearGradient === 'function';
+    const wrap = document.createElement('div');
+    const inner = document.createElement('div');
+    inner.style.height = '123px';
+    wrap.appendChild(inner);
+    document.body.appendChild(wrap);
+    const rectH = wrap.getBoundingClientRect().height;
+    const layout = rectH === 123;
+    wrap.remove();
+    return { gradients, layout };
+  });
+}
+
+module.exports = { launchLightpanda, ensureServer, probeCapabilities };

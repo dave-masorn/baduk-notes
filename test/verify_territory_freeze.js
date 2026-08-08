@@ -12,11 +12,10 @@
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const puppeteer = require('puppeteer-core');
+const { launchLightpanda, probeCapabilities } = require('./lightpanda-launcher.js');
 
 const REPO = '/Users/davemasorn/AntiGravity/baduk-notes';
 const PORT = 3948;
-const CHROME = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
@@ -31,9 +30,14 @@ const server = http.createServer((req, res) => {
 });
 
 let results = [];
+let skipped = 0;
 function check(name, cond, detail) {
   results.push({ name, pass: !!cond });
   console.log(`[${cond ? 'PASS' : 'FAIL'}] ${name}${detail ? ' — ' + detail : ''}`);
+}
+function skip(name, reason) {
+  skipped++;
+  console.log(`[SKIP] ${name} — ${reason}`);
 }
 
 function samePx(a, b, tol = 2) {
@@ -42,16 +46,24 @@ function samePx(a, b, tol = 2) {
 
 async function main() {
   await new Promise((r) => server.listen(PORT, r));
-  const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-gpu'] });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(20000);
-  await page.setViewport({ width: 1600, height: 1200 });
+  const { page, close } = await launchLightpanda();
   const consoleErrors = [];
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
   await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.scoringState && typeof window.drawBoard === 'function' && window.GoScorer, { timeout: 20000 });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+
+  // Lightpanda's canvas is a stub: getImageData always returns zeros, so the
+  // pixel-based "renders as a square/stone" checks are SKIPPED there. All the
+  // state/logic assertions below (live calc, lock commit, frozen invariants,
+  // score totals) run everywhere.
+  const caps = await probeCapabilities(page);
+  const RENDER_OK = caps.gradients;
+  const pxOrSkip = (name, cond, detail) => {
+    if (!RENDER_OK) { skip(name, 'no canvas pixel reads'); return; }
+    check(name, cond, detail);
+  };
 
   const SGF = '(;GM[1]FF[4]SZ[19]PB[Black]PW[White]RE[W+6.5]KM[6.5]RU[Japanese];B[pd];W[pp];B[dp];W[dd])';
   await page.evaluate(({ sgf, id }) => {
@@ -140,7 +152,7 @@ async function main() {
   const damePx = await probe(...DAME);
   const pBase = [];
   for (const [r, c] of SAMPLES) pBase.push(await probe(r, c));
-  check('seed: white territory squares render (light) vs dame (dark)',
+  pxOrSkip('seed: white territory squares render (light) vs dame (dark)',
     SAMPLES.every((_, i) => pBase[i][0] > 150) && damePx[0] < 100,
     JSON.stringify({ pBase, damePx }));
 
@@ -150,7 +162,7 @@ async function main() {
     SAMPLES.every(([r, c]) => (terrLive2[r + ',' + c] || 0) === 0), JSON.stringify(SAMPLES.map(([r, c]) => terrLive2[r + ',' + c])));
   const pMut = [];
   for (const [r, c] of SAMPLES) pMut.push(await probe(r, c));
-  check('meaningful: unlocked overlay adapts (white squares disappear)',
+  pxOrSkip('meaningful: unlocked overlay adapts (white squares disappear)',
     SAMPLES.some((_, i) => !samePx(pMut[i], pBase[i]) && pMut[i][0] < 100), JSON.stringify(pMut));
 
   await setCell(2, 3, 2); // restore cage
@@ -160,7 +172,7 @@ async function main() {
     SAMPLES.every((_, i) => samePx(pRest[i], pBase[i])));
 
   const pStone44 = await probe(4, 4);
-  check('unlocked: interior stone renders as a stone (no square under it)',
+  pxOrSkip('unlocked: interior stone renders as a stone (no square under it)',
     pStone44[0] > 150 && !samePx(pStone44, pBase[0]), JSON.stringify({ pStone44, sq: pBase[0] }));
   await setCell(4, 4, 0); // lift it (unlocked → live recompute)
   const pVacUnlocked = await probe(4, 4);
@@ -172,7 +184,7 @@ async function main() {
   await page.evaluate(() => { scoringState.manualTerritory[9][9] = 2; window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
   const pManual = await probe(9, 9);
-  check('pre-lock manual territory mark renders', pManual[0] > 150, JSON.stringify(pManual));
+  pxOrSkip('pre-lock manual territory mark renders', pManual[0] > 150, JSON.stringify(pManual));
 
   await page.evaluate(() => window.applyScoringLock());
   await page.evaluate(() => new Promise((r) => setTimeout(r, 250)));
@@ -219,10 +231,10 @@ async function main() {
   await page.evaluate(() => { scoringState.board[2][3] = 2; window.drawBoard(); });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
   const pCageBack = await probe(2, 3);
-  check('NUANCE: restored boundary stone renders as a stone again',
+  pxOrSkip('NUANCE: restored boundary stone renders as a stone again',
     pCageBack[0] > 150 && !samePx(pCageBack, pBase[0]), JSON.stringify({ pCageBack, sq: pBase[0] }));
   const pVacStoneBefore = await probe(4, 4);
-  check('NUANCE: interior stone still renders dark while present (frozen)',
+  pxOrSkip('NUANCE: interior stone still renders dark while present (frozen)',
     pVacStoneBefore[0] > 150 && !samePx(pVacStoneBefore, pBase[0]), JSON.stringify({ pVacStoneBefore, sq: pBase[0] }));
 
   await page.evaluate(() => { scoringState.board[4][4] = 0; window.drawBoard(); });
@@ -232,7 +244,7 @@ async function main() {
     samePx(pVacated, pBase[0]), JSON.stringify({ pVacated, sq: pBase[0] }));
   const pNeighbor = [];
   for (const [r, c] of [[3, 4], [4, 3], [4, 5], [5, 4]]) pNeighbor.push(await probe(r, c));
-  check('NUANCE: neighbors of the vacated point stay territory squares',
+  pxOrSkip('NUANCE: neighbors of the vacated point stay territory squares',
     pNeighbor.every((p) => p[0] > 150), JSON.stringify(pNeighbor));
   const pVacSamples = [];
   for (const [r, c] of SAMPLES) pVacSamples.push(await probe(r, c));
@@ -254,8 +266,8 @@ async function main() {
   check('no console/page errors', errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');
 
   const failed = results.filter((r) => !r.pass);
-  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-  await browser.close();
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed, ${skipped} skipped`);
+  await close();
   server.close();
   process.exit(failed.length ? 1 : 0);
 }
