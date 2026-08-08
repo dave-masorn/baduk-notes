@@ -73,6 +73,9 @@ async function main() {
     const w2 = window.getStoneVariant(3, 3, 'W');
     const allW = [];
     for (let r = 0; r < 19; r++) for (let c = 0; c < 19; c++) allW.push(window.getStoneVariant(r, c, 'W'));
+    const allB = [];
+    for (let r = 0; r < 19; r++) for (let c = 0; c < 19; c++) allB.push(window.getStoneVariant(r, c, 'B'));
+    const darkLeaning = allB.filter((v) => v.valueShift < 0).length;
     const snows = allW.filter((v) => v.ringCount >= 30).length;
     const blossoms = allW.filter((v) => v.ringCount <= 17).length;
     const bucketsConsistent = allW.every((v) =>
@@ -85,13 +88,15 @@ async function main() {
       diffPlayerDiffers: JSON.stringify(a1) !== JSON.stringify(w1),
       caps: a1.specularStrength >= 0 && a1.specularStrength <= 0.5,
       tintInRange: a1.tintAmount >= 0 && a1.tintAmount <= 1 && a1.tintAmount === a2.tintAmount,
-      valueShiftInRange: a1.valueShift >= -0.6 && a1.valueShift <= 0.6 && a1.valueShift === a2.valueShift,
+      valueShiftInRange: a1.valueShift >= -1 && a1.valueShift <= 1 && a1.valueShift === a2.valueShift,
+      valueShiftSkewedDark: darkLeaning > allB.length - darkLeaning && darkLeaning > 0 && allB.length - darkLeaning > 0,
       cloudSeedStable: Number.isInteger(a1.cloudSeed) && a1.cloudSeed >= 0 && a1.cloudSeed === a2.cloudSeed,
       angleInRange: w1.originAngle >= 0 && w1.originAngle < Math.PI * 2,
       angleDeterministic: w1.originAngle === w2.originAngle,
       whiteDeterministic: JSON.stringify(w1) === JSON.stringify(w2),
       snows,
       blossoms,
+      darkLeaning,
       snowAndBlossomBothPresent: snows > 0 && blossoms > 0,
       bucketsConsistent
     };
@@ -101,7 +106,8 @@ async function main() {
   check('variant differs across players', variantCheck.diffPlayerDiffers);
   check('specular capped at 0–0.5 (slate)', variantCheck.caps);
   check('slate tintAmount (kuro↔ao) in 0–1 + deterministic', variantCheck.tintInRange);
-  check('slate valueShift in -0.6–0.6 + deterministic', variantCheck.valueShiftInRange);
+  check('slate valueShift in -1–1 + deterministic', variantCheck.valueShiftInRange);
+  check('slate valueShift dark-skewed majority (80/20) + both signs present', variantCheck.valueShiftSkewedDark, `${variantCheck.darkLeaning} dark / ${361 - variantCheck.darkLeaning} light`);
   check('slate cloudSeed integer + deterministic', variantCheck.cloudSeedStable);
   check('hamaguri originAngle in full-circle range 0–2π', variantCheck.angleInRange);
   check('hamaguri originAngle deterministic per position', variantCheck.angleDeterministic);
