@@ -1848,6 +1848,15 @@ function setupEventListeners() {
             if (rec && badge) {
                 badge.textContent = rec.recNo ? `Rec_${rec.recNo}` : '';
             }
+            // Update change-rec button
+            const changeRecBtn = document.getElementById('btn-change-rec-game');
+            const changeRecBadge = document.getElementById('btn-change-rec-badge');
+            if (changeRecBtn) {
+                changeRecBtn.style.display = 'flex';
+                if (changeRecBadge && rec) {
+                    changeRecBadge.textContent = rec.recNo ? `REC_${String(rec.recNo).padStart(3, '0')}` : '';
+                }
+            }
             const subtitle = document.getElementById('btn-save-rec-subtitle');
             if (subtitle) {
                 const moveNum = (state.currentMoveIndex !== undefined && state.currentMoveIndex >= 0) ? state.currentMoveIndex + 1 : 0;
@@ -1856,6 +1865,8 @@ function setupEventListeners() {
         } else {
             btn.classList.remove('visible');
             btn.classList.remove('dirty');
+            const changeRecBtn = document.getElementById('btn-change-rec-game');
+            if (changeRecBtn) changeRecBtn.style.display = 'none';
         }
     }
 
@@ -1868,6 +1879,20 @@ function setupEventListeners() {
             state.popupShownForCurrentChange = false;
             updateSaveRecGameButton();
             showWorkingStudyToast('Rec Game Saved');
+        });
+    }
+
+    // Change Rec Game button — opens the kifu modal
+    const btnChangeRecGame = document.getElementById('btn-change-rec-game');
+    if (btnChangeRecGame) {
+        btnChangeRecGame.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (elements.kifuModalOverlay) {
+                elements.kifuModalOverlay.style.display = 'flex';
+                elements.kifuModalOverlay.classList.remove('hidden');
+                renderResumeStudyTable(elements.kifuSearchInput ? elements.kifuSearchInput.value : '');
+            }
         });
     }
 

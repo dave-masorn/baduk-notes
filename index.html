@@ -15,6 +15,7 @@
     <link rel="preload" href="f0nts/anthropic_sans_text_MediumItalic.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="f0nts/PretendardEN-Regular.otf" as="font" type="font/otf" crossorigin>
     <link rel="preload" href="f0nts/GoogleSansCode_Proportional-Regular.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="f0nts/GoogleSansCode_Proportional-Medium.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="f0nts/GoogleSansCode_Proportional-Italic.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="stylesheet" href="annotation.css?v=4.3">
     <style>
@@ -823,8 +824,16 @@
                                         <div class="save-rec-title-row">
                                             <span class="save-rec-title">Save / Update Rec Game</span>
                                             <span id="btn-save-rec-badge" class="save-rec-badge"></span>
+                                            <div id="btn-change-rec-game" class="change-rec-btn" role="button" tabindex="0" title="Switch Rec Game">
+                                                <span id="btn-change-rec-badge" class="change-rec-badge"></span>
+                                                <svg class="change-rec-icon" viewBox="0 0 1496 700" width="24" height="11">
+                                                    <g transform="translate(0.000000,700.000000) scale(0.100000,-0.100000)" stroke="none">
+                                                        <path d="M12317 6896 c-60 -22 -114 -64 -151 -120 -61 -92 -67 -128 -73 -458 l-6 -298 -2691 0 c-2915 0 -2817 1 -3085 -54 -519 -107 -989 -354 -1349 -709 -264 -259 -482 -579 -612 -895 -81 -198 -152 -475 -137 -535 10 -39 54 -85 95 -99 30 -10 812 -13 3914 -16 l3877 -2 -2 -283 -2 -282 27 -80 c36 -106 75 -157 146 -192 47 -23 70 -28 127 -27 88 0 139 23 248 107 139 108 207 160 357 273 241 182 1772 1382 1813 1421 67 65 82 104 82 218 0 89 -3 105 -27 150 -14 28 -41 64 -60 81 -18 17 -467 370 -998 784 -531 415 -1008 788 -1060 830 -233 188 -321 226 -433 186z"/>
+                                                        <path d="M2572 4219 c-24 -4 -63 -18 -87 -30 -23 -12 -204 -147 -402 -301 -391 -306 -513 -400 -607 -468 -152 -110 -1197 -931 -1252 -983 -162 -153 -168 -306 -17 -455 32 -32 355 -290 718 -573 561 -438 1015 -792 1427 -1116 51 -40 120 -86 155 -104 56 -28 69 -31 126 -27 74 6 127 31 186 88 95 93 116 208 104 582 l-6 208 69 1 c38 1 1284 5 2769 9 2463 6 2709 8 2798 23 364 63 633 153 927 313 658 358 1175 1036 1310 1721 l23 112 -24 47 c-17 34 -36 54 -64 68 l-40 21 -3884 3 -3884 2 7 198 c10 252 -5 424 -40 494 -64 126 -187 192 -312 167z"/>
+                                                    </g>
+                                                </svg>
+                                            </div>
                                         </div>
-                                        <p id="btn-save-rec-subtitle" class="save-rec-subtitle">Save current progress & settings to active study session</p>
                                     </div>
                                 </button>
                                 <button id="btn-enter-study-mode" class="primary-btn flex-btn" style="width: 100%; justify-content: center; background-color: var(--success); border-color: var(--success); color: white; padding: 8px; font-weight: 600; margin-top: 4px;">

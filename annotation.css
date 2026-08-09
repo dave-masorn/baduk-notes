@@ -85,6 +85,17 @@
 }
 
 @font-face {
+    font-family: 'GoogleSansCodePropMedium';
+    src: url('f0nts/GoogleSansCode_Proportional-Medium.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    ascent-override: 88%;
+    descent-override: 12%;
+    line-gap-override: 0%;
+    font-display: swap;
+}
+
+@font-face {
     font-family: 'Google Sans Code';
     src: url('f0nts/GoogleSansCode_Proportional-Regular.ttf') format('truetype');
     font-weight: normal;
@@ -3516,6 +3527,7 @@ input:checked + .slider:before {
     white-space: nowrap;
 }
 .save-rec-badge {
+    display: none;
     font-size: 10px;
     font-weight: 600;
     color: #478178;
@@ -3526,6 +3538,53 @@ input:checked + .slider:before {
     white-space: nowrap;
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     letter-spacing: 0.02em;
+}
+/* ===== Change Rec Game Button ===== */
+.change-rec-btn {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 10px;
+    background: #F0F0EE;
+    border: 1px solid #DDDDD9;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+    flex-shrink: 0;
+}
+.change-rec-btn:hover {
+    background: #ffffff;
+}
+.change-rec-btn:active {
+    background: #ffffff;
+}
+.change-rec-badge {
+    font-size: 10px;
+    font-weight: 500;
+    color: #478178;
+    white-space: nowrap;
+    font-family: 'GoogleSansCodePropMedium', 'GoogleSansCodeProp', monospace;
+    letter-spacing: 0.03em;
+    line-height: 1.1;
+}
+.change-rec-icon {
+    width: 24px;
+    height: 11px;
+    display: block;
+    fill: #2BA9A6;
+}
+/* Dirty state for change-rec button */
+.save-rec-btn.dirty .change-rec-btn {
+    background: rgba(159, 38, 39, 0.06);
+    border-color: rgba(159, 38, 39, 0.25);
+}
+.save-rec-btn.dirty .change-rec-badge {
+    color: #9F2627;
+}
+.save-rec-btn.dirty .change-rec-icon {
+    fill: #9F2627;
 }
 .save-rec-subtitle {
     font-size: 11px;
