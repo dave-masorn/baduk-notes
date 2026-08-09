@@ -5308,37 +5308,36 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         ctx.lineWidth = gridLineWidth;
         ctx.strokeStyle = gridLineColor;
         
-        // Draw horizontal & vertical grid lines
-        for (let i = 0; i < 19; i++) {
+        // Draw horizontal & vertical grid lines — interior lines only (i = 1..17), drawn
+        // exactly as the original loop's interior branches. The outer boundary (BDL) is
+        // stroked below as a single rect, the same way the MSM scoring board strokes its
+        // wood outline (strokeRect at :5197-5200), so the 4 corners join as clean miter
+        // corners instead of two independent line ends meeting.
+        for (let i = 1; i < 18; i++) {
             const offset = PADDING + i * CELL_SIZE;
-            const isBoundary = (i === 0 || i === 18);
             
             // Vertical line
             ctx.beginPath();
-            if (style && style.grid && isBoundary) {
-                ctx.lineWidth = parseFloat(style.grid.boundarySize) || 1.5;
-                ctx.strokeStyle = style.grid.boundaryColor || '#1c1917';
-            } else {
-                ctx.lineWidth = gridLineWidth;
-                ctx.strokeStyle = gridLineColor;
-            }
             ctx.moveTo(offset, PADDING);
             ctx.lineTo(offset, CANVAS_SIZE - PADDING);
             ctx.stroke();
 
             // Horizontal line
             ctx.beginPath();
-            if (style && style.grid && isBoundary) {
-                ctx.lineWidth = parseFloat(style.grid.boundarySize) || 1.5;
-                ctx.strokeStyle = style.grid.boundaryColor || '#1c1917';
-            } else {
-                ctx.lineWidth = gridLineWidth;
-                ctx.strokeStyle = gridLineColor;
-            }
             ctx.moveTo(PADDING, offset);
             ctx.lineTo(CANVAS_SIZE - PADDING, offset);
             ctx.stroke();
         }
+
+        // Outer boundary line (BDL) — single strokeRect, miter-joined true corners,
+        // matching the MSM scoring board's wood-outline strokeRect.
+        ctx.save();
+        ctx.lineWidth = (style && style.grid) ? (parseFloat(style.grid.boundarySize) || 1.5) : 1.5;
+        ctx.strokeStyle = (style && style.grid) ? (style.grid.boundaryColor || '#1c1917') : '#1c1917';
+        ctx.lineJoin = 'miter';
+        ctx.lineCap = 'butt';
+        ctx.strokeRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
+        ctx.restore();
 
         // 4. Draw Hoshi star points
         for (let r = 0; r < 19; r++) {
@@ -6710,13 +6709,80 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
 
         targetCtx.beginPath();
         targetCtx.arc(cx, cy, currentBoardMaskRadius, 0, 2 * Math.PI);
-        
-        if (boardImage) {
+
+        // Note: `isScoringCanvas` is re-declared later inside this cell block (dead-cross
+        // overlay), so a locally-scoped name is used here to avoid a TDZ reference.
+        const isScoringBoardCtx = !!(targetCtx.canvas && targetCtx.canvas.id === 'go-board-canvas-scoring');
+
+        if (isScoringBoardCtx) {
+            // MSM keeps the legacy single-fill board mask (wood texture or bg over the whole circle).
+            if (boardImage) {
+                targetCtx.clip();
+                const borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
+                const marginSize = (cellSize / 2) * borderScale;
+                let woodX, woodY, woodW, woodH;
+                
+                if (isExport && fullBoardRect) {
+                    woodX = fullBoardRect.x;
+                    woodY = fullBoardRect.y;
+                    woodW = fullBoardRect.w;
+                    woodH = fullBoardRect.h;
+                } else {
+                    woodX = PADDING - marginSize;
+                    woodY = PADDING - marginSize;
+                    woodW = 18 * cellSize + 2 * marginSize;
+                    woodH = 18 * cellSize + 2 * marginSize;
+                }
+                
+                let imgZoom = 1.0;
+                let imgOffsetX = 0;
+                let imgOffsetY = 0;
+                if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
+                if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
+                if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+
+                if (style.board.imgRepeat) {
+                    try {
+                        targetCtx.translate(woodX, woodY);
+                        const pattern = targetCtx.createPattern(boardImage, 'repeat');
+                        if (pattern.setTransform) {
+                            const matrix = new DOMMatrix().translate(imgOffsetX, imgOffsetY).scale(imgZoom, imgZoom);
+                            pattern.setTransform(matrix);
+                        }
+                        targetCtx.fillStyle = pattern;
+                        targetCtx.translate(-woodX, -woodY);
+                        targetCtx.fill();
+                    } catch (e) {
+                        targetCtx.fillStyle = bgColor;
+                        targetCtx.fill();
+                    }
+                } else {
+                    const scaledW = woodW * imgZoom;
+                    const scaledH = woodH * imgZoom;
+                    const dx = woodX + (woodW - scaledW) / 2 + imgOffsetX;
+                    const dy = woodY + (woodH - scaledH) / 2 + imgOffsetY;
+
+                    const srcX = ((cx - currentBoardMaskRadius) - dx) / scaledW * boardImage.naturalWidth;
+                    const srcY = ((cy - currentBoardMaskRadius) - dy) / scaledH * boardImage.naturalHeight;
+                    const srcW = (currentBoardMaskRadius * 2) / scaledW * boardImage.naturalWidth;
+                    const srcH = (currentBoardMaskRadius * 2) / scaledH * boardImage.naturalHeight;
+                    
+                    targetCtx.drawImage(boardImage, srcX, srcY, srcW, srcH, cx - currentBoardMaskRadius, cy - currentBoardMaskRadius, currentBoardMaskRadius * 2, currentBoardMaskRadius * 2);
+                }
+            } else {
+                targetCtx.fillStyle = bgColor;
+                targetCtx.fill();
+            }
+        } else {
+            // Composite board mask (LAYER 3): mirror the real draw order so an edge stone
+            // (A/T/1/19 lines) shows the border margin colour where its mask overhangs the
+            // board frame and the board surface only over the playing area. The mask region
+            // beyond the wood rect stays transparent so the pre-rendered canvas bg shows.
             targetCtx.clip();
             const borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
             const marginSize = (cellSize / 2) * borderScale;
             let woodX, woodY, woodW, woodH;
-            
+
             if (isExport && fullBoardRect) {
                 woodX = fullBoardRect.x;
                 woodY = fullBoardRect.y;
@@ -6728,45 +6794,102 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 woodW = 18 * cellSize + 2 * marginSize;
                 woodH = 18 * cellSize + 2 * marginSize;
             }
-            
-            let imgZoom = 1.0;
-            let imgOffsetX = 0;
-            let imgOffsetY = 0;
-            if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
-            if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
-            if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
 
-            if (style.board.imgRepeat) {
-                try {
-                    targetCtx.translate(woodX, woodY);
-                    const pattern = targetCtx.createPattern(boardImage, 'repeat');
-                    if (pattern.setTransform) {
-                        const matrix = new DOMMatrix().translate(imgOffsetX, imgOffsetY).scale(imgZoom, imgZoom);
-                        pattern.setTransform(matrix);
+            const borderOverrideOn = !style.border || style.border.override !== false;
+            const marginColor = borderOverrideOn ? (style.border ? style.border.color : '#dcb35c') : bgColor;
+
+            // Board surface area: the 19x19 grid when the border override is ON (the board image
+            // is clipped to the grid so it never spills onto the margin), the whole wood rect when OFF.
+            const boardAreaX = borderOverrideOn ? (isExport && fullBoardRect ? woodX + marginSize : PADDING) : woodX;
+            const boardAreaY = borderOverrideOn ? (isExport && fullBoardRect ? woodY + marginSize : PADDING) : woodY;
+            const boardAreaW = borderOverrideOn ? woodW - 2 * marginSize : woodW;
+            const boardAreaH = borderOverrideOn ? woodH - 2 * marginSize : woodH;
+
+            // Border margin layer: the board frame colour across the mask circle.
+            targetCtx.fillStyle = marginColor;
+            targetCtx.fillRect(woodX, woodY, woodW, woodH);
+
+            // Board surface layer: wood texture / solid colour clipped to the playing area.
+            targetCtx.save();
+            targetCtx.beginPath();
+            targetCtx.rect(boardAreaX, boardAreaY, boardAreaW, boardAreaH);
+            targetCtx.clip();
+
+            if (boardImage) {
+                let imgZoom = 1.0;
+                let imgOffsetX = 0;
+                let imgOffsetY = 0;
+                if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
+                if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
+                if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+
+                if (style.board.imgRepeat) {
+                    try {
+                        targetCtx.translate(woodX, woodY);
+                        const pattern = targetCtx.createPattern(boardImage, 'repeat');
+                        if (pattern.setTransform) {
+                            const matrix = new DOMMatrix().translate(imgOffsetX, imgOffsetY).scale(imgZoom, imgZoom);
+                            pattern.setTransform(matrix);
+                        }
+                        targetCtx.fillStyle = pattern;
+                        targetCtx.translate(-woodX, -woodY);
+                        targetCtx.fill();
+                    } catch (e) {
+                        targetCtx.fillStyle = bgColor;
+                        targetCtx.fill();
                     }
-                    targetCtx.fillStyle = pattern;
-                    targetCtx.translate(-woodX, -woodY);
-                    targetCtx.fill();
-                } catch (e) {
-                    targetCtx.fillStyle = bgColor;
-                    targetCtx.fill();
+                } else {
+                    const scaledW = woodW * imgZoom;
+                    const scaledH = woodH * imgZoom;
+                    const dx = woodX + (woodW - scaledW) / 2 + imgOffsetX;
+                    const dy = woodY + (woodH - scaledH) / 2 + imgOffsetY;
+
+                    const srcX = ((cx - currentBoardMaskRadius) - dx) / scaledW * boardImage.naturalWidth;
+                    const srcY = ((cy - currentBoardMaskRadius) - dy) / scaledH * boardImage.naturalHeight;
+                    const srcW = (currentBoardMaskRadius * 2) / scaledW * boardImage.naturalWidth;
+                    const srcH = (currentBoardMaskRadius * 2) / scaledH * boardImage.naturalHeight;
+
+                    targetCtx.drawImage(boardImage, srcX, srcY, srcW, srcH, cx - currentBoardMaskRadius, cy - currentBoardMaskRadius, currentBoardMaskRadius * 2, currentBoardMaskRadius * 2);
                 }
             } else {
-                const scaledW = woodW * imgZoom;
-                const scaledH = woodH * imgZoom;
-                const dx = woodX + (woodW - scaledW) / 2 + imgOffsetX;
-                const dy = woodY + (woodH - scaledH) / 2 + imgOffsetY;
-
-                const srcX = ((cx - currentBoardMaskRadius) - dx) / scaledW * boardImage.naturalWidth;
-                const srcY = ((cy - currentBoardMaskRadius) - dy) / scaledH * boardImage.naturalHeight;
-                const srcW = (currentBoardMaskRadius * 2) / scaledW * boardImage.naturalWidth;
-                const srcH = (currentBoardMaskRadius * 2) / scaledH * boardImage.naturalHeight;
-                
-                targetCtx.drawImage(boardImage, srcX, srcY, srcW, srcH, cx - currentBoardMaskRadius, cy - currentBoardMaskRadius, currentBoardMaskRadius * 2, currentBoardMaskRadius * 2);
+                targetCtx.fillStyle = bgColor;
+                targetCtx.fillRect(woodX, woodY, woodW, woodH);
             }
-        } else {
-            targetCtx.fillStyle = bgColor;
-            targetCtx.fill();
+            targetCtx.restore();
+
+            // Boundary-line (BDL) layer: reproduce the outer grid lines (Grids & Hoshi →
+            // grid.boundaryColor / grid.boundarySize) where they cross the mask, so the BM
+            // is recognized as Board's Border / BG exactly like the board behind it and does
+            // not erase the boundary line under an edge stone's mask. Still clipped to the
+            // mask circle, so interior stones are unaffected (their BDL falls outside it).
+            if (style && style.grid) {
+                const bdlColor = style.grid.boundaryColor;
+                const bdlSize = parseFloat(style.grid.boundarySize);
+                if (bdlColor && bdlSize > 0) {
+                    const gridX = isExport && fullBoardRect ? woodX + marginSize : PADDING;
+                    const gridY = isExport && fullBoardRect ? woodY + marginSize : PADDING;
+                    const gridW = 18 * cellSize;
+                    const gridH = 18 * cellSize;
+                    // Match the real renderer: initial/study draw the boundary at the raw
+                    // boundarySize px; export scales it via baseLine = max(1.2, S*0.035).
+                    const bdlW = isExport ? Math.max(1.2, cellSize * 0.035) * bdlSize : bdlSize;
+                    targetCtx.save();
+                    targetCtx.strokeStyle = bdlColor;
+                    targetCtx.lineWidth = bdlW;
+                    targetCtx.lineJoin = 'miter';
+                    targetCtx.lineCap = 'butt';
+                    // Single closed path → miter-joined true corners (a rect of separate
+                    // line subpaths would overlap oddly at the corners like the old board).
+                    targetCtx.beginPath();
+                    targetCtx.moveTo(gridX, gridY);
+                    targetCtx.lineTo(gridX, gridY + gridH);
+                    targetCtx.lineTo(gridX + gridW, gridY + gridH);
+                    targetCtx.lineTo(gridX + gridW, gridY);
+                    targetCtx.closePath();
+                    targetCtx.stroke();
+                    targetCtx.restore();
+                }
+            }
         }
 
         // Apply quarter highlight overlay on top of the BM wood texture if this cell is inside the active quarter
@@ -8177,6 +8300,26 @@ async function generateDiagramDataURL() {
                         exportCtx.strokeStyle = gridColor;
                     }
                     exportCtx.beginPath(); exportCtx.moveTo(gridLeft, gridTop + j * S); exportCtx.lineTo(gridRight, gridTop + j * S); exportCtx.stroke();
+                }
+
+                // BDL corner repair: two boundary edge strokes meeting at a corner are both
+                // butt-capped, leaving a (boundaryLineWidth/2)² notch in the outer corner.
+                // Fill it only where BOTH edges are boundary edges so the joint merges like a
+                // strokeRect (the MSM board's approach). The grid lines above are untouched.
+                if (boundaryLineWidth > 0) {
+                    const half = boundaryLineWidth / 2;
+                    const bdlCorners = [
+                        { on: boardRowStart === 0 && boardColStart === 0, x: gridLeft - half, y: gridTop - half },
+                        { on: boardRowStart === 0 && boardColEnd === 18, x: gridRight, y: gridTop - half },
+                        { on: boardRowEnd === 18 && boardColEnd === 18, x: gridRight, y: gridBottom },
+                        { on: boardRowEnd === 18 && boardColStart === 0, x: gridLeft - half, y: gridBottom }
+                    ];
+                    exportCtx.save();
+                    exportCtx.fillStyle = boundaryColor;
+                    for (const c of bdlCorners) {
+                        if (c.on) exportCtx.fillRect(c.x, c.y, half, half);
+                    }
+                    exportCtx.restore();
                 }
 
                 // Thick borders

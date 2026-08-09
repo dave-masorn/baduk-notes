@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.1.086
+version: 0.1.088
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -78,6 +78,10 @@ How the application files interact — UI shell, script load order, scoring pipe
                 localhost:8577/              + deadstones_bg.wasm
                 tech-log-dist/docs/
 ```
+
+### v0.1.088 — "STONES" DOCS SECTION + COMPOSITE BOARD MASK FOR EDGE STONES: the docs page `system-design/stone-sets` is renamed to `system-design/stones` — a **Stones** section (with "Stone Sets" as a sub-section), served at `localhost:8577/tech-log-dist/docs/system-design/stones/` — and gains two new sub-sections. **The Stone's Elements** documents the 11-field per-element table (`bmSize`, `bgSize`, `bg`, `br`, `brSize`, `brRadius`, `brBlur`, `fg`, `fgSize`, `useColor`, `imgSrc`) and **How The Elements Compose** the 4 render layers (BM → BRr → surface → labels). **Edge Stones and the Board Mask** documents the new composite Board Mask: on every board except the Manual Scoring Modal, `drawCellContent`'s BM is no longer a single board-surface fill but a composite that mirrors the real draw order — the frame margin colour (`border.color`, or the board colour when the border override is OFF) fills the whole mask circle, the board surface (wood texture / solid bg) is painted on top clipped to the playing area, and finally the outer grid lines (the **BDL**: `grid.boundaryColor` / `grid.boundarySize`) are re-stroked where they cross the mask so an edge stone on the A/T/1/19 lines reads as Board's Border/BG exactly like the board behind it instead of erasing the boundary line under the mask. The mask region beyond the wood rect stays transparent so the pre-rendered canvas background shows through; the MSM scoring board keeps the legacy single-fill mask. **The BDL now joins as a perfect corner, and the interior grid lines are untouched.** The outer boundary line (the BDL) is stroked as a single `strokeRect` (`annotation_v4.js:5332-5343`) — the same way the MSM scoring board strokes its wood outline (`strokeRect` at :5197-5200) — so its 4 corners are clean miter joins instead of two independently butt-capped line ends meeting (a sub-pixel notch that shows up at thick boundary sizes); the export renderer gets a matching BDL corner fill at each shared boundary corner (`annotation_v4.js:8305-8326`). The interior grid lines (`i = 1..17`) and the export's solid/dashed grid loops draw exactly as before.
+
+**Verified.** `test/verify_bm_edge_mask.js` (new, 17 checks) drives `drawCellContent` against a recording mock ctx: the BM composite clips to the mask, the margin layer fills the full wood rect, the board surface clips to the playing area (19×19 grid on initial, wood-rect inset by margin on export, whole wood rect when the border override is OFF), the BDL is stroked after the board-surface layer at the raw `boundarySize` on initial/study and at the export-scaled width, a center stone's BDL is clipped invisible, the MSM board emits no composite layers and keeps its legacy single fill, and override-OFF uses the board colour as the margin. Corner joint pixel-verified in Brave: with an 8px boundary the whole corner region (including the previously-notched outer square) renders `#111111` boundary — a fully merged corner — while a default 1.5px boundary renders pixel-identical to before. All prior suites pass — two-step 108, custom-stones 27+3 skip, territory-counts 36+4 skip, territory-freeze 21+7 skip, replace-territory 12+1 skip, replace-click 10, replace-fix 7, rearrange 6, Set C 13+12 skip. `node --check` clean. annotation_v4.js is now 18,079 lines (BDL strokeRect 5332-5343, export BDL corner fill 8305-8326, composite BM block 6716-6895), docs nav maps `'Stones': 'stones'` in `sync-docs.js`, the old `stone-set-a-debug-log.mdx` cross-link now points at `/tech-log-dist/docs/system-design/stones`, index.html cache-busters to 0.1.088.
 
 ### v0.1.085 — STONE SET C RENDERED AS TRUE MATERIALS (v4), ALL 9 SUITES GREEN ON LIGHTPANDA: Set C's renderer (`annotation_v4.js:5982-6392`) is replaced with the v4 spec, calibrated against real photos of Kuroki Goishiten hamaguri and nachiguro slate. The two material fixes that matter most: (1) **hamaguri grain is nearly-parallel diagonal bands with a gentle bow from a FAR origin** — real photos show growth rings as parallel-ish bands, NOT tight concentric loops, because the shell hinge sits far outside the stone's patch; `_getHamaguriTexture(radius, ringCount=14, jitter=1, originAngle=-2.3, originDistMult=6)` places the origin at `radius·6` and draws ~40-point jittered polylines over `[originDist ± radius·1.15]` as 2:1 light `rgba(255,252,240,0.05-0.11)` vs shadow `rgba(150,124,80,0.06-0.14)` bands, seed 2024; and (2) **slate is matte, mottled, near-uniform black with NO specular overlay and NO rim darkening** — v3's bright glassy core + drop to near-black `#020303` rim were both wrong; v4's base gradient keeps the whole disk near one dark value (`core #333739→#37403f` by tint, `brightCore` lifted toward `#4a5153` by only `specStrength·0.6`, `rimColor` lerped toward `#000000` just 0.4, stops 0.00/0.45/1.00), the black specular overlay is deleted, and `_getSlateTexture(radius, cloudSeed=0)` renders 7 broad soft cloud blobs plus fine speckle capped at `min(700, radius·9)` (fixing v3's `radius²·0.35` compounding crush on large stones), seed `9911 + cloudSeed`.
 
@@ -1090,9 +1094,44 @@ const dpr = window.devicePixelRatio || 1;
 });
 ```
 
-## Stone Sets
+## Stones
 
-The floating panel's **Stones (Black & White)** accordion contains a **Default Stone Set** selector with three options: Set A, Set B, and Set C. When a stone set is active, the Custom Stones section collapses and locks.
+A stone on the board is never drawn from a single image. Inside `drawCellContent()`, each stone is a **stack of independently-styled elements** — a board mask underneath, a border ring, the stone surface itself, and finally any labels — and every element is a user-editable property on the per-colour `blackStone` / `whiteStone` style objects. A "stone" as it appears on the board is simply the sum of those elements, plus whichever *Stone Set* preset is active (if any).
+
+### The Stone's Elements
+
+Each of the three board styles (`initialBoardStyle`, `studyBoardStyle`, `exportBoardStyle`) carries a `blackStone` and a `whiteStone` object with the same element fields. Defaults:
+
+| Field | Black default | White default | Element it drives | What it does |
+|-------|---------------|---------------|-------------------|--------------|
+| `bmSize` | 15 | 15 | Board Mask (BM) | Radius of the board-surface circle painted *under* the stone, at the export cell scale (`bmSize × (cellSize / 29.3333)`). When missing, falls back to the stone radius + 1px |
+| `bgSize` | 0.45 | 0.45 | Stone Surface | Radius of the stone disk: a fraction of the cell when ≤ 2.0 (`bgSize × cellSize`), an absolute px value when > 2.0 (`bgSize × (cellSize / 29.3333)`) |
+| `bg` | `#111827` | `#f3f4f6` | Stone Surface | Solid surface colour — the fallback fill when no stone set or custom image is active |
+| `br` | `#ffffff` | `#111827` | Border Ring (BRr) | Stroke colour of the thin ring drawn around the stone |
+| `brSize` | 0 | 1 | Border Ring (BRr) | Ring thickness, scaled as `(brSize / 10) × stoneRadius × 0.3`. 0 hides the ring entirely (the black default) |
+| `brRadius` | 0 | 0 | Border Ring (BRr) | Radial offset of the ring as a multiple of the stone radius — 0 hugs the stone edge, > 0 floats the ring outward, < 0 sinks it under the surface |
+| `brBlur` | 0 | 0 | Border Ring (BRr) | Gaussian blur (px) applied to the ring stroke |
+| `fg` | `#ffffff` | `#111827` | Labels & annotations | Foreground colour for move numbers/letters drawn on the stone and for annotation strokes (circles, triangles…) on a stone |
+| `fgSize` | 11 | 11 | Labels & annotations | Font size (px, at the export cell scale) for labels sitting on a stone |
+| `useColor` | true | true | Stone Surface | true → paint the solid `bg` circle; false → draw the custom `imgSrc` image |
+| `imgSrc` | '' | '' | Stone Surface | Custom stone image URL or data-URI, used when `useColor` is false |
+
+`stoneSet` lives on the style object itself (not inside `blackStone`/`whiteStone`); when non-null it overrides the surface element entirely (see *Stone Sets* below).
+
+### How The Elements Compose (bottom → top)
+
+`drawCellContent()` (`annotation_v4.js:6503+`) paints every stone as four stacked layers:
+
+1. **LAYER 3 — Board Mask (BM).** A circle of board surface painted at the `bmSize` radius, between the board and the stone, so the area under a stone reads as plain board instead of grid lines bleeding out to the stone edge. Because it is clipped to the board surface, a mask that overhangs the board frame behaves like the frame (see *Edge Stones and the Board Mask*).
+2. **LAYER 2 — Border Ring (BRr).** The `br` ring stroked at `stoneRadius + brRadius + brSize / 2` with `brSize` width and `brBlur` blur (`annotation_v4.js:7015-7029`). Always above the BM, always below the stone surface.
+3. **LAYER 1 — Stone Surface.** The visible stone disk (`annotation_v4.js:7031-7132`): a Set A/B/C gradient or material renderer when a set is active, else the custom `imgSrc` image, else a flat `bg` circle at the `bgSize` radius.
+4. **Labels & annotations.** Move numbers, letters and annotation strokes drawn on top, coloured `fg` and sized `fgSize` (`annotation_v4.js:7180-7290`). `fg` also supplies `markerColor`, so the same colour drives annotation strokes on stones.
+
+The surface is clipped to the cell so the stone sits flush with it, while the BM and BRr can bleed past the cell by design.
+
+### Edge Stones and the Board Mask
+
+When a stone sits on the A/T/1/19 edge lines, its BM circle overhangs the board frame margin (`marginSize = (cellSize / 2) × min(1, border.size / 100)`). On every board except the Manual Scoring Modal (`go-board-canvas-scoring`) the mask is a **composite** that mirrors the real draw order (`annotation_v4.js:6716-6895`): the frame margin colour (`border.color` when the border override is ON, else the board colour) fills the whole mask, then the board surface (wood texture or solid `bg`) is painted on top clipped to the playing area, and finally the outer grid lines — the **BDL**, the Grids & Hoshi element (`grid.boundaryColor` / `grid.boundarySize`) — are re-stroked where they cross the mask so the boundary line is recognized as Board's Border/BG instead of being erased — so the overhang reads as frame, not wood, exactly like the board behind it. The MSM scoring board keeps the legacy single-fill mask. Mask area beyond the wood rect stays transparent so the pre-rendered canvas background shows through.
 
 ### Stone Style State
 
@@ -1106,7 +1145,11 @@ Inside `drawCellContent()`, stone rendering follows this priority:
 2. **Custom stone image** — user-uploaded image
 3. **Solid color** — fallback from custom color picker
 
-### Set A — 3D Gradient (Default)
+### Stone Sets
+
+The floating panel's **Stones (Black & White)** accordion contains a **Default Stone Set** selector with three options: Set A, Set B, and Set C. When a stone set is active, the Custom Stones section collapses and locks.
+
+#### Set A — 3D Gradient (Default)
 
 Set A renders stones with a warm directional lighting gradient + drop shadow:
 
@@ -1117,7 +1160,7 @@ Set A renders stones with a warm directional lighting gradient + drop shadow:
 
 Light source is offset to top-left. Drop shadow: `rgba(0,0,0,0.5)` with proportional blur/offset.
 
-### Set B — Matcap 3D
+#### Set B — Matcap 3D
 
 Set B renders stones with a matcap-inspired 3D finish using a tighter highlight spot and cooler/warmer tones:
 
@@ -1126,7 +1169,7 @@ Set B renders stones with a matcap-inspired 3D finish using a tighter highlight 
 | Black (Slate) | `#6b7280` → `#1f2937` → `#030712` | None |
 | White (Ivory Pearl) | `#fffef5` → `#f0ead6` → `#bab5a0` | `#a09880` |
 
-**Rendering code** (`annotation_v4.js:5251-5326`):
+**Rendering code** (`annotation_v4.js:7039-7121`):
 
 ```javascript
 const useGradient = (style && style.stoneSet === 'A' && cell.player);
@@ -1179,7 +1222,7 @@ if (useGradient || useGradientB) {
 
 All three boards (initial, study, export) and scoring mode share the same `drawCellContent()` rendering, so Set B works across all of them automatically.
 
-### Set C — Hamaguri & Slate (Material Renderer, v4)
+#### Set C — Hamaguri & Slate (Material Renderer, v4)
 
 Set C renders each stone from its actual material with a pure Canvas 2D renderer (no image assets), calibrated against real photos of Kuroki Goishiten hamaguri (Snow/Blossom grade) and nachiguro slate:
 
@@ -1188,13 +1231,13 @@ Set C renders each stone from its actual material with a pure Canvas 2D renderer
 | Black | Slate (那智黒 nachiguro) | Matte, mottled, near-uniform black — no grain, no tight glint, no rim darkening. Stone-to-stone variation is POLISH/TONE: a subtle neutral-kuro ↔ faint blue-green "ao" cast (`tintAmount`), a gentle overall value drift (`valueShift`), a different cloud-mottle pattern per position (`cloudSeed`), and a soft broad diffuse highlight (specular hard-capped at 0–0.5) |
 | White | Hamaguri (蛤 clam-shell) | Ivory/cream base with a warm translucent amber band near the rim; growth rings render as nearly-parallel DIAGONAL bands with a gentle bow from a FAR origin (`originDistMult`) — like real photos show, NOT tight concentric loops. Snow grade = dense fine rings (`ringCount` 30–46), near-pure white, straighter bands; Blossom grade = wider coarse rings (8–17), warm cream, more visible bow |
 
-The renderer is self-contained and additive (`annotation_v4.js:5982-6392`): `_getHamaguriTexture()` / `_getSlateTexture()` build the textures once per (radius, variant) into an off-screen canvas cache (`_stoneTextureCache`), `drawGoStone()` paints the stone with its own drop shadow, material texture, warm rim band (white), and a hamaguri-only specular glint, and `getStoneVariant()` derives per-stone texture params deterministically from board position.
+The renderer is self-contained and additive (`annotation_v4.js:5992-6496`): `_getHamaguriTexture()` / `_getSlateTexture()` build the textures once per (radius, variant) into an off-screen canvas cache (`_stoneTextureCache`), `drawGoStone()` paints the stone with its own drop shadow, material texture, warm rim band (white), and a hamaguri-only specular glint, and `getStoneVariant()` derives per-stone texture params deterministically from board position.
 
 **v4 material fixes.** (1) Hamaguri grain: `_getHamaguriTexture(radius, ringCount=14, jitter=1, originAngle=-2.3, originDistMult=6)` places the ring origin at `radius·6` — far outside the stone — and draws ~40-point jittered polylines over `[originDist ± radius·1.15]` as 2:1 light `rgba(255,252,240,0.05-0.11)` vs shadow `rgba(150,124,80,0.06-0.14)` bands (seed 2024), so the stone shows near-parallel bands, not concentric circles. (2) Slate: no specular overlay and no rim darkening to near-black (v3's bright glassy core + `#020303` rim were both wrong) — the base gradient keeps the whole disk near one dark value (core `#333739→#37403f` by `tintAmount`, `brightCore` lifted toward `#4a5153` by only `specStrength·0.6`, `rimColor` lerped toward `#000000` just 0.4, stops 0.00/0.45/1.00) and `_getSlateTexture(radius, cloudSeed=0)` renders 7 broad soft cloud blobs plus fine speckle capped at `min(700, radius·9)` (fixing v3's `radius²·0.35` compounding crush on large stones), seed `9911 + cloudSeed`. (3) Color parsing: `_parseColor` accepts `#rrggbb` AND `rgb(r,g,b)` and `_lerpColor` routes through it — v3's hex-only parser silently collapsed chained lerp output to black.
 
 **Per-position, not per-placement.** Texture params are derived deterministically from `(row * 19 + col)` with a per-player seed offset (`(row·19+col)·137 + (B?911:313)`), so a stone's grain is stable across every redraw (hover, undo, resize, export preview — no flicker) while each position still looks distinct from its neighbors. Capturing and replaying a stone on the same point keeps the same pattern. Black rolls `tintAmount rand()` / `valueShift (rand()-0.5)·1.2` / `cloudSeed floor(rand()·10000)` / `specularStrength rand()·0.5` (HARD CAP 0.5). White rolls `snowProbability 0.2` (ADJUSTABLE — real incidence ~5-10%) into Snow (`ringCount 30-46`, `ringJitter 0.3-0.65`, `originDistMult 7-10`, `whiteness 0.75-1.0`) or Blossom (`8-17`, `0.7-1.5`, `3.5-6`, `0.1-0.65`).
 
-**Code** (`annotation_v4.js:6843-6850`) — a new leading branch in the stone-surface chain; Set A/B, image, and solid-color paths are untouched. The hook passes the live loop vars `r`/`c` (the v4 integration comment says `row`/`col`, but the actual call site uses `r`/`c`):
+**Code** (`annotation_v4.js:7041-7048`) — a leading branch in the stone-surface chain; Set A/B, image, and solid-color paths are untouched:
 
 ```javascript
 const useGradientC = (style && style.stoneSet === 'C' && cell.player);
@@ -1208,7 +1251,7 @@ if (useGradientC) {
 
 `drawGoStone()` sets its own shadow internally, so the Set C path is self-contained. Because the branch lives inside `drawCellContent()`, Set C works across all three boards (initial, study, export) and the scoring board automatically.
 
-### UI
+#### UI
 
 The stone set options are `<label class="stone-set-option" data-set="A|B|C">` pills in `index.html:2005-2016`. Click handler at `annotation_v4.js:10861-10879`:
 
@@ -1234,24 +1277,27 @@ document.querySelectorAll('.stone-set-option:not(.disabled)').forEach(opt => {
 
 When any set is active, `syncCustomStonesSection()` locks the Custom Stones section (collapsed, non-interactive). On panel open, `populateStyleInputs()` restores the radio state from `activeStyle.stoneSet`.
 
-### Files Changed
+#### Files Changed
 
 | File | Lines | Action |
 |------|-------|--------|
 | `index.html` | 2009 | Enabled Set B (removed `disabled` class, updated title) |
-| `annotation_v4.js` | 5251-5326 | Added `useGradientB` check and Set B rendering block |
-| `annotation_v4.js` | 5940-6251 | Added Set C material renderer (`_stoneTextureCache`, `_mulberry32`, `_getHamaguriTexture`, `_getSlateTexture`, `drawGoStone`, `getStoneVariant`) |
-| `annotation_v4.js` | 6687-6695 | Added `useGradientC` check and Set C rendering branch |
-| `annotation_v4.js` | 5940-6246 | v0.1.066: per-position `originAngle` randomization — `_getHamaguriTexture` gains `originAngle` param + cache-key angle suffix (5984-5985), `drawGoStone` reads `options.originAngle ?? -2.3` and threads it (6119, 6169), `getStoneVariant` rolls `originAngle: rand() * Math.PI * 2` (6242) |
+| `annotation_v4.js` | 7039-7121 | Added `useGradientB` check and Set B rendering block |
+| `annotation_v4.js` | 5992-6496 | Added Set C material renderer (`_stoneTextureCache`, `_mulberry32`, `_getHamaguriTexture`, `_getSlateTexture`, `drawGoStone`, `getStoneVariant`) |
+| `annotation_v4.js` | 7041-7048 | Added `useGradientC` check and Set C rendering branch |
+| `annotation_v4.js` | 5940-6246 | v0.1.066: per-position `originAngle` randomization — `_getHamaguriTexture` gains `originAngle` param + cache-key angle suffix, `drawGoStone` reads `options.originAngle ?? -2.3` and threads it, `getStoneVariant` rolls `originAngle: rand() * Math.PI * 2` |
 | `annotation_v4.js` | 6697-6705 | v0.1.066: `useGradientC` branch unchanged (renderer is self-contained; only the variant it receives differs) |
 | `test/verify_stone_set_c.js` | 16-167 | v0.1.066: harness extended 16 → 19 checks — `originAngle` range 0–2π, determinism per position, cross-position variety |
-| `annotation_v4.js` | 5939-6313 | v0.1.067: material-accurate upgrade — `_lerpColor` helper (5980), slate `tintAmount` kuro↔ao core blend + hamaguri `whiteness` Snow↔Blossom gradient stops in `drawGoStone`, `ringCount` derived from grade (`10 + Math.floor(whiteness * 28)`) + `tintAmount`/`whiteness` rolls in `getStoneVariant`, v3 header documenting the research |
+| `annotation_v4.js` | 5939-6313 | v0.1.067: material-accurate upgrade — `_lerpColor` helper, slate `tintAmount` kuro↔ao core blend + hamaguri `whiteness` Snow↔Blossom gradient stops in `drawGoStone`, `ringCount` derived from grade (`10 + Math.floor(whiteness * 28)`) + `tintAmount`/`whiteness` rolls in `getStoneVariant`, v3 header documenting the research |
 | `annotation_v4.js` | 6765-6771 | v0.1.067: `useGradientC` branch unchanged (renderer is self-contained; only the variant it receives differs) |
 | `test/verify_stone_set_c.js` | 16-173 | v0.1.067: harness extended 19 → 22 checks — `tintAmount` range/determinism, `whiteness` range/determinism, grade→ring-density link |
 | `annotation_v4.js` | 5982-6392 | v0.1.085: GO STONE RENDERER v4 replaces the v3 renderer — hamaguri grain as nearly-parallel diagonal bands from a far origin (`_getHamaguriTexture` 6040, `originDistMult` param, ~40-pt jittered polylines, seed 2024), slate as matte mottled near-uniform black with no specular overlay and no rim darkening (`drawGoStone` 6192, `_getSlateTexture` 6111 with speckle capped `min(700, radius·9)`, seed `9911 + cloudSeed`); `_parseColor` (6001) + `_lerpColor` (6011) accept hex AND rgb (fixes the v3 chained-lerp slate-black collapse); `getStoneVariant` (6353) rolls `valueShift`/`cloudSeed`/`specularStrength≤0.5` (black) and Snow/Blossom buckets (`snowProbability 0.2`); `drawGoStone` destructures `ringCount, ringJitter, originAngle, originDistMult, whiteness, cloudSeed, tintAmount, valueShift, specularStrength`; hamaguri gradient whites `#fffdf6`/`#f8f0da`, mid/edge lerped by `whiteness`, warm rim band 0.72→1.0, glint `0.75·spec`, rim stroke `rgba(150,120,70,0.4)` — v4 spec in the header comment at 5955-5980 |
 | `annotation_v4.js` | 6843-6850 | v0.1.085: `useGradientC` hook unchanged (passes live loop vars `r`/`c` — already v4-compatible, verified no code change needed) |
 | `test/verify_stone_set_c.js` | 1-215 | v0.1.085: harness re-calibrated to v4 — 24 checks (12 variant checks run everywhere + 12 render/cache checks SKIPPED on lightpanda, which has no canvas gradients); new v4 checks for `valueShift` range, integer `cloudSeed`, `originDistMult` range, Snow/Blossom bucket consistency, both grades present across 19×19 white stones |
 | `test/lightpanda-launcher.js` | 1-77 | v0.1.085: added `probeCapabilities(page)` (probes `caps.gradients` via a fresh canvas's `createRadialGradient` and `caps.layout` via a 123px div's `getBoundingClientRect().height`) and `--enable-external-stylesheets` on the `lightpanda serve` spawn |
+| `annotation_v4.js` | 6716-6895 | Composite Board Mask for edge stones — non-MSM boards mirror the border/board draw order so a mask overhanging the frame reads as frame (see *Edge Stones and the Board Mask*); MSM scoring board keeps the legacy single-fill mask |
+| `annotation_v4.js` | 5311-5343 | v0.1.088: BDL drawn as ONE `strokeRect` (miter corners), exactly like the MSM wood outline (:5197-5200) — interior grid lines (i = 1..17) draw exactly as before |
+| `annotation_v4.js` | 8305-8326 | v0.1.088: export BDL corner fill — fills the (boundaryLineWidth/2)² notch at each corner where two boundary edges meet; export grid loops untouched |
 
 ## UI Architecture
 

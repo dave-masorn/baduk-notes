@@ -16,7 +16,7 @@ const NAV_GROUPS = {
     title: 'System Design',
     items: {
       'Board Canvas System': 'board-canvas-system',
-      'Stone Sets': 'stone-sets',
+      'Stones': 'stones',
       'UI Architecture': 'ui-architecture',
       'Highlight Color System': 'highlight-color-system'
     }
