@@ -90,7 +90,7 @@ const state = {
             fg: '#111827',
             fgSize: 11,
             br: '#111827',
-            brSize: 1,
+            brSize: 0,
             brRadius: 0,
             brBlur: 0,
             bmSize: 15
@@ -145,7 +145,7 @@ const state = {
             fg: '#111827',
             fgSize: 11,
             br: '#111827',
-            brSize: 1,
+            brSize: 0,
             brRadius: 0,
             brBlur: 0,
             bmSize: 15
@@ -205,7 +205,7 @@ const state = {
             fg: '#111827',
             fgSize: 11,
             br: '#111827',
-            brSize: 1,
+            brSize: 0,
             brRadius: 0,
             brBlur: 0,
             bmSize: 15
@@ -13319,6 +13319,22 @@ function initFloatingToolbar() {
         console.error('Failed to parse board styles', e);
     }
 
+    // Migrate legacy white-stone border default: the old brSize:1 rim renders as a
+    // thin dark/grey ring around the stone edge (esp. visible on image-background
+    // boards). It is removed so the stone edge meets the board cleanly; brSize is
+    // still honoured whenever a user explicitly sets a larger value.
+    const migrateLegacyWhiteRim = (style) => {
+        if (style && style.whiteStone && style.whiteStone.brSize === 1 && style.whiteStone.br === '#111827') {
+            style.whiteStone.brSize = 0;
+        }
+        return style;
+    };
+    window.migrateLegacyWhiteRim = migrateLegacyWhiteRim;
+    state.initialBoardStyle = migrateLegacyWhiteRim(state.initialBoardStyle);
+    state.studyBoardStyle = migrateLegacyWhiteRim(state.studyBoardStyle);
+    state.exportBoardStyle = migrateLegacyWhiteRim(state.exportBoardStyle);
+    state.scoringBoardStyle = migrateLegacyWhiteRim(state.scoringBoardStyle);
+
     // Apply saved board sizes immediately on load
     if (state.initialBoardStyle && state.initialBoardStyle.board) {
         updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
@@ -13761,7 +13777,7 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         fg: '#111827',
         fgSize: 11,
         br: '#111827',
-        brSize: 1,
+        brSize: 0,
         brRadius: 0,
         brBlur: 0,
         bmSize: 15
