@@ -6890,6 +6890,38 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     targetCtx.restore();
                 }
             }
+
+            // Interior grid-line restoration: the BM circle erases the grid lines that
+            // cross the stone out to the mask edge, leaving a visible ring of board with
+            // no lines around every stone (the "hollow ring" seen on image-background
+            // boards). Re-stroke this cell's own interior row/column lines across the
+            // mask band so the grid reaches the stone edge again; boundary lines
+            // (r/c = 0 or 18) are already restored by the BDL layer above.
+            if (style && style.grid && r !== null && c !== null) {
+                const lineColor = style.grid.lineColor || (isInitialCanvas ? '#1C1917' : '#000000');
+                const lineMult = parseFloat(style.grid.lineSize);
+                if (lineColor && lineMult > 0) {
+                    const lineWidth = isExport ? Math.max(1.2, cellSize * 0.035) * lineMult : lineMult;
+                    targetCtx.save();
+                    targetCtx.beginPath();
+                    targetCtx.arc(cx, cy, currentBoardMaskRadius, 0, 2 * Math.PI);
+                    targetCtx.clip();
+                    targetCtx.strokeStyle = lineColor;
+                    targetCtx.lineWidth = lineWidth;
+                    targetCtx.lineCap = 'butt';
+                    targetCtx.beginPath();
+                    if (r >= 1 && r <= 17) {
+                        targetCtx.moveTo(cx - currentBoardMaskRadius, cy);
+                        targetCtx.lineTo(cx + currentBoardMaskRadius, cy);
+                    }
+                    if (c >= 1 && c <= 17) {
+                        targetCtx.moveTo(cx, cy - currentBoardMaskRadius);
+                        targetCtx.lineTo(cx, cy + currentBoardMaskRadius);
+                    }
+                    targetCtx.stroke();
+                    targetCtx.restore();
+                }
+            }
         }
 
         // Apply quarter highlight overlay on top of the BM wood texture if this cell is inside the active quarter
