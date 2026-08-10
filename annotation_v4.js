@@ -7081,11 +7081,14 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             targetCtx.restore();
         } else if (useGradient || useGradientB) {
             targetCtx.save();
-            // Stronger drop shadow matching MultiGo
-            targetCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            targetCtx.shadowBlur = Math.max(3, currentStoneRadius * 0.25);
-            targetCtx.shadowOffsetX = Math.max(2, currentStoneRadius * 0.15);
-            targetCtx.shadowOffsetY = Math.max(2, currentStoneRadius * 0.15);
+            // Drop shadow matching Set C (drawGoStone): a lighter 0.45-alpha blur.
+            // The old 0.5-alpha / 0.25-radius shadow read as a grey hollow ring
+            // around A/B stones on image-background boards (esp. on the initial
+            // board) — Set C keeps the same look without that halo.
+            targetCtx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+            targetCtx.shadowBlur = Math.max(3, currentStoneRadius * 0.28);
+            targetCtx.shadowOffsetX = Math.max(2, currentStoneRadius * 0.14);
+            targetCtx.shadowOffsetY = Math.max(2, currentStoneRadius * 0.18);
             
             if (useGradientB) {
                 if (cell.player === 'B') {
@@ -7112,11 +7115,6 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     targetCtx.beginPath();
                     targetCtx.arc(cx, cy, currentStoneRadius, 0, Math.PI * 2);
                     targetCtx.fill();
-                    
-                    targetCtx.shadowColor = 'transparent';
-                    targetCtx.lineWidth = Math.max(0.5, currentStoneRadius * 0.02);
-                    targetCtx.strokeStyle = '#a09880';
-                    targetCtx.stroke();
                 }
             } else if (cell.player === 'B') {
                 // Directional lighting: outer circle offset to the bottom right
@@ -7144,12 +7142,6 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 targetCtx.beginPath();
                 targetCtx.arc(cx, cy, currentStoneRadius, 0, Math.PI * 2);
                 targetCtx.fill();
-                
-                // Very subtle rim stroke, without double shadowing
-                targetCtx.shadowColor = 'transparent';
-                targetCtx.lineWidth = Math.max(0.5, currentStoneRadius * 0.02);
-                targetCtx.strokeStyle = '#888888';
-                targetCtx.stroke();
             }
             targetCtx.restore();
         } else if (stoneImage) {
@@ -13837,11 +13829,25 @@ function getActiveStyleObject() {
     }
 }
 
+// Migrate legacy white-stone border default: the old brSize:1 rim renders as a thin
+// dark/grey ring around the stone edge (esp. visible on image-background boards). It is
+// removed so the stone edge meets the board cleanly; brSize is still honoured whenever a
+// user explicitly sets a larger value. Idempotent and safe to run on any style object,
+// including a session's captured style (gameBoardStyle) which is a snapshot of an older
+// initial-board setting and never persisted through the page-load migration.
+function migrateLegacyWhiteRim(style) {
+    if (style && style.whiteStone && style.whiteStone.brSize === 1 && style.whiteStone.br === '#111827') {
+        style.whiteStone.brSize = 0;
+    }
+    return style;
+}
+
 // The style the main board actually renders with: the active session's own style while
 // a Rec game is open, otherwise the page-load initial-board setting. This keeps the two
-// boards fully independent.
+// boards fully independent. Session styles are normalised through the legacy white-rim
+// migration every time, so a rec saved before v0.1.089 cannot keep the grey stone ring.
 function getEffectiveInitialStyle() {
-    if (state.activeStudyId && state.gameBoardStyle) return state.gameBoardStyle;
+    if (state.activeStudyId && state.gameBoardStyle) return migrateLegacyWhiteRim(state.gameBoardStyle);
     return state.initialBoardStyle;
 }
 
