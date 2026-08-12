@@ -6132,16 +6132,28 @@ function _getHamaguriTexture(radius, ringCount = 14, jitter = 1, originAngle = -
 }
 
 /**
- * Slate surface texture — rebuilt against a high-resolution reference
- * photo of real nachiguro. That photo shows NO glossy specular point
- * and NO near-black rim; instead: broad soft mottled cloudiness (subtle
- * lighter/darker patches, like unglazed stone or concrete) plus fine
- * granular speckle across the whole surface. This replaces the earlier
- * "sparse mineral streak" texture, which wasn't the right shape of
- * variation at all.
+ * Slate surface texture — rebuilt from macro reference photo of real
+ * nachiguro. The key observation from that photo: the surface marks are
+ * NOT sparse random cracks. They are a DENSE, FLOWING NETWORK of many
+ * curved lines — like geological strata, fingerprint whorls, or
+ * wood-grain seen close up. Lines curve, loop, and form enclosed
+ * regions; the overall effect reads as "surface grain", not "cracks".
+ *
+ * Implementation: sine-based flow field. A direction angle is defined
+ * at every point (x, y) via two sine harmonics. Streamlines are seeded
+ * across the stone and each follows the local field direction step by
+ * step — naturally curving and sometimes looping back because the field
+ * itself curves. The field is shifted per-stone via cloudSeed-derived
+ * phase offsets so every stone has a unique but coherent grain pattern.
+ *
+ * Layers:
+ *   1. Broad cloud blobs — mottled light/dark base variation.
+ *   2. Fine speckle — micro-grain texture.
+ *   3. Flow-field streamlines — the organic looping network.
+ *   4. Bright micro-flecks — tiny specular glints, very subtle.
  *
  * @param {number} radius
- * @param {number} cloudSeed - varies the mottle pattern per stone
+ * @param {number} cloudSeed - per-stone pattern variation seed
  */
 function _getSlateTexture(radius, cloudSeed = 0) {
     const key = `slate_${Math.round(radius)}_${cloudSeed}`;
@@ -6160,19 +6172,18 @@ function _getSlateTexture(radius, cloudSeed = 0) {
     tctx.arc(cx, cy, radius, 0, Math.PI * 2);
     tctx.clip();
 
-    // ---- Broad soft cloud blobs ----
-    // Large, very-low-alpha radial patches, mixed light/dark, overlapping
-    // — this is what reads as the mottled/cloudy variation in the photo,
-    // as opposed to a clean single directional highlight.
-    const CLOUD_COUNT = 7;
+    // ---- 1. Broad soft cloud blobs ----
+    // Large, very-low-alpha radial patches — mottled cloudiness visible
+    // in both the macro and overview photos of real nachiguro.
+    const CLOUD_COUNT = 8;
     for (let i = 0; i < CLOUD_COUNT; i++) {
         const bx = cx + (rand() - 0.5) * radius * 1.6;
         const by = cy + (rand() - 0.5) * radius * 1.6;
-        const br = radius * (0.35 + rand() * 0.45);
-        const lighter = rand() > 0.45;
-        const alpha = 0.035 + rand() * 0.05;
+        const br = radius * (0.3 + rand() * 0.5);
+        const lighter = rand() > 0.4;
+        const alpha = 0.04 + rand() * 0.055;
         const cloudGrad = tctx.createRadialGradient(bx, by, 0, bx, by, br);
-        cloudGrad.addColorStop(0, lighter ? `rgba(200,205,208,${alpha})` : `rgba(0,0,0,${alpha})`);
+        cloudGrad.addColorStop(0, lighter ? `rgba(190,200,215,${alpha})` : `rgba(0,0,0,${alpha})`);
         cloudGrad.addColorStop(1, 'rgba(0,0,0,0)');
         tctx.fillStyle = cloudGrad;
         tctx.beginPath();
@@ -6180,14 +6191,7 @@ function _getSlateTexture(radius, cloudSeed = 0) {
         tctx.fill();
     }
 
-    // ---- Fine granular speckle ----
-    // Hundreds of tiny, very faint dots — the sandstone/concrete-like
-    // grain visible up close in the reference photo. BUG FIX: this was
-    // previously radius² × 0.35, which exploded into thousands of
-    // overlapping dots at real stone sizes — repeated low-alpha darkening
-    // compounds multiplicatively, so that alone was crushing the whole
-    // stone toward near-black regardless of the base gradient. Linear
-    // scaling + a hard cap keeps density sane at any radius.
+    // ---- 2. Fine granular speckle ----
     const SPECKLE_COUNT = Math.min(700, Math.floor(radius * 9));
     for (let i = 0; i < SPECKLE_COUNT; i++) {
         const angle = rand() * Math.PI * 2;
@@ -6199,6 +6203,94 @@ function _getSlateTexture(radius, cloudSeed = 0) {
             ? `rgba(190,195,198,${0.015 + rand() * 0.02})`
             : `rgba(0,0,0,${0.02 + rand() * 0.025})`;
         tctx.fillRect(sx, sy, 0.8, 0.8);
+    }
+
+    // ---- 3. Flow-field streamlines ----
+    // The macro photo shows a dense organic network of curved lines —
+    // NOT sparse cracks. This is the slate's internal grain structure
+    // expressed as surface relief: many lines flowing in coherent but
+    // organically varied directions, curving and looping like topographic
+    // contours or a fingerprint whorl.
+    //
+    // A 2-harmonic sine field defines a smooth direction angle at every
+    // (x, y). Streamlines seed from distributed points and each follows
+    // the local angle step by step — the smooth field variation naturally
+    // causes curves and loops. Phase offsets derived from cloudSeed rotate/
+    // shift the field so each stone has its own distinct grain orientation
+    // while keeping the same flowing character.
+    //
+    // ADJUSTABLE:
+    //   FLOW_LINE_COUNT  — more lines = denser, more visible grain.
+    //   flowAlpha        — brighter/fainter individual lines.
+    //   k (field freq)   — lower = longer/broader curves, higher = tighter.
+
+    // Per-stone field phase (separate RNG stream, independent of rand above).
+    const phaseRandStream = _mulberry32(cloudSeed * 6271 + 1777);
+    const phaseX  = phaseRandStream() * Math.PI * 2;
+    const phaseY  = phaseRandStream() * Math.PI * 2;
+    const phaseR  = phaseRandStream() * Math.PI * 2;
+    const ampB    = 0.3 + phaseRandStream() * 0.25;
+
+    // Spatial frequency — ~2 cycles across the stone diameter → medium loops.
+    const k = 2.0 / radius;
+
+    // Direction field: smooth angle at point (px, py) relative to stone center.
+    const flowDir = (px, py) => {
+        const rx = px * Math.cos(phaseR) - py * Math.sin(phaseR);
+        const ry = px * Math.sin(phaseR) + py * Math.cos(phaseR);
+        return Math.sin(rx * k * 1.0 + ry * k * 1.618 + phaseX) * Math.PI
+             + Math.sin(rx * k * 2.414 - ry * k * 0.866 + phaseY) * Math.PI * ampB;
+    };
+
+    const FLOW_LINE_COUNT = 28;
+    const flowStep  = radius * 0.032;
+    const flowAlpha = 0.11;
+    const flowWidth = 0.5;
+
+    tctx.strokeStyle = `rgba(148,162,185,${flowAlpha})`;
+    tctx.lineWidth = flowWidth;
+    tctx.lineCap = 'round';
+    tctx.lineJoin = 'round';
+
+    for (let fl = 0; fl < FLOW_LINE_COUNT; fl++) {
+        const seedA = (fl / FLOW_LINE_COUNT) * Math.PI * 2 + rand() * 0.5;
+        const seedD = Math.sqrt(rand()) * radius * 0.85;
+        let fx = cx + Math.cos(seedA) * seedD;
+        let fy = cy + Math.sin(seedA) * seedD;
+
+        const maxSteps = 14 + Math.floor(rand() * 22);
+
+        tctx.beginPath();
+        tctx.moveTo(fx, fy);
+        let drew = false;
+
+        for (let s = 0; s < maxSteps; s++) {
+            const angle = flowDir(fx - cx, fy - cy);
+            const nfx = fx + Math.cos(angle) * flowStep;
+            const nfy = fy + Math.sin(angle) * flowStep;
+            const dx = nfx - cx, dy = nfy - cy;
+            if (dx * dx + dy * dy > (radius * 0.94) * (radius * 0.94)) break;
+            tctx.lineTo(nfx, nfy);
+            fx = nfx; fy = nfy;
+            drew = true;
+        }
+        if (drew) tctx.stroke();
+    }
+
+    // ---- 4. Bright micro-flecks ----
+    // Tiny bright specks — small mineral inclusions or surface micro-facets
+    // catching the light. Per-stone brightness multiplier keeps them subtle
+    // and unique per stone (never "glittery").
+    const FLECK_COUNT = Math.min(40, Math.floor(radius * 0.55));
+    const fleckBrightness = 0.15 + rand() * 0.4; // per-stone: 0.15–0.55
+    for (let i = 0; i < FLECK_COUNT; i++) {
+        const fAngle = rand() * Math.PI * 2;
+        const fDist = Math.sqrt(rand()) * radius * 0.9;
+        const fx2 = cx + Math.cos(fAngle) * fDist;
+        const fy2 = cy + Math.sin(fAngle) * fDist;
+        const fleckAlpha = (0.04 + rand() * 0.08) * fleckBrightness;
+        tctx.fillStyle = `rgba(220,228,240,${fleckAlpha})`;
+        tctx.fillRect(fx2, fy2, 0.9, 0.9);
     }
 
     tctx.restore();
@@ -6886,38 +6978,6 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     targetCtx.lineTo(gridX + gridW, gridY + gridH);
                     targetCtx.lineTo(gridX + gridW, gridY);
                     targetCtx.closePath();
-                    targetCtx.stroke();
-                    targetCtx.restore();
-                }
-            }
-
-            // Interior grid-line restoration: the BM circle erases the grid lines that
-            // cross the stone out to the mask edge, leaving a visible ring of board with
-            // no lines around every stone (the "hollow ring" seen on image-background
-            // boards). Re-stroke this cell's own interior row/column lines across the
-            // mask band so the grid reaches the stone edge again; boundary lines
-            // (r/c = 0 or 18) are already restored by the BDL layer above.
-            if (style && style.grid && r !== null && c !== null) {
-                const lineColor = style.grid.lineColor || (isInitialCanvas ? '#1C1917' : '#000000');
-                const lineMult = parseFloat(style.grid.lineSize);
-                if (lineColor && lineMult > 0) {
-                    const lineWidth = isExport ? Math.max(1.2, cellSize * 0.035) * lineMult : lineMult;
-                    targetCtx.save();
-                    targetCtx.beginPath();
-                    targetCtx.arc(cx, cy, currentBoardMaskRadius, 0, 2 * Math.PI);
-                    targetCtx.clip();
-                    targetCtx.strokeStyle = lineColor;
-                    targetCtx.lineWidth = lineWidth;
-                    targetCtx.lineCap = 'butt';
-                    targetCtx.beginPath();
-                    if (r >= 1 && r <= 17) {
-                        targetCtx.moveTo(cx - currentBoardMaskRadius, cy);
-                        targetCtx.lineTo(cx + currentBoardMaskRadius, cy);
-                    }
-                    if (c >= 1 && c <= 17) {
-                        targetCtx.moveTo(cx, cy - currentBoardMaskRadius);
-                        targetCtx.lineTo(cx, cy + currentBoardMaskRadius);
-                    }
                     targetCtx.stroke();
                     targetCtx.restore();
                 }

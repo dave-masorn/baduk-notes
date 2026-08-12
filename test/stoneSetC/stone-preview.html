@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hamaguri / Slate Stone Preview v4</title>
+<style>
+    body {
+        margin: 0;
+        background: #2a2a2a;
+        font-family: -apple-system, sans-serif;
+        color: #ddd;
+        padding: 24px;
+    }
+    h3 { font-weight: normal; font-size: 14px; color: #ddd; margin: 24px 0 8px; }
+    canvas {
+        display: block;
+        margin: 0 auto;
+        border-radius: 4px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+    #controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 20px;
+        justify-content: center;
+        margin-bottom: 12px;
+        font-size: 13px;
+    }
+    #controls label { display: flex; align-items: center; gap: 6px; }
+    #controls span { color: #8ab; min-width: 30px; display: inline-block; }
+    p { color: #aaa; font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h3 style="text-align:center;">Manual tuning (single fixed variant, both colors)</h3>
+<div id="controls">
+    <label>Radius <input id="radiusSlider" type="range" min="20" max="70" value="45"><span id="radiusVal"></span></label>
+    <label>Board <input id="boardColor" type="color" value="#c8863f"></label>
+    <label>Ring count 白 <input id="ringCount" type="range" min="4" max="50" value="14"><span id="ringCountVal"></span></label>
+    <label>Ring jitter 白 <input id="ringJitter" type="range" min="0" max="200" value="100"><span id="ringJitterVal"></span></label>
+    <label>Curvature 白 <input id="originDistMult" type="range" min="20" max="120" value="60"><span id="originDistMultVal"></span></label>
+    <label>Whiteness 白 <input id="whiteness" type="range" min="0" max="100" value="30"><span id="whitenessVal"></span></label>
+    <label>Tint 黒 <input id="tintAmount" type="range" min="0" max="100" value="50"><span id="tintAmountVal"></span></label>
+    <label>Value 黒 <input id="valueShift" type="range" min="-100" max="100" value="0"><span id="valueShiftVal"></span></label>
+    <label>Specular <input id="specular" type="range" min="0" max="100" value="100"><span id="specularVal"></span></label>
+</div>
+<canvas id="board" width="900" height="220"></canvas>
+<p>Click to drop extra stones (alternates black/white) using the current slider values.</p>
+
+<h3 style="text-align:center;">Per-position variants (getStoneVariant) — this is what Set C actually renders</h3>
+<canvas id="variantBoard" width="900" height="460"></canvas>
+<p>Top: hamaguri, grade rolled per position (label shows Snow/Blossom). Bottom: slate, tone/value rolled per position — no two identical, none with visible grain.</p>
+
+<script src="go-stone-renderer.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// ---- Manual tuning board ----
+const canvas = $('board');
+const ctx = canvas.getContext('2d');
+const radiusSlider = $('radiusSlider');
+const boardColorInput = $('boardColor');
+const ringCountSlider = $('ringCount');
+const ringJitterSlider = $('ringJitter');
+const originDistMultSlider = $('originDistMult');
+const whitenessSlider = $('whiteness');
+const tintAmountSlider = $('tintAmount');
+const valueShiftSlider = $('valueShift');
+const specularSlider = $('specular');
+
+let nextPlayer = 'B';
+
+function currentOptions() {
+    return {
+        ringCount: parseInt(ringCountSlider.value, 10),
+        ringJitter: parseInt(ringJitterSlider.value, 10) / 100,
+        originDistMult: parseInt(originDistMultSlider.value, 10) / 10,
+        whiteness: parseInt(whitenessSlider.value, 10) / 100,
+        tintAmount: parseInt(tintAmountSlider.value, 10) / 100,
+        valueShift: parseInt(valueShiftSlider.value, 10) / 100,
+        specularStrength: (parseInt(specularSlider.value, 10) / 100) * 0.5, // respect 50% cap
+    };
+}
+
+function drawManualBoard() {
+    const radius = parseInt(radiusSlider.value, 10);
+    const options = currentOptions();
+
+    $('radiusVal').textContent = radius;
+    $('ringCountVal').textContent = options.ringCount;
+    $('ringJitterVal').textContent = ringJitterSlider.value + '%';
+    $('originDistMultVal').textContent = options.originDistMult.toFixed(1) + 'x';
+    $('whitenessVal').textContent = whitenessSlider.value + '%';
+    $('tintAmountVal').textContent = tintAmountSlider.value + '%';
+    $('valueShiftVal').textContent = valueShiftSlider.value;
+    $('specularVal').textContent = specularSlider.value + '%';
+
+    ctx.fillStyle = boardColorInput.value;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const spacing = 110;
+    for (let i = 0; i < 4; i++) {
+        drawGoStone(ctx, 90 + i * spacing, 60, radius, 'W', options);
+        drawGoStone(ctx, 90 + i * spacing, 160, radius, 'B', options);
+    }
+}
+
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const radius = parseInt(radiusSlider.value, 10);
+    drawGoStone(ctx, e.clientX - rect.left, e.clientY - rect.top, radius, nextPlayer, currentOptions());
+    nextPlayer = nextPlayer === 'B' ? 'W' : 'B';
+});
+
+[radiusSlider, boardColorInput, ringCountSlider, ringJitterSlider, originDistMultSlider,
+ whitenessSlider, tintAmountSlider, valueShiftSlider, specularSlider]
+    .forEach(el => el.addEventListener('input', drawManualBoard));
+
+drawManualBoard();
+
+// ---- Per-position variant demo (the real Set C behavior) ----
+const variantCanvas = $('variantBoard');
+const variantCtx = variantCanvas.getContext('2d');
+
+function drawVariantDemo() {
+    variantCtx.fillStyle = '#c8863f';
+    variantCtx.fillRect(0, 0, variantCanvas.width, variantCanvas.height);
+
+    const radius = 42;
+    const spacing = 95;
+    const startX = 60;
+
+    variantCtx.font = '11px -apple-system, sans-serif';
+    variantCtx.fillStyle = 'rgba(0,0,0,0.6)';
+    variantCtx.textAlign = 'center';
+
+    for (let col = 0; col < 8; col++) {
+        const variant = getStoneVariant(3, col, 'W');
+        drawGoStone(variantCtx, startX + col * spacing, 70, radius, 'W', variant);
+        variantCtx.fillText(variant.grade, startX + col * spacing, 130);
+    }
+    for (let col = 0; col < 8; col++) {
+        const variant = getStoneVariant(9, col, 'B');
+        drawGoStone(variantCtx, startX + col * spacing, 300, radius, 'B', variant);
+    }
+    // second, different row of positions so slate variety is obvious
+    for (let col = 0; col < 8; col++) {
+        const variant = getStoneVariant(11, col, 'B');
+        drawGoStone(variantCtx, startX + col * spacing, 400, radius, 'B', variant);
+    }
+}
+drawVariantDemo();
+</script>
+</body>
+</html>
