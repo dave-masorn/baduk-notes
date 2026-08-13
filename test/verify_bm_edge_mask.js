@@ -78,7 +78,7 @@ async function main() {
         beginPath() { record.push(['beginPath']); },
         rect(x, y, w, h) { record.push(['rect', x, y, w, h]); },
         arc(x, y, r) { record.push(['arc', x, y, r]); },
-        clip() { record.push(['clip']); },
+        clip(fillRule) { record.push(['clip', fillRule]); },
         fill() { record.push(['fill']); },
         fillRect(x, y, w, h) { record.push(['fillRect', x, y, w, h]); },
         stroke() { record.push(['stroke']); },
@@ -149,7 +149,10 @@ async function main() {
     }
 
     function firstClip(a) { return a.findIndex((e) => e[0] === 'clip'); }
-    function firstWoodFill(a) { return a.findIndex((e) => e[0] === 'fillRect' && rel(e[1]) === rel(woodX) && rel(e[3]) === rel(woodW)); }
+    function woodFills(a, wx, ww) {
+      return a.map((e, i) => ({ e, i })).filter(({ e }) => e[0] === 'fillRect' && rel(e[1]) === rel(wx) && rel(e[3]) === rel(ww)).map(({ i }) => i);
+    }
+    function evenoddClipIdx(a) { return a.findIndex((e) => e[0] === 'clip' && e[1] === 'evenodd'); }
     // The composite's board-layer save is the save immediately followed by beginPath + rect.
     function boardLayerSave(a) {
       for (let i = 0; i < a.length - 2; i++) {
@@ -162,12 +165,13 @@ async function main() {
     {
       const { afterMask, fills } = run('go-board-canvas-initial', { cx: PADDING, cy: PADDING, r: 0, c: 0 });
       const cIdx = firstClip(afterMask);
-      const mIdx = firstWoodFill(afterMask);
+      const wf = woodFills(afterMask, woodX, woodW);
       const bIdx = boardLayerSave(afterMask);
       const brRect = bIdx !== -1 ? afterMask[bIdx + 2] : null;
-      o.checks.push(['initial edge: mask clipped, then margin-filled', cIdx !== -1 && mIdx !== -1 && mIdx > cIdx]);
-      o.checks.push(['initial edge: margin fill precedes the board-area clip', mIdx !== -1 && bIdx !== -1 && mIdx < bIdx]);
+      o.checks.push(['initial edge: mask clipped, then board-surface filled', cIdx !== -1 && wf.length > 0 && wf[0] > cIdx]);
       o.checks.push(['initial edge: board surface clipped to the 19x19 grid', isRect(brRect, grid.x, grid.y, grid.w, grid.h), JSON.stringify(brRect)]);
+      o.checks.push(['initial edge: edge-stone margin fill after the board-surface layer', bIdx !== -1 && wf.length >= 2 && wf[1] > bIdx]);
+      o.checks.push(['initial edge: margin fill evenodd-clipped to the outer frame', (() => { const eIdx = evenoddClipIdx(afterMask); return eIdx !== -1 && eIdx < wf[wf.length - 1]; })()]);
       o.checks.push(['initial edge: margin colour = border colour', fills.some((v) => String(v).toLowerCase() === String(overrideOn ? borderColor : boardColor).toLowerCase())]);
       o.checks.push(['initial edge: BDL boundary line stroked at boundarySize', afterMask.some((e) => e[0] === 'lineWidth' && rel(e[1]) === rel(boundarySize)) && strokeStyleLog.some((v) => String(v).toLowerCase() === String(boundaryColor).toLowerCase())]);
     }
@@ -180,22 +184,26 @@ async function main() {
       o.checks.push(['initial edge: BDL stroke after the board-surface layer', bIdx !== -1 && bdlStroke !== -1 && bdlStroke > bIdx]);
     }
 
-    // --- 2. Center stone (9,9): same composite, board clip is still the grid ---
+    // --- 2. Center stone (9,9): composite, board clip is still the grid, and NO frame-colour margin fill ---
     {
       const { afterMask } = run('go-board-canvas-initial', { cx: PADDING + 9 * cellSize, cy: PADDING + 9 * cellSize, r: 9, c: 9 });
       const bIdx = boardLayerSave(afterMask);
       const brRect = bIdx !== -1 ? afterMask[bIdx + 2] : null;
+      const wf = woodFills(afterMask, woodX, woodW);
       o.checks.push(['center stone: board surface clipped to the 19x19 grid', isRect(brRect, grid.x, grid.y, grid.w, grid.h), JSON.stringify(brRect)]);
       o.checks.push(['center stone: BDL stroked too (mask clip keeps it invisible)', afterMask.some((e) => e[0] === 'stroke')]);
+      o.checks.push(['center stone: no frame-colour margin fill (interior stone)', wf.length === 1 && evenoddClipIdx(afterMask) === -1]);
     }
 
     // --- 3. Study canvas edge stone: composite too ---
     {
-      const { afterMask } = run('go-board-canvas-study', { cx: PADDING, cy: PADDING, r: 0, c: 0 });
+      const { afterMask, fills } = run('go-board-canvas-study', { cx: PADDING, cy: PADDING, r: 0, c: 0 });
       const cIdx = firstClip(afterMask);
-      const mIdx = firstWoodFill(afterMask);
+      const wf = woodFills(afterMask, woodX, woodW);
       const bIdx = boardLayerSave(afterMask);
-      o.checks.push(['study edge: composite board mask present', cIdx !== -1 && mIdx !== -1 && mIdx > cIdx && bIdx !== -1 && mIdx < bIdx]);
+      o.checks.push(['study edge: composite board mask present', cIdx !== -1 && wf.length >= 2 && wf[0] > cIdx && bIdx !== -1 && wf[0] > bIdx]);
+      o.checks.push(['study edge: edge-stone margin fill after the board-surface layer', bIdx !== -1 && wf.length >= 2 && wf[1] > bIdx]);
+      o.checks.push(['study edge: margin colour = border colour', fills.some((v) => String(v).toLowerCase() === String(overrideOn ? borderColor : boardColor).toLowerCase())]);
     }
 
     // --- 4. Export renderer: board area = full wood rect inset by the margin size ---
@@ -205,15 +213,15 @@ async function main() {
       const ms = (cs / 2) * borderScale;
       const clip = { x: 50, y: 50, w: 600, h: 600 };
       const { afterMask } = run('export', { cx: 50 + ms, cy: 50 + ms, cellSize: cs, isExport: true, clipRect: clip, fullBoardRect: fbr, r: 0, c: 0 });
-      const mIdx = afterMask.findIndex((e) => e[0] === 'fillRect' && rel(e[1]) === rel(fbr.x) && rel(e[3]) === rel(fbr.w));
+      const wf = woodFills(afterMask, fbr.x, fbr.w);
       const bIdx = boardLayerSave(afterMask);
       const brRect = bIdx !== -1 ? afterMask[bIdx + 2] : null;
-      o.checks.push(['export edge: margin fill over the full wood rect', mIdx !== -1 && bIdx !== -1 && mIdx < bIdx]);
       o.checks.push(['export edge: board surface clipped to wood rect inset by margin', isRect(brRect, 50 + ms, 50 + ms, 600 - 2 * ms, 600 - 2 * ms), JSON.stringify(brRect)]);
+      o.checks.push(['export edge: edge-stone margin fill after the board-surface layer', bIdx !== -1 && wf.length >= 2 && wf[1] > bIdx]);
       o.checks.push(['export edge: BDL lineWidth scaled by export baseLine', afterMask.some((e) => e[0] === 'lineWidth' && rel(e[1]) === rel(Math.max(1.2, cs * 0.035) * boundarySize)) && strokeStyleLog.some((v) => String(v).toLowerCase() === String(boundaryColor).toLowerCase())]);
     }
 
-    // --- 5. Border Override OFF: margin = board colour, board area = whole wood rect ---
+    // --- 5. Border Override OFF: no frame-colour margin fill even on an edge stone, board area = whole wood rect ---
     {
       const savedOverride = eff.border ? eff.border.override : undefined;
       try {
@@ -221,8 +229,10 @@ async function main() {
         const { afterMask, fills } = run('go-board-canvas-initial', { cx: PADDING, cy: PADDING, r: 0, c: 0 });
         const bIdx = boardLayerSave(afterMask);
         const brRect = bIdx !== -1 ? afterMask[bIdx + 2] : null;
+        const wf = woodFills(afterMask, woodX, woodW);
         o.checks.push(['override OFF: margin colour = board colour', fills.some((v) => String(v).toLowerCase() === String(boardColor).toLowerCase())]);
         o.checks.push(['override OFF: board surface clipped to the whole wood rect', isRect(brRect, woodX, woodX, woodW, woodW), JSON.stringify(brRect)]);
+        o.checks.push(['override OFF: no frame-colour margin fill (border off)', wf.length === 1 && evenoddClipIdx(afterMask) === -1]);
       } finally {
         eff.border.override = savedOverride;
       }
@@ -232,10 +242,10 @@ async function main() {
     {
       const { afterMask, fills } = run('go-board-canvas-scoring', { cx: PADDING, cy: PADDING, r: 0, c: 0 });
       const cIdx = firstClip(afterMask);
-      const mIdx = firstWoodFill(afterMask);
+      const wf = woodFills(afterMask, woodX, woodW);
       const bIdx = boardLayerSave(afterMask);
       const legacyFillIdx = afterMask.findIndex((e) => e[0] === 'fill');
-      o.checks.push(['MSM: no composite clip/fill layers', cIdx === -1 && mIdx === -1 && bIdx === -1]);
+      o.checks.push(['MSM: no composite clip/fill layers', cIdx === -1 && wf.length === 0 && bIdx === -1]);
       o.checks.push(['MSM: legacy single fill after the mask arc', legacyFillIdx !== -1 && fills.length > 0]);
       o.checks.push(['MSM: no BDL stroke (legacy single-fill mask)', !afterMask.some((e) => e[0] === 'stroke')]);
     }

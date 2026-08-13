@@ -5505,7 +5505,14 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         // 5. Draw Board Cell Contents (Stones, Labels, Annotations)
         const boardWidth = 18 * CELL_SIZE + CELL_SIZE;
         const drawAnnotations = !state.displayMoveNumbers;
+        const clipRect = {
+            x: PADDING - CELL_SIZE / 2,
+            y: PADDING - CELL_SIZE / 2,
+            w: boardWidth,
+            h: boardWidth
+        };
         
+        // Pass 1: Draw Board Mask (BM layer) for all cells
         for (let r = 0; r < 19; r++) {
             for (let c = 0; c < 19; c++) {
                 const cell = state.board[r][c];
@@ -5523,17 +5530,38 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                     
                     const { cx, cy } = getAnimatedPos(r, c, moveIdx);
                     
-                    const clipRect = {
-                        x: PADDING - CELL_SIZE / 2,
-                        y: PADDING - CELL_SIZE / 2,
-                        w: boardWidth,
-                        h: boardWidth
-                    };
                     let cellToDraw = cell;
                     if (ffAnimating && !drawAnnotations) {
                         cellToDraw = { player: cell.player, annotation: null, label: null };
                     }
-                    drawCellContent(ctx, cellToDraw, cx, cy, CELL_SIZE, false, clipRect, currentBoardBg, null, r, c);
+                    drawCellContent(ctx, cellToDraw, cx, cy, CELL_SIZE, false, clipRect, currentBoardBg, null, r, c, 'bm');
+                }
+            }
+        }
+
+        // Pass 2: Draw Stones, Shadows & Annotations for all cells
+        for (let r = 0; r < 19; r++) {
+            for (let c = 0; c < 19; c++) {
+                const cell = state.board[r][c];
+                if (cell.player || cell.annotation || cell.label) {
+                    let moveIdx = undefined;
+                    if (ffAnimating) {
+                        moveIdx = state.fastForwardAnim.cellMoves[r][c];
+                        if (moveIdx !== -1) {
+                            const revealTime = moveIdx * state.fastForwardAnim.durationPerStone;
+                            if (currentTotalTime < revealTime) continue;
+                        } else {
+                            moveIdx = undefined;
+                        }
+                    }
+                    
+                    const { cx, cy } = getAnimatedPos(r, c, moveIdx);
+                    
+                    let cellToDraw = cell;
+                    if (ffAnimating && !drawAnnotations) {
+                        cellToDraw = { player: cell.player, annotation: null, label: null };
+                    }
+                    drawCellContent(ctx, cellToDraw, cx, cy, CELL_SIZE, false, clipRect, currentBoardBg, null, r, c, 'stone');
                 }
             }
         }
@@ -5764,12 +5792,11 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             
             const pCell = { player: p, annotation: null, label: null };
             const { cx, cy } = getAnimatedPos(tgt.r, tgt.c, undefined);
-            const styleObj = document.body.classList.contains('study-mode-active') ? state.studyBoardStyle : getEffectiveInitialStyle();
             
             ctx.save();
             ctx.globalAlpha = isHover ? 0.4 : 0.6;
             const clipR = { x: PADDING - CELL_SIZE / 2, y: PADDING - CELL_SIZE / 2, w: boardWidth, h: boardWidth };
-            drawCellContent(ctx, pCell, cx, cy, CELL_SIZE, false, clipR, currentBoardBg, null, tgt.r, tgt.c, styleObj);
+            drawCellContent(ctx, pCell, cx, cy, CELL_SIZE, false, clipR, currentBoardBg, null, tgt.r, tgt.c, 'all');
             ctx.restore();
             
             if (!isHover && state.whatIfStone && state.whatIfStone.term) {
@@ -6591,7 +6618,7 @@ function getStoneVariant(row, col, player) {
 }
 
 // Helper: Draw single cell elements (stones, annotations, labels)
-function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, clipRect = null, bgColor = '#DCB35C', fullBoardRect = null, r = null, c = null) {
+function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, clipRect = null, bgColor = '#DCB35C', fullBoardRect = null, r = null, c = null, renderPass = 'all') {
     const stoneRadius = cellSize * 0.47;
 
     // To ensure the outer masking strokes only appear on the board, and do not
@@ -6755,8 +6782,13 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         }
     }
 
+    // Early return for 'bm' pass when cell has no player
+    if (renderPass === 'bm' && !cell.player) {
+        return;
+    }
+
     // 1. Draw Stones (Three-Layer Rendering: Board Mask -> Stone Border -> Stone Surface)
-    if (cell.player) {
+    if (cell.player && (renderPass === 'bm' || renderPass === 'all')) {
         // --- LAYER 3 (BOTTOM): Board Mask / Background Circle ---
         let bmSizeVal = (stoneStyle && stoneStyle.bmSize !== undefined) ? parseFloat(stoneStyle.bmSize) : NaN;
         if (!isNaN(bmSizeVal)) {
@@ -6897,11 +6929,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             const boardAreaW = borderOverrideOn ? woodW - 2 * marginSize : woodW;
             const boardAreaH = borderOverrideOn ? woodH - 2 * marginSize : woodH;
 
-            // Border margin layer: the board frame colour across the mask circle.
-            targetCtx.fillStyle = marginColor;
-            targetCtx.fillRect(woodX, woodY, woodW, woodH);
-
-            // Board surface layer: wood texture / solid colour clipped to the playing area.
+            // Board surface layer: wood texture / solid colour inside the playing area.
             targetCtx.save();
             targetCtx.beginPath();
             targetCtx.rect(boardAreaX, boardAreaY, boardAreaW, boardAreaH);
@@ -6948,6 +6976,22 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 targetCtx.fillRect(woodX, woodY, woodW, woodH);
             }
             targetCtx.restore();
+
+            // Border margin layer: if Board's Border override is ON and an edge stone's mask overhangs past the grid
+            // into the border frame margin, draw the margin frame colour in the outer margin region only. Overhang is
+            // tested against the actual board-area rect (grid when override ON), which matches both the on-screen
+            // (PADDING-based) and export (wood rect inset by the margin) coordinate spaces.
+            const isOverhangingEdge = (cx - currentBoardMaskRadius < boardAreaX || cx + currentBoardMaskRadius > boardAreaX + boardAreaW || cy - currentBoardMaskRadius < boardAreaY || cy + currentBoardMaskRadius > boardAreaY + boardAreaH);
+            if (borderOverrideOn && isOverhangingEdge) {
+                targetCtx.save();
+                targetCtx.beginPath();
+                targetCtx.rect(woodX, woodY, woodW, woodH);
+                targetCtx.rect(boardAreaX + boardAreaW, boardAreaY, -boardAreaW, boardAreaH);
+                targetCtx.clip('evenodd');
+                targetCtx.fillStyle = marginColor;
+                targetCtx.fillRect(woodX, woodY, woodW, woodH);
+                targetCtx.restore();
+            }
 
             // Boundary-line (BDL) layer: reproduce the outer grid lines (Grids & Hoshi →
             // grid.boundaryColor / grid.boundarySize) where they cross the mask, so the BM
@@ -7136,7 +7180,13 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 break;
             }
         }
+    }
 
+    if (renderPass === 'bm') {
+        return;
+    }
+
+    if (cell.player && (renderPass === 'stone' || renderPass === 'all')) {
         // --- LAYER 2 (MIDDLE): Stone Border Ring (BRr) — always above BM, always below stone ---
         if (currentStoneBrSize > 0) {
             targetCtx.save();
@@ -8432,6 +8482,7 @@ async function generateDiagramDataURL() {
                 }
 
                 // Stones & Annotations
+                // Pass 1: Draw Board Mask (BM layer) for all cells
                 for (let r = boardRowStart; r <= boardRowEnd; r++) {
                     for (let c = boardColStart; c <= boardColEnd; c++) {
                         const cell = state.board[r][c];
@@ -8445,7 +8496,26 @@ async function generateDiagramDataURL() {
                                 w: woodRight - woodLeft,
                                 h: woodBottom - woodTop
                             };
-                            drawCellContent(exportCtx, cell, cx, cy, S, true, clipRect, currentBoardColor, fullBoardRect, r, c);
+                            drawCellContent(exportCtx, cell, cx, cy, S, true, clipRect, currentBoardColor, fullBoardRect, r, c, 'bm');
+                        }
+                    }
+                }
+
+                // Pass 2: Draw Stones, Shadows & Annotations for all cells
+                for (let r = boardRowStart; r <= boardRowEnd; r++) {
+                    for (let c = boardColStart; c <= boardColEnd; c++) {
+                        const cell = state.board[r][c];
+                        const cx = gridLeft + (c - boardColStart) * S;
+                        const cy = gridTop + (r - boardRowStart) * S;
+                        
+                        if (cell.player || cell.annotation || cell.label) {
+                            const clipRect = {
+                                x: woodLeft,
+                                y: woodTop,
+                                w: woodRight - woodLeft,
+                                h: woodBottom - woodTop
+                            };
+                            drawCellContent(exportCtx, cell, cx, cy, S, true, clipRect, currentBoardColor, fullBoardRect, r, c, 'stone');
                         }
                     }
                 }
@@ -17904,6 +17974,7 @@ function renderScoringBoardToCtx(ctx) {
     const vacatedTerritory = computeVacatedTerritory(terrSrc, scoringState.board, locScores, areaScores);
 
 
+    // Pass 1: Draw Board Mask (BM layer) for all cells
     for (let r = 0; r < 19; r++) {
         for (let c = 0; c < 19; c++) {
             const val = scoringState.board[r][c];
@@ -17911,9 +17982,24 @@ function renderScoringBoardToCtx(ctx) {
             const cy = PADDING + r * CELL_SIZE;
 
             if (val === 1) {
-                drawCellContent(ctx, { player: 'B', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c);
+                drawCellContent(ctx, { player: 'B', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c, 'bm');
             } else if (val === 2) {
-                drawCellContent(ctx, { player: 'W', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c);
+                drawCellContent(ctx, { player: 'W', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c, 'bm');
+            }
+        }
+    }
+
+    // Pass 2: Draw Stones, Shadows & Annotations for all cells
+    for (let r = 0; r < 19; r++) {
+        for (let c = 0; c < 19; c++) {
+            const val = scoringState.board[r][c];
+            const cx = PADDING + c * CELL_SIZE;
+            const cy = PADDING + r * CELL_SIZE;
+
+            if (val === 1) {
+                drawCellContent(ctx, { player: 'B', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c, 'stone');
+            } else if (val === 2) {
+                drawCellContent(ctx, { player: 'W', annotation: null, label: null }, cx, cy, CELL_SIZE, false, null, boardColor, null, r, c, 'stone');
             }
 
             // Dead stone marker overlay on empty intersection (lifted dead stone)
