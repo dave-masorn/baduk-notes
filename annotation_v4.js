@@ -6079,6 +6079,46 @@ function _lerpColor(colorA, colorB, t) {
     return `rgb(${r},${g},${bl})`;
 }
 
+// Deterministic hash → [0,1). Maps integer lattice coords + seed to a
+// stable pseudo-random value. Used to build value noise.
+function _hash2D(ix, iy, seed) {
+    const h = ix * 374761393 + iy * 668265263 + seed * 1442695040888963407;
+    const x = (h % 4294967296) >>> 0;
+    const n = Math.imul(x ^ (x >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function _smoothstep(t) {
+    return t * t * (3 - 2 * t);
+}
+
+// Bilinearly-interpolated value noise on a unit lattice.
+function _valueNoise2D(x, y, seed) {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = x - x0, fy = y - y0;
+    const sx = _smoothstep(fx), sy = _smoothstep(fy);
+    const v00 = _hash2D(x0, y0, seed);
+    const v10 = _hash2D(x0 + 1, y0, seed);
+    const v01 = _hash2D(x0, y0 + 1, seed);
+    const v11 = _hash2D(x0 + 1, y0 + 1, seed);
+    const a = v00 + (v10 - v00) * sx;
+    const b = v01 + (v11 - v01) * sx;
+    return a + (b - a) * sy;
+}
+
+// Fractal Brownian motion — a few octaves of value noise summed at
+// exponentially decreasing amplitude.
+function _fbm(x, y, seed, octaves = 4) {
+    let value = 0, amp = 0.5, freq = 1, norm = 0;
+    for (let o = 0; o < octaves; o++) {
+        value += _valueNoise2D(x * freq, y * freq, seed + o * 101) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.15;
+    }
+    return value / norm;
+}
+
 /**
  * Hamaguri growth-ring texture. Draws long, gently-bowed bands around
  * an origin point placed FAR outside the stone — real shell growth
@@ -6159,25 +6199,24 @@ function _getHamaguriTexture(radius, ringCount = 14, jitter = 1, originAngle = -
 }
 
 /**
- * Slate surface texture — rebuilt from macro reference photo of real
- * nachiguro. The key observation from that photo: the surface marks are
- * NOT sparse random cracks. They are a DENSE, FLOWING NETWORK of many
- * curved lines — like geological strata, fingerprint whorls, or
- * wood-grain seen close up. Lines curve, loop, and form enclosed
- * regions; the overall effect reads as "surface grain", not "cracks".
+ * Slate surface texture — REWRITTEN from stroked "flow-field" lines to
+ * procedural domain-warped fractal noise, rendered per-pixel.
  *
- * Implementation: sine-based flow field. A direction angle is defined
- * at every point (x, y) via two sine harmonics. Streamlines are seeded
- * across the stone and each follows the local field direction step by
- * step — naturally curving and sometimes looping back because the field
- * itself curves. The field is shifted per-stone via cloudSeed-derived
- * phase offsets so every stone has a unique but coherent grain pattern.
+ * Why: the flow-field lines read as clearly *drawn* strokes (someone
+ * traced lines), not as a photographed surface. This version samples a
+ * domain-warped fBm field at every pixel and stamps the grayscale result
+ * into an ImageData buffer — the surface reads as continuous organic
+ * grain, the way real polished slate looks up close.
  *
- * Layers:
- *   1. Broad cloud blobs — mottled light/dark base variation.
- *   2. Fine speckle — micro-grain texture.
- *   3. Flow-field streamlines — the organic looping network.
- *   4. Bright micro-flecks — tiny specular glints, very subtle.
+ * The output is pure grayscale. Color is added later, in drawGoStone(),
+ * via the base radial gradient + 'overlay' compositing. Overlay can only
+ * scale luminance, it can't shift hue, so "texture only, color untouched"
+ * stays true.
+ *
+ * Wobble/variation sources per stone: cloudSeed. It offsets the noise
+ * domain AND seeds the fleck RNG, so each stone still gets a unique
+ * surface — just unique in the "different patch of the same stone" way
+ * instead of the old "different decorative pattern" way.
  *
  * @param {number} radius
  * @param {number} cloudSeed - per-stone pattern variation seed
@@ -6194,133 +6233,59 @@ function _getSlateTexture(radius, cloudSeed = 0) {
     const cx = size / 2, cy = size / 2;
     const rand = _mulberry32(9911 + cloudSeed);
 
-    tctx.save();
-    tctx.beginPath();
-    tctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    tctx.clip();
-
-    // ---- 1. Broad soft cloud blobs ----
-    // Large, very-low-alpha radial patches — mottled cloudiness visible
-    // in both the macro and overview photos of real nachiguro.
-    const CLOUD_COUNT = 8;
-    for (let i = 0; i < CLOUD_COUNT; i++) {
-        const bx = cx + (rand() - 0.5) * radius * 1.6;
-        const by = cy + (rand() - 0.5) * radius * 1.6;
-        const br = radius * (0.3 + rand() * 0.5);
-        const lighter = rand() > 0.4;
-        const alpha = 0.04 + rand() * 0.055;
-        const cloudGrad = tctx.createRadialGradient(bx, by, 0, bx, by, br);
-        cloudGrad.addColorStop(0, lighter ? `rgba(190,200,215,${alpha})` : `rgba(0,0,0,${alpha})`);
-        cloudGrad.addColorStop(1, 'rgba(0,0,0,0)');
-        tctx.fillStyle = cloudGrad;
-        tctx.beginPath();
-        tctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        tctx.fill();
-    }
-
-    // ---- 2. Fine granular speckle ----
-    const SPECKLE_COUNT = Math.min(700, Math.floor(radius * 9));
-    for (let i = 0; i < SPECKLE_COUNT; i++) {
-        const angle = rand() * Math.PI * 2;
-        const dist = Math.sqrt(rand()) * radius * 0.97;
-        const sx = cx + Math.cos(angle) * dist;
-        const sy = cy + Math.sin(angle) * dist;
-        const lighter = rand() > 0.5;
-        tctx.fillStyle = lighter
-            ? `rgba(190,195,198,${0.015 + rand() * 0.02})`
-            : `rgba(0,0,0,${0.02 + rand() * 0.025})`;
-        tctx.fillRect(sx, sy, 0.8, 0.8);
-    }
-
-    // ---- 3. Flow-field streamlines ----
-    // The macro photo shows a dense organic network of curved lines —
-    // NOT sparse cracks. This is the slate's internal grain structure
-    // expressed as surface relief: many lines flowing in coherent but
-    // organically varied directions, curving and looping like topographic
-    // contours or a fingerprint whorl.
-    //
-    // A 2-harmonic sine field defines a smooth direction angle at every
-    // (x, y). Streamlines seed from distributed points and each follows
-    // the local angle step by step — the smooth field variation naturally
-    // causes curves and loops. Phase offsets derived from cloudSeed rotate/
-    // shift the field so each stone has its own distinct grain orientation
-    // while keeping the same flowing character.
-    //
-    // ADJUSTABLE:
-    //   FLOW_LINE_COUNT  — more lines = denser, more visible grain.
-    //   flowAlpha        — brighter/fainter individual lines.
-    //   k (field freq)   — lower = longer/broader curves, higher = tighter.
-
-    // Per-stone field phase (separate RNG stream, independent of rand above).
-    const phaseRandStream = _mulberry32(cloudSeed * 6271 + 1777);
-    const phaseX  = phaseRandStream() * Math.PI * 2;
-    const phaseY  = phaseRandStream() * Math.PI * 2;
-    const phaseR  = phaseRandStream() * Math.PI * 2;
-    const ampB    = 0.3 + phaseRandStream() * 0.25;
-
-    // Spatial frequency — ~2 cycles across the stone diameter → medium loops.
-    const k = 2.0 / radius;
-
-    // Direction field: smooth angle at point (px, py) relative to stone center.
-    const flowDir = (px, py) => {
-        const rx = px * Math.cos(phaseR) - py * Math.sin(phaseR);
-        const ry = px * Math.sin(phaseR) + py * Math.cos(phaseR);
-        return Math.sin(rx * k * 1.0 + ry * k * 1.618 + phaseX) * Math.PI
-             + Math.sin(rx * k * 2.414 - ry * k * 0.866 + phaseY) * Math.PI * ampB;
-    };
-
-    const FLOW_LINE_COUNT = 28;
-    const flowStep  = radius * 0.032;
-    const flowAlpha = 0.11;
-    const flowWidth = 0.5;
-
-    tctx.strokeStyle = `rgba(148,162,185,${flowAlpha})`;
-    tctx.lineWidth = flowWidth;
-    tctx.lineCap = 'round';
-    tctx.lineJoin = 'round';
-
-    for (let fl = 0; fl < FLOW_LINE_COUNT; fl++) {
-        const seedA = (fl / FLOW_LINE_COUNT) * Math.PI * 2 + rand() * 0.5;
-        const seedD = Math.sqrt(rand()) * radius * 0.85;
-        let fx = cx + Math.cos(seedA) * seedD;
-        let fy = cy + Math.sin(seedA) * seedD;
-
-        const maxSteps = 14 + Math.floor(rand() * 22);
-
-        tctx.beginPath();
-        tctx.moveTo(fx, fy);
-        let drew = false;
-
-        for (let s = 0; s < maxSteps; s++) {
-            const angle = flowDir(fx - cx, fy - cy);
-            const nfx = fx + Math.cos(angle) * flowStep;
-            const nfy = fy + Math.sin(angle) * flowStep;
-            const dx = nfx - cx, dy = nfy - cy;
-            if (dx * dx + dy * dy > (radius * 0.94) * (radius * 0.94)) break;
-            tctx.lineTo(nfx, nfy);
-            fx = nfx; fy = nfy;
-            drew = true;
+    // ---- Per-pixel domain-warped fBm noise ----
+    // Inigo Quilez's classic domain warping: sample the field twice at
+    // slightly offset frequencies, then use those two values as offsets
+    // into a third field — the "warp" turns smooth blobs into organic
+    // swirling grain. Frequency is tied to radius so the grain reads at
+    // the same visual scale on every stone size.
+    const img = tctx.createImageData(size, size);
+    const data = img.data;
+    const freq = 3.2 / radius;
+    const warpStrength = 2.6;
+    const grainAmp = 30;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const nx = (x / size) * 2 - 1;
+            const ny = (y / size) * 2 - 1;
+            const d = Math.sqrt(nx * nx + ny * ny);
+            const idx = (y * size + x) * 4;
+            if (d > 1) continue; // transparent outside the stone circle
+            // warp fields at slightly different offsets/frequencies
+            const qx = _fbm(nx + cloudSeed * 3.1, ny + cloudSeed * 1.7, cloudSeed * 7 + 1, 3);
+            const qy = _fbm(nx + cloudSeed * 5.3 + 5.2, ny + cloudSeed * 2.9 + 1.3, cloudSeed * 11 + 2, 3);
+            // final field, offset by the warp
+            const warped = _fbm(
+                nx + warpStrength * (qx - 0.5),
+                ny + warpStrength * (qy - 0.5),
+                cloudSeed * 13 + 3,
+                4
+            );
+            const gray = Math.max(0, Math.min(255, Math.round(128 + (warped - 0.5) * 2 * grainAmp)));
+            data[idx]     = gray;
+            data[idx + 1] = gray;
+            data[idx + 2] = gray;
+            data[idx + 3] = 255;
         }
-        if (drew) tctx.stroke();
     }
+    tctx.putImageData(img, 0, 0);
 
-    // ---- 4. Bright micro-flecks ----
-    // Tiny bright specks — small mineral inclusions or surface micro-facets
-    // catching the light. Per-stone brightness multiplier keeps them subtle
-    // and unique per stone (never "glittery").
-    const FLECK_COUNT = Math.min(40, Math.floor(radius * 0.55));
-    const fleckBrightness = 0.15 + rand() * 0.4; // per-stone: 0.15–0.55
+    // ---- Sparse bright micro-flecks ----
+    // Tiny bright specks — mineral inclusions catching the light. Sparse,
+    // faint, and scaled to radius so they read at the same visual density
+    // on big and small stones.
+    const FLECK_COUNT = Math.min(30, Math.floor(radius * 0.4));
+    const fleckBrightness = 0.15 + rand() * 0.35; // per-stone: 0.15–0.5
     for (let i = 0; i < FLECK_COUNT; i++) {
         const fAngle = rand() * Math.PI * 2;
         const fDist = Math.sqrt(rand()) * radius * 0.9;
         const fx2 = cx + Math.cos(fAngle) * fDist;
         const fy2 = cy + Math.sin(fAngle) * fDist;
-        const fleckAlpha = (0.04 + rand() * 0.08) * fleckBrightness;
-        tctx.fillStyle = `rgba(220,228,240,${fleckAlpha})`;
+        const fleckAlpha = (0.05 + rand() * 0.09) * fleckBrightness;
+        tctx.fillStyle = `rgba(225,230,240,${fleckAlpha})`;
         tctx.fillRect(fx2, fy2, 0.9, 0.9);
     }
 
-    tctx.restore();
     _stoneTextureCache.set(key, tex);
     return tex;
 }
@@ -6419,8 +6384,16 @@ function drawGoStone(ctx, cx, cy, radius, player, options = {}) {
     // ---- Material texture ----
     if (player === 'B') {
         const tex = _getSlateTexture(radius, cloudSeed);
-        ctx.globalAlpha = 0.85;
+        // CHANGED: 'overlay' blend instead of normal alpha compositing. The
+        // texture is pure grayscale (see _getSlateTexture): color is only
+        // carried by the base gradient, and 'overlay' can only scale
+        // luminance, never shift hue — so the color logic of this function
+        // (all the _lerpColor calls below) stays exactly as it was. This is
+        // the one line that makes "texture only, color untouched" true.
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.globalAlpha = 0.55;
         ctx.drawImage(tex, cx - radius, cy - radius);
+        ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1.0;
 
         // ---- Set B parity highlight (professional integration) ----
