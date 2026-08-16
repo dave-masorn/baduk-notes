@@ -69,6 +69,7 @@ const state = {
     // Initial Board Style Settings
     initialBoardStyle: {
         stoneSet: null,
+        stoneOffset: { x: 0, y: 0 },
         blackStone: {
             useColor: true,
             bg: '#111827',
@@ -124,6 +125,7 @@ const state = {
     // Study Board Style Settings
     studyBoardStyle: {
         stoneSet: null,
+        stoneOffset: { x: 0, y: 0 },
         blackStone: {
             useColor: true,
             bg: '#111827',
@@ -184,6 +186,7 @@ const state = {
     // Export Board Style Settings
     exportBoardStyle: {
         stoneSet: null,
+        stoneOffset: { x: 0, y: 0 },
         blackStone: {
             useColor: true,
             bg: '#111827',
@@ -6688,6 +6691,18 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
     let currentStoneFg = '';
     let currentStoneFgSize = null;
 
+    // Shared Stone Offset (X/Y): a single setting applied to BOTH Black and White stones.
+    // Applies to LAYER 1 (Stone Surface) ONLY — the visible stone disk (gradient / custom
+    // image / solid colour) shifts while the Board Mask composite (LAYER 3), Border Ring
+    // (LAYER 2), labels, annotations, highlights (quarter/hoshi/cell, CIRCLE_F), move
+    // numbers and territory overlays stay centered on the intersection.
+    let stoneOffsetX = 0;
+    let stoneOffsetY = 0;
+    if (style && style.stoneOffset) {
+        stoneOffsetX = parseFloat(style.stoneOffset.x) || 0;
+        stoneOffsetY = parseFloat(style.stoneOffset.y) || 0;
+    }
+
     const stoneStyle = (style && cell.player) ? (cell.player === 'B' ? style.blackStone : style.whiteStone) : null;
 
     if (stoneStyle) {
@@ -7176,6 +7191,15 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             targetCtx.restore(); // clears filter
         }
 
+        // Apply the shared Stone Offset to LAYER 1 ONLY: shift the stone surface (and its
+        // associated dead-cross marker). The Board Mask (LAYER 3), Border Ring (LAYER 2),
+        // labels and all annotations / highlights stay on the intersection.
+        const hasStoneOffset = stoneOffsetX !== 0 || stoneOffsetY !== 0;
+        if (hasStoneOffset) {
+            targetCtx.save();
+            targetCtx.translate(stoneOffsetX, stoneOffsetY);
+        }
+
         // --- LAYER 1 (TOP): Stone Surface ---
         targetCtx.save();
         if (clipRect && !isExport) {
@@ -7287,6 +7311,9 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             targetCtx.lineWidth = Math.max(2, cellSize * 0.08);
             targetCtx.lineCap = 'round';
             targetCtx.stroke();
+            targetCtx.restore();
+        }
+        if (hasStoneOffset) {
             targetCtx.restore();
         }
     }
@@ -13883,6 +13910,7 @@ function keepCustomPanelInViewport() {
 
 const DEFAULT_INITIAL_BOARD_STYLE = {
     stoneSet: null,
+    stoneOffset: { x: 0, y: 0 },
     blackStone: {
         useColor: true,
         bg: '#111827',
@@ -13950,6 +13978,10 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         color: '#ff3b30'
     }
 };
+
+// Test hook: the reset/derive handlers read this default directly; exposing it lets the
+// verification harnesses assert the reset targets (e.g. stoneOffset) exist.
+window.DEFAULT_INITIAL_BOARD_STYLE = DEFAULT_INITIAL_BOARD_STYLE;
 
 function getActiveStyleObject() {
     const view = getCurrentBoardView();
@@ -14071,6 +14103,10 @@ function populateStyleInputs() {
             whiteThumb.style.backgroundImage = '';
         }
     }
+    
+    // Shared Stone Offset (applies to both Black and White stones)
+    setInputVal('ib-stone-offset-x', style.stoneOffset && style.stoneOffset.x !== undefined ? style.stoneOffset.x : 0);
+    setInputVal('ib-stone-offset-y', style.stoneOffset && style.stoneOffset.y !== undefined ? style.stoneOffset.y : 0);
     
     // Board Background
     const useColorRadio = document.getElementById('ib-board-bg-use-color');
@@ -14202,6 +14238,9 @@ function bindStyleInputsEvents() {
         { id: 'ib-white-br-radius', section: 'whiteStone', key: 'brRadius', isNum: true },
         { id: 'ib-white-br-blur', section: 'whiteStone', key: 'brBlur', isNum: true },
         { id: 'ib-white-bm-size', section: 'whiteStone', key: 'bmSize', isNum: true },
+        
+        { id: 'ib-stone-offset-x', section: 'stoneOffset', key: 'x', isNum: true },
+        { id: 'ib-stone-offset-y', section: 'stoneOffset', key: 'y', isNum: true },
         
         { id: 'ib-board-color', section: 'board', key: 'color' },
         { id: 'ib-board-img-repeat', section: 'board', key: 'imgRepeat', isCheckbox: true },
@@ -14479,20 +14518,28 @@ function bindStyleInputsEvents() {
         });
     }
 
-    // Section reset buttons
+    // Section reset buttons. A data-section may name a real style key (e.g. 'blackStone') or a
+    // virtual group ('stones') that expands to the real keys sharing one reset button.
+    const resetSectionGroups = {
+        stones: ['blackStone', 'whiteStone'],
+    };
     document.querySelectorAll('.style-reset-section-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             // Stop propagation to prevent triggering accordion headers
             e.stopPropagation();
             const section = e.currentTarget.getAttribute('data-section');
-            if (section && DEFAULT_INITIAL_BOARD_STYLE[section]) {
-                const style = getActiveStyleObject();
-                style[section] = JSON.parse(JSON.stringify(DEFAULT_INITIAL_BOARD_STYLE[section]));
-                
-                if (section === 'board') {
+            if (!section) return;
+            const keys = resetSectionGroups[section] || [section];
+            if (!keys.every((k) => DEFAULT_INITIAL_BOARD_STYLE[k])) return;
+
+            const style = getActiveStyleObject();
+            for (const key of keys) {
+                style[key] = JSON.parse(JSON.stringify(DEFAULT_INITIAL_BOARD_STYLE[key]));
+
+                if (key === 'board') {
                     const view = getCurrentBoardView();
                     updateBoardWrapperSize(view, style.board.size);
-                    
+
                     if (view === '#go-board-canvas-initial') {
                         window.initialBoardBgImage = null;
                     } else if (view === '#go-board-canvas-study') {
@@ -14500,21 +14547,21 @@ function bindStyleInputsEvents() {
                     } else {
                         window.exportBoardBgImage = null;
                     }
-                } else if (section === 'blackStone') {
+                } else if (key === 'blackStone') {
                     const view = getCurrentBoardView();
                     if (view === '#go-board-canvas-initial') window.initialBStoneBgImage = null;
                     else if (view === '#go-board-canvas-study') window.studyBStoneBgImage = null;
                     else window.exportBStoneBgImage = null;
-                } else if (section === 'whiteStone') {
+                } else if (key === 'whiteStone') {
                     const view = getCurrentBoardView();
                     if (view === '#go-board-canvas-initial') window.initialWStoneBgImage = null;
                     else if (view === '#go-board-canvas-study') window.studyWStoneBgImage = null;
                     else window.exportWStoneBgImage = null;
                 }
-                
-                saveStyleAndRedraw();
-                populateStyleInputs();
             }
+
+            saveStyleAndRedraw();
+            populateStyleInputs();
         });
     });
 

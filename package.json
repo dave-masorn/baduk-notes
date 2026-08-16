@@ -11,7 +11,7 @@
     "test:rearrange": "node test/verify_rearrange_mode.js",
     "test:replace-click": "node test/verify_replace_click.js",
     "test:territory-freeze": "node test/verify_territory_freeze.js",
-    "test:all": "node test/verify_replace_click.js && node test/verify_replace_fix.js && node test/verify_rearrange_mode.js && node test/verify_msm_2step.js && node test/verify_territory_freeze.js && node test/verify_bm_edge_mask.js && node test/verify_white_rim_removed.js",
+    "test:all": "node test/verify_replace_click.js && node test/verify_replace_fix.js && node test/verify_rearrange_mode.js && node test/verify_msm_2step.js && node test/verify_territory_freeze.js && node test/verify_bm_edge_mask.js && node test/verify_white_rim_removed.js && node test/verify_stone_offset.js",
     "build-docs": "node sync-docs.js && cd tech-log && npx next build --webpack && rm -rf ../tech-log-dist/* && cp -r out/* ../tech-log-dist"
   },
   "keywords": [],
