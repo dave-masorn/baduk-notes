@@ -225,6 +225,9 @@ const state = {
             color: '#dcb35c',
             size: 100
         },
+        bg: {
+            color: '#ffffff'
+        },
         grid: {
             lineColor: '#1c1917',
             lineSize: 1,
@@ -1012,7 +1015,15 @@ function generateAutoSgfText() {
         
         let method = "";
         if (details) {
-            method = (details.toUpperCase() === "R" || details.toUpperCase() === "RESIGN") ? "resignation" : (details.toUpperCase() === "T" || details.toUpperCase() === "TIME" ? "time" : details + " points");
+            if (details.toUpperCase() === "R" || details.toUpperCase() === "RESIGN") {
+                method = "resignation";
+            } else if (details.toUpperCase() === "T" || details.toUpperCase() === "TIME") {
+                method = "time";
+            } else {
+                const scoreNum = parseFloat(details);
+                const scoreStr = !isNaN(scoreNum) ? (Number.isInteger(scoreNum) ? String(scoreNum) : scoreNum.toFixed(1)) : details;
+                method = scoreStr + " points";
+            }
         }
         let explanation = winner ? " (" + winner + " won by " + method + ")" : "";
         result_clause = " Result: " + c_result + explanation + ".";
@@ -8044,8 +8055,12 @@ async function generateDiagramDataURL() {
         
         exportCtx.translate(renderOffsetX, renderOffsetY);
 
-        // Fill white background
-        exportCtx.fillStyle = '#FFFFFF';
+        // Fill canvas background using the export board style's bg color
+        let canvasBgColor = '#FFFFFF';
+        if (state.exportBoardStyle && state.exportBoardStyle.bg && state.exportBoardStyle.bg.color) {
+            canvasBgColor = state.exportBoardStyle.bg.color;
+        }
+        exportCtx.fillStyle = canvasBgColor;
         exportCtx.fillRect(0, 0, canvasWidth, canvasHeight);
 
         // --- Draw Guiding Lines (if toggled) ---
@@ -8764,6 +8779,7 @@ function configureModalInputs() {
     const exportInputGridColor = document.getElementById('export-input-grid-color');
     const exportInputHoshiSize = document.getElementById('export-input-hoshi-size');
     const exportInputHoshiColor = document.getElementById('export-input-hoshi-color');
+    const exportInputCanvasBgColor = document.getElementById('export-input-canvas-bg-color');
     
     if (includeTitleToggle) includeTitleToggle.checked = state.exportText.includeTitle;
     if (includeCommentToggle) includeCommentToggle.checked = state.exportText.includeComment;
@@ -8795,6 +8811,11 @@ function configureModalInputs() {
     if (exportInputGridColor) exportInputGridColor.value = state.exportText.gridColor || '#000000';
     if (exportInputHoshiSize) exportInputHoshiSize.value = state.exportText.hoshiSize !== undefined ? state.exportText.hoshiSize : 2.0;
     if (exportInputHoshiColor) exportInputHoshiColor.value = state.exportText.hoshiColor || '#000000';
+
+    if (exportInputCanvasBgColor) {
+        const bgColor = (state.exportBoardStyle && state.exportBoardStyle.bg && state.exportBoardStyle.bg.color) ? state.exportBoardStyle.bg.color : '#ffffff';
+        exportInputCanvasBgColor.value = bgColor;
+    }
 
     // Sync input visibility
     const titleSizeContainer = document.getElementById('export-input-title-size-container');
@@ -9064,6 +9085,13 @@ function configureModalInputs() {
     if (exportInputHoshiColor) {
         exportInputHoshiColor.addEventListener('input', async (e) => {
             state.exportText.hoshiColor = e.target.value;
+            await updateExportPreview();
+        });
+    }
+    if (exportInputCanvasBgColor) {
+        exportInputCanvasBgColor.addEventListener('input', async (e) => {
+            if (!state.exportBoardStyle.bg) state.exportBoardStyle.bg = {};
+            state.exportBoardStyle.bg.color = e.target.value;
             await updateExportPreview();
         });
     }
@@ -13489,6 +13517,11 @@ function initFloatingToolbar() {
     state.exportBoardStyle = migrateLegacyWhiteRim(state.exportBoardStyle);
     state.scoringBoardStyle = migrateLegacyWhiteRim(state.scoringBoardStyle);
 
+    // Ensure exportBoardStyle has a bg property (migrate older saved styles that lack it)
+    if (state.exportBoardStyle && !state.exportBoardStyle.bg) {
+        state.exportBoardStyle.bg = { color: '#ffffff' };
+    }
+
     // Apply saved board sizes immediately on load
     if (state.initialBoardStyle && state.initialBoardStyle.board) {
         updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
@@ -14848,9 +14881,15 @@ function checkAndShowGameEndPopup() {
     
     const details = res.substring(2);
     if (winner && winner !== "Draw") {
-        if (details.toUpperCase() === "R" || details.toUpperCase() === "RESIGN") method = "Resignation";
-        else if (details.toUpperCase() === "T" || details.toUpperCase() === "TIME") method = "Time";
-        else method = details + " points";
+        if (details.toUpperCase() === "R" || details.toUpperCase() === "RESIGN") {
+            method = "Resignation";
+        } else if (details.toUpperCase() === "T" || details.toUpperCase() === "TIME") {
+            method = "Time";
+        } else {
+            const scoreNum = parseFloat(details);
+            const scoreStr = !isNaN(scoreNum) ? (Number.isInteger(scoreNum) ? String(scoreNum) : scoreNum.toFixed(1)) : details;
+            method = `<strong style="color: #0f172a;">${scoreStr}</strong> points`;
+        }
     }
     
     let resultStr = "";
