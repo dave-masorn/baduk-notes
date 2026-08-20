@@ -120,6 +120,32 @@ function syncVersion(sitemapContent) {
   if (synced === 0) console.log(`Version ${ver} already in sync across all consumers.`);
 }
 
+function semverCompare(aStr, bStr) {
+  const parse = s => {
+    const m = (s || '').match(/v?(\d+)\.(\d+)\.(\d+)/);
+    return m ? [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)] : [0, 0, 0];
+  };
+  const [a1, a2, a3] = parse(aStr);
+  const [b1, b2, b3] = parse(bStr);
+  if (a1 !== b1) return a1 - b1;
+  if (a2 !== b2) return a2 - b2;
+  return a3 - b3;
+}
+
+function sortChangelogBlocks(changelogText) {
+  const blocks = changelogText.split(/\n+(?:---\s*\n+)?(?=###\s*v[0-9\.]+)/i).filter(b => b.trim().length > 0);
+  const parsed = blocks.map(b => {
+    const m = b.match(/###\s*(v[0-9\.]+)/i);
+    return {
+      version: m ? m[1] : 'v0.0.000',
+      content: b.trim()
+    };
+  });
+  // Sort descending: highest/newest version at the top
+  parsed.sort((a, b) => semverCompare(b.version, a.version));
+  return parsed.map(p => p.content).join('\n\n---\n\n');
+}
+
 function run() {
   console.log('Starting documentation sync...');
   ensureDirSync(DOCS_CONTENT_DIR);
@@ -130,7 +156,7 @@ function run() {
     console.error('SITEMAP.md not found in root!');
     return;
   }
-  const sitemapContent = fs.readFileSync(sitemapPath, 'utf8');
+  let sitemapContent = fs.readFileSync(sitemapPath, 'utf8');
 
   // Keep tech_log version in sync everywhere from the SITEMAP.md frontmatter
   syncVersion(sitemapContent);
@@ -160,6 +186,28 @@ function run() {
     sections[lastHeader] = sitemapContent.slice(lastIndex).trim();
   }
 
+  // Ensure Changelog section is always sorted descending by SemVer
+  const changelogKey = Object.keys(sections).find(k => k.toLowerCase().includes('changelog'));
+  if (changelogKey) {
+    const originalChangelog = sections[changelogKey];
+    const sortedChangelog = sortChangelogBlocks(originalChangelog);
+    sections[changelogKey] = sortedChangelog;
+
+    if (originalChangelog !== sortedChangelog) {
+      console.log('Changelog entries re-ordered by SemVer (most recent at top).');
+      // Update SITEMAP.md with the sorted changelog to maintain SSOT consistency
+      const beforeChangelog = sitemapContent.slice(0, sitemapContent.indexOf(`## ${changelogKey}`) + `## ${changelogKey}`.length);
+      const afterChangelogMatch = sitemapContent.slice(sitemapContent.indexOf(`## ${changelogKey}`) + `## ${changelogKey}`.length).match(/\n## /);
+      if (afterChangelogMatch) {
+        const afterIndex = sitemapContent.indexOf(`## ${changelogKey}`) + `## ${changelogKey}`.length + afterChangelogMatch.index;
+        const afterChangelog = sitemapContent.slice(afterIndex);
+        sitemapContent = beforeChangelog + '\n\n' + sortedChangelog + '\n\n' + afterChangelog.trim();
+        fs.writeFileSync(sitemapPath, sitemapContent);
+        console.log('Updated SITEMAP.md with sorted changelog entries.');
+      }
+    }
+  }
+
   // Create main index.mdx from introContent
   let mainIndexContent = `---
 title: Project Sitemap
@@ -182,6 +230,21 @@ Welcome to the technical documentation and project sitemap for **baduk-notes**. 
 
   fs.writeFileSync(path.join(DOCS_CONTENT_DIR, 'index.mdx'), mainIndexContent);
   console.log('Created content/docs/index.mdx');
+
+  // Create standalone changelog.mdx
+  if (changelogKey) {
+    const changelogMdx = `---
+title: Change Log
+description: Full historical change log and release notes for baduk-notes
+---
+
+# Change Log
+
+${sections[changelogKey]}
+`;
+    fs.writeFileSync(path.join(DOCS_CONTENT_DIR, 'changelog.mdx'), changelogMdx);
+    console.log('Created content/docs/changelog.mdx');
+  }
 
   // Map each section to its group and write files
   for (const [groupDir, groupInfo] of Object.entries(NAV_GROUPS)) {
@@ -252,6 +315,11 @@ ${content}
       rootPages.push(file.slug);
     }
   });
+
+  // Change Log should always be at the very end of the left-panel sidebar list
+  if (changelogKey) {
+    rootPages.push('changelog');
+  }
 
   // Write root meta.json
   fs.writeFileSync(path.join(DOCS_CONTENT_DIR, 'meta.json'), JSON.stringify({

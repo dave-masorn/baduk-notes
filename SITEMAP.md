@@ -11,215 +11,475 @@ version: 0.2.000
 
 How the application files interact — UI shell, script load order, scoring pipeline, docs build, and reference assets.
 
-```
-                        ┌───────────────────────────────────────────────┐
-                        │                  index.html                  │
-                        │  UI shell · boards · modals · study mode ·   │
-                        │  export · style palette · score estimate     │
-                        └───────┬───────────────────────────┬──────────┘
-                                │ <script> load order       │ register
-                     ┌──────────▼──────────┐     ┌──────────▼────────┐
-                     │  sgf-parser.js      │     │  manifest.json    │
-                     │  └─ SgfEngine       │     └───────────────────┘
-                     ├─────────────────────┤     ┌─────────────┐
-                     │  deadstones.bundle  │──┐  │  sw.js      │
-                     │  └─ deadstones_bg   │  └─▶│ cache v3   │
-                     │     .wasm           │     └─────────────┘
-                     ├─────────────────────┤
-                       │  board-estimate.js  │   BoardEstimate
-                       │  └─ evaluateJapan-  │   evaluateJapaneseTerritory
-                       │     eseTerritory    │   (TB/TW explicit ─┬─ flood-fill
-                       ├─────────────────────┤    markup path     │  + freed dead-
-                       │  goscorer.js        │    stone points)
-                      │  goscorer.js        │   GoScorer.finalTerritoryScore
-                     ├─────────────────────┤
-                     │  liberties.js       │   Liberties (qi / BFS groups)
-                     ├─────────────────────┤
-                     │  move-term-detector │   _termHL (Sabaki patterns +
-                     │  └─ _termHL         │   Tenuki/Sente/Gote detection)
-                     ├─────────────────────┤
-                     │  phase-detector.js  │   detectGamePhaseDynamic
-                     ├─────────────────────┤   (Fuseki/Chuban/Yose)
-                     │  game-tree.js       │   refreshGameTree
-                     └─────────┬───────────┘
-                               ▼
-        ┌───────────────────────────────────────────────────────────┐
-        │                    annotation_v4.js  (THE HUB)            │
-        │  window.state · event listeners · canvas draw · exports  │
-        │                                                            │
-        │  loadSGF ───────────▶ SgfEngine.parseSgf / extractMainLine │
-        │  runScoreEstimate ──▶ yellow panel (own AI + influence;  │
-        │      never consumes recorded TB/TW markup)               │
-        │      └─ Computational Method: blue panel + "Run / Compute >" at Game End │
-        │           └─ markup DD/MA/TB/TW ──▶ explicit TB/TW card   │
-        │           └─ no markup ──▶ amber warn → Manual Scoring    │
-        │  resumeStudySession ──▶ loadSGF(rec.workingSgf) as-is       │
-        │  findEndgameMarkup ──▶ DD/MA/TB/TW lookup (any node)        │
-        │  replayToTerminal ──▶ score endgame position (any cursor)   │
-        │  GoScorer ─────────▶ territory tally in scoring modal     │
-        │  deadstones.guess ─▶ AI dead map (yellow panel, iter 200) │
-        │  Liberties · phase-detector · _termHL · game-tree         │
-        └───────────────────────────────────────────────────────────┘
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/arch-web-architect.html" width="100%" height="500" style={{ border: 'none', display: 'block' }} title="Web Architect Diagram — application file interactions" />
+</div>
 
-```
- Docs build pipeline                     Reference / assets / build
- ─────────────────────                   ────────────────────────────
- SITEMAP.md ──┐                          Flexoki-light.json · Cupertino-light.json
- board-      │  sync-docs.js             Documentation-light.json · Github-light.json
- estimate.md ├─▶ tech-log/content/       ── palette references for the highlight
- liberties.md┘    docs/*.mdx             color system
-                  │ next build           diff.txt ── Block 2 diff analysis
-                  ▼                      fix_flipped.py ── flipped-board patch
-              tech-log/out/              obsidian-things-main.zip ── Obsidian
-                  │ cp -r                 theme reference
-                  ▼                      package.json + package-lock.json
-            tech-log-dist/ ──▶ http://   ──▶ esbuild ──▶ deadstones.bundle.js
-                localhost:8577/              + deadstones_bg.wasm
-                tech-log-dist/docs/
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/arch-docs-pipeline.html" width="100%" height="380" style={{ border: 'none', display: 'block' }} title="Docs Build Pipeline — SITEMAP.md to tech-log-dist" />
+</div>
 
-### v0.1.089 — WHITE STONE GREY RIM REMOVED (BR RING): the thin dark/grey halo seen around the edge of white Go stones is gone. Root cause: every default stone style had `whiteStone.br: '#111827'` with `brSize: 1`, and `drawCellContent`'s BR layer stroked that colour as a ring hugging the stone edge — `currentStoneBrSize = (brSize/10)·currentStoneRadius·0.3` (`annotation_v4.js:6615-6619`), arc at `currentStoneRadius + currentStoneBrRadius + currentStoneBrSize/2` (`:7049-7062`) — visible against any non-white background, most obviously on the study board and on the initial board when its BG is set to an image. Pixel probing showed the artifact as a 1.3px band (`#ac976a`/`#aa8f57`) at r≈12.2–13.4 just inside the stone edge. **Fix:** all four default styles (initial, study, export, scoring) now use `brSize: 0`, so the BR block is skipped entirely and the stone edge blends cleanly into the board (probe: the dark band is replaced by a natural wood-blend `#f9d340`/`#e1be79`), while the stone's silhouette and shading are untouched. The BR feature is still fully honoured whenever a user explicitly sets `brSize > 0`. **Migration:** `initFloatingToolbar` applies `window.migrateLegacyWhiteRim()` to every saved board style loaded from localStorage — a saved `whiteStone.brSize: 1` with `br: '#111827'` (the old default) is downgraded to `0`, so already-saved styles lose the ring too; any non-default rim colour is preserved exactly. No rendering logic was touched beyond the defaults and the migration; grid loops draw exactly as before.
 
-**Verified.** `test/verify_white_rim_removed.js` (new, 7 checks) drives `drawCellContent` against a recording mock ctx on lightpanda (no Brave): a default white stone draws **no** `#111827` stroke; an explicit `brSize: 1` still draws the BR ring at exactly `stoneRadius + brSize/2` (13.398px vs 13.2 stone, 15 mask); black stones are unaffected; `migrateLegacyWhiteRim` downgrades the legacy `brSize: 1` style, preserves a user's own rim colour, and is null-safe; no page errors. All suites pass — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip. `node --check` clean. annotation_v4.js is now 18,095 lines (BR block 7049-7062, brSize scaling 6615-6619, migration in `initFloatingToolbar`), index.html cache-busters to 0.1.089, `npm run test:all` now also runs the BM-edge-mask and white-rim suites.
+---
 
-### v0.1.094 — STONE SET C BLACK TEXTURE REWRITTEN FROM FLOW-FIELD STREAMLINES TO PER-PIXEL DOMAIN-WARPED fBm NOISE ('OVERLAY' COMPOSITING). The stroked "flow-field" lines from v0.1.092 read as clearly *drawn* strokes (someone traced lines), not as a photographed surface — so the slate texture is now procedural domain-warped fractal noise rendered per-pixel into an `ImageData` buffer. **New helpers:** `_hash2D`, `_smoothstep`, `_valueNoise2D`, `_fbm` (fBm: 4 octaves default, amplitude 0.5, lacunarity **2.15**, lattice hash `ix·374761393 + iy·668265263 + seed·1442695040888963407`, seed per octave `seed + o·101`) — inserted after `_lerpColor` in both `annotation_v4.js` and the test renderer. **`_getSlateTexture` rewritten:** for every pixel inside the stone circle it computes the classic Inigo Quilez domain warp — two 3-octave warp fields at offset frequencies/offsets (`_fbm(nx + cloudSeed·3.1, ny + cloudSeed·1.7, cloudSeed·7 + 1, 3)` and `_fbm(nx + cloudSeed·5.3 + 5.2, ny + cloudSeed·2.9 + 1.3, cloudSeed·11 + 2, 3)`), then a final 4-octave field offset by `warpStrength·(q−0.5)` with `warpStrength = 2.6`, `freq = 3.2/radius` (tied to radius so grain reads at the same visual scale on every stone size) and `grainAmp = 30` → `gray = clamp(round(128 + (warped − 0.5)·2·grainAmp))`, stamped into `createImageData` with alpha 255 inside / 0 outside the circle (no clip needed — the alpha channel is the mask, `putImageData` ignores clips). **Micro-flecks:** sparser and fainter (`FLECK_COUNT = min(30, floor(radius·0.4))`, `fleckBrightness = 0.15 + rand()·0.35` → 0.15–0.5, alpha `(0.05 + rand()·0.09)·fleckBrightness`, `rgba(225,230,240,…)`). **KEY CHANGE — `drawGoStone` composite:** the slate texture is now drawn with `ctx.globalCompositeOperation = 'overlay'` at `globalAlpha = 0.55` (was normal alpha compositing at 0.85), then reset to `source-over`. The texture is pure grayscale so 'overlay' can only scale luminance, never shift hue — color is carried solely by the base radial gradient, so "texture only, color untouched" holds and none of the `_lerpColor` color logic changed. Cache key unchanged (`slate_${Math.round(radius)}_${cloudSeed}`). Hamaguri/`getStoneVariant` untouched. **Scope:** both `annotation_v4.js` and `test/stoneSetC/go-stone-renderer.js` (standalone copy for `stone-preview.html`) kept in sync.
 
-**Verified.** `node --check` clean on both files; `npm run test:all` green (7 suites — bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip), plus `verify_stone_set_c` (13 pass, 12 skip) and `verify_custom_stones_expand` (27/27). No flow-field/cloud-blob residue (`rg` clean of `FLOW_LINE_COUNT`, `flowAlpha`, `CLOUD_COUNT`); single definitions of `_getSlateTexture`/`drawGoStone`/`getStoneVariant` in each file. index.html cache-busters to 0.1.094.
+---
 
-### v0.2.000 — PERCEIVED LOAD SPEED OVERHAUL: parallel script loading, lazy audio, deferred non-critical init. The app's initial load felt sluggish despite running locally — three bottlenecks were identified and eliminated. **Item 1 — Parallel script download (`index.html:2661-2669`):** all 9 `<script>` tags in the body gained `defer`, so the browser downloads all scripts in parallel during HTML parsing instead of blocking each other sequentially. With `defer`, scripts execute in order after the DOM is fully parsed, preserving the existing dependency chain (sgf-parser → deadstones → … → annotation_v4.js). **Item 2 — Lazy SFX (`annotation_v4.js:26-47`):** the 8 sound effects (`stone`, `remove`, `capture`, `annot`, `annot-long`, `double-click`, `double-click-w`, `mode`) were eagerly decoded at load via `createSfx()` calls — each creating an `Audio` object and calling `.load()` on a ~25 KB base64-encoded MP3. Now replaced with a lazy `_getOrCreateSfx(key)` cache (a `Map` keyed by string); `playSfx()` accepts either a string key or an `Audio` object. The sound is created and decoded only on first play. The fast-forward animation pool (`_getSfxPool`) resolves lazily too — zero audio decoding happens at startup. **Item 3 — Deferred non-critical init (`annotation_v4.js:1351-1405`):** `init()` now loads saved board styles from localStorage (`_loadSavedBoardStyles`), sets the canvas wrapper sizes (`_applySavedBoardSizes`), and calls `drawBoard()` synchronously so the board is visible on first paint. The heavy secondary work — `setupEventListeners()` (~248 listeners), `setupGameInfoEdit()`, `initFloatingToolbar()` (panel DOM setup, accordion, drag handlers, style-input binding), `setupStudyMode`, deadstones WASM preload, scoring modal init, liberties/phase-bar wiring — is deferred via `requestIdleCallback` (with `setTimeout` fallback). `StudyRecordDB` and the four `window.*` phase/strategic functions were extracted to module scope so tests can access them immediately. **Key invariant:** `updateBoardWrapperSize()` sets `canvas.width` which **clears all canvas pixels** (standard canvas API behaviour), so it must run before `drawBoard()`, not after — the saved-style loading + wrapper sizing was extracted from `initFloatingToolbar()` into `_loadSavedBoardStyles()` + `_applySavedBoardSizes()` and placed in `init()` before the first draw, preventing the deferred init from blanking the canvas.
 
-**Verified.** `node --check` clean. `npm run test:all` green (196+ checks, 0 failed) — all 8 suites pass: bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, stone-offset 18, custom-stones 24+. annotation_v4.js is now 18,394 lines (lazy SFX 26-47, deferred init 1351-1405, `_loadSavedBoardStyles` 1298-1337, `_applySavedBoardSizes` 1339-1349); index.html is 2,671 lines (cache-busters to 0.2.000, all 9 script tags deferred).
+---
 
-### v0.1.095 — STONE X/Y OFFSET (LAYER 1 ONLY): the Stones (Black & White) style section gains a **Stone Offset** sub-section inside Custom Stones (last item), with X Offset and Y Offset rows (slider ±10 px, step 0.01, number input). A single shared `stoneOffset: { x, y }` on the style object drives both colours — one setting applied to both Black and White stones. **Scope:** the offset applies to **LAYER 1 (Stone Surface) ONLY** — the visible stone disk (gradient / custom image / solid colour) shifts while LAYER 3 (Board Mask composite), LAYER 2 (Border Ring), labels, annotations, highlights (quarter/hoshi/cell, CIRCLE_F), move numbers and territory overlays all stay centered on the intersection. At offset 0 no `translate()` calls are emitted (zero overhead). The Stone Offset has its own reset button (`data-section="stoneOffset"`) in the Stones accordion header. **Reset Stones button fix:** the Stones header reset button (`data-section="stones"`) now resets **both** Black and White stone styles (and clears both B/W image caches), instead of only Black — `resetSectionGroups` map expands the virtual `'stones'` key to `['blackStone', 'whiteStone']` in the section-reset handler. **Style keys:** `stoneOffset: { x: 0, y: 0 }` added to `state.initialBoardStyle`, `state.studyBoardStyle`, `state.exportBoardStyle`, and `DEFAULT_INITIAL_BOARD_STYLE`; UI inputs `ib-stone-offset-x` / `ib-stone-offset-y` wired via `populateStyleInputs()` and `bindStyleInputsEvents()`.
+## Changelog
 
-**Verified.** `test/verify_stone_offset.js` (new, 18 checks) drives `drawCellContent()` with a recording mock 2D context: default offset 0 emits no translate calls; offset (3,−2) shifts the surface arc to (303,298); the BM mask arc stays at (300,300); the BR ring arc stays at (300,300) (with `brSize: 10` enabled); the CIRCLE_F highlight stays at (300,300); exactly 1 translate call (surface block only); the label stays at the intersection; `populateStyleInputs` fills the inputs; `DEFAULT_INITIAL_BOARD_STYLE` carries `stoneOffset`; HTML inputs have ±10 px range and 0.01 step; Reset Stones button restores both Black and White defaults while leaving `stoneOffset` untouched. Full `npm run test:all` green — 7 suites, 0 failed (replace-click 10, replace-fix 7, rearrange 6, two-step 108, bm_edge_mask 22, white-rim 7, stone-offset 18). `node --check` clean. annotation_v4.js is now 18,299 lines; index.html cache-busters to 0.1.095.
+### v0.2.000 — Perceived Load Speed Overhaul (Parallel Loading & Deferred Init)
 
-### v0.1.093 — THE REAL HOLLOW-RING CULPRIT: THE BORDER FRAME COLOUR PAINTED UNDERNEATH EVERY STONE'S BOARD MASK (VISIBLE WHEN BOARD'S BORDER IS ON). When `borderOverrideOn` is ON, the composite Board Mask first filled the **border frame colour** (`marginColor`) across the entire mask circle, then clipped to the playing grid and painted the board surface (`bgColor`/`boardImage`) on top. On a clean solid-colour board the frame colour is the same as the surface, so the under-layer was invisible — but on **image-background boards the frame colour differs from the board surface**, and canvas 2D sub-pixel anti-aliasing along the 360° mask-circle boundary let the frame colour bleed out from underneath, producing the yellow-gold halo ring around **every** stone (this is what v0.1.091's grid-line re-stroke was symptom-patching). **Fix:** the composite mask now draws the board surface **directly** into the mask circle inside the playing grid — no frame colour is ever painted underneath an interior stone — and the border margin colour is drawn **only** when an edge stone's mask actually overhangs the playing grid onto the outer frame (`isOverhangingEdge`), using an **evenodd clip** (`wood rect` minus `board-area rect`) so the frame colour is restricted strictly to the outer margin band ∩ mask circle. **Two-pass rendering:** because the BM now carries the frame/margin layer, `drawCellContent` gained a `renderPass` parameter (`'all'` default, `'bm'`, `'stone'`) and the three board renderers — `renderBoardToCtx` (initial + study), `generateDiagramDataURL` (export), `renderScoringBoardToCtx` (MSM) — now draw all BMs first (Pass 1), then all stone surfaces + labels (Pass 2), so a stone's BM and frame-colour overhang can never paint over a neighbouring stone (previously each cell drew BM-then-stone in row-major order, so a later cell's BM could cover an earlier cell's stone edge). The MSM scoring board keeps its legacy single-fill BM. **Also fixed while reviewing:** the What-If preview call passed a `styleObj` into the new `renderPass` slot (was a previously-ignored 12th arg; with the new signature it suppressed both the BM and stone layers, so the What-If hover/stone would render nothing) — now passes `'all'`; and `isOverhangingEdge` compares the mask against the actual `boardArea` rect (grid when override ON) instead of the on-screen `PADDING` constants, which were wrong for the export renderer (right/bottom edge stones in small exports would miss the frame-colour overhang).
+#### Performance Improvements
 
-**Verified.** `test/verify_bm_edge_mask.js` (re-scoped to the new order, 22 checks): the board-surface fill is the first wood-rect fill after the mask clip; an edge stone's margin fill comes **after** the board-surface layer and is **evenodd-clipped** to the outer frame (`clip('evenodd')` precedes the margin `fillRect`); the frame colour appears in fills for edge stones; a **centre stone draws NO margin fill and no evenodd clip** (the key regression guard — interior stones can no longer carry the frame colour underneath); study mirrors initial; the export BM is clipped to the wood rect inset by the margin with the margin fill after the board layer; Border Override OFF draws no margin fill even on an edge stone; MSM keeps the legacy single-fill mask. Full `npm run test:all` green (7 suites — bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip), plus `verify_stone_set_c` (13 pass, 12 skip) and `verify_custom_stones_expand` (27/27) on Brave. `node --check` clean. annotation_v4.js is now 18,279 lines (BM composite 6901-7026, two-pass at 5537/5564/8498/8517/17984/17999, `renderPass` signature 6622); index.html cache-busters to 0.1.093.
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `perf` | Perceived Load Speed Overhaul (Parallel Loading & Deferred Init) |
 
-### v0.1.092 — STONE SET C BLACK TEXTURE UPGRADE (FLOW-FIELD STREAMLINES): the slate texture that reads as "surface grain" instead of cracks. Full write-up: `stone_set_c_upgrade.md` (new). **Scope:** only `_getSlateTexture()` was modified — in both the test renderer (`test/stoneSetC/go-stone-renderer.js`, a standalone copy used by `test/stoneSetC/stone-preview.html`) and `annotation_v4.js`. Lighting, color, shape, white stones and `getStoneVariant` are untouched. The macro photo of real nachiguro shows the surface marks are NOT sparse random cracks — they are a DENSE FLOWING NETWORK of curved lines, like geological strata or a fingerprint whorl. The old 2-layer function (cloud blobs + fine speckle) becomes 4 layers: cloud blobs **adjusted** (7→8, highlight `rgba(200,205,208)` → `rgba(190,200,215)` to match nachiguro's blue-grey cast); fine speckle **unchanged**; **flow-field streamlines (new)**; **bright micro-flecks (new)**. The key addition is a sine-based flow field — a direction angle at every point `(px, py)` from two harmonics (`sin(rx·k·1.0 + ry·k·1.618 + phaseX)·π + sin(rx·k·2.414 − ry·k·0.866 + phaseY)·π·ampB`, `k = 2.0/radius`). **28 streamlines** seed across the stone and each follows the local field direction step by step (`flowStep = radius·0.032`); because the angle varies continuously across space, the lines naturally curve, loop and form enclosed regions — the organic whorl/strata quality — with no hand-authored paths. Per-stone variety comes from `phaseR/X/Y` derived from `cloudSeed` via a separate RNG stream (`_mulberry32(cloudSeed·6271 + 1777)`), so every stone gets a unique grain orientation that stays stable across redraws; `phaseR` also rotates the field. Micro-flecks: `fleckBrightness = 0.15 + rand()·0.4` is rolled once per stone (0.15–0.55), and each fleck's alpha is `(0.04 + rand()·0.08) · fleckBrightness` — effective per-fleck alpha **0.006–0.044**, barely perceptible, never glittery.
+##### Details
+parallel script loading, lazy audio, deferred non-critical init. The app's initial load felt sluggish despite running locally — three bottlenecks were identified and eliminated. **Item 1 — Parallel script download (`index.html:2661-2669`):** all 9 `<script>` tags in the body gained `defer`, so the browser downloads all scripts in parallel during HTML parsing instead of blocking each other sequentially. With `defer`, scripts execute in order after the DOM is fully parsed, preserving the existing dependency chain (sgf-parser → deadstones → … → annotation_v4.js). **Item 2 — Lazy SFX (`annotation_v4.js:26-47`):** the 8 sound effects (`stone`, `remove`, `capture`, `annot`, `annot-long`, `double-click`, `double-click-w`, `mode`) were eagerly decoded at load via `createSfx()` calls — each creating an `Audio` object and calling `.load()` on a ~25 KB base64-encoded MP3. Now replaced with a lazy `_getOrCreateSfx(key)` cache (a `Map` keyed by string); `playSfx()` accepts either a string key or an `Audio` object. The sound is created and decoded only on first play. The fast-forward animation pool (`_getSfxPool`) resolves lazily too — zero audio decoding happens at startup. **Item 3 — Deferred non-critical init (`annotation_v4.js:1351-1405`):** `init()` now loads saved board styles from localStorage (`_loadSavedBoardStyles`), sets the canvas wrapper sizes (`_applySavedBoardSizes`), and calls `drawBoard()` synchronously so the board is visible on first paint. The heavy secondary work — `setupEventListeners()` (~248 listeners), `setupGameInfoEdit()`, `initFloatingToolbar()` (panel DOM setup, accordion, drag handlers, style-input binding), `setupStudyMode`, deadstones WASM preload, scoring modal init, liberties/phase-bar wiring — is deferred via `requestIdleCallback` (with `setTimeout` fallback). `StudyRecordDB` and the four `window.*` phase/strategic functions were extracted to module scope so tests can access them immediately. **Key invariant:** `updateBoardWrapperSize()` sets `canvas.width` which **clears all canvas pixels** (standard canvas API behaviour), so it must run before `drawBoard()`, not after — the saved-style loading + wrapper sizing was extracted from `initFloatingToolbar()` into `_loadSavedBoardStyles()` + `_applySavedBoardSizes()` and placed in `init()` before the first draw, preventing the deferred init from blanking the canvas.
 
-**Verified.** `node --check` clean. annotation_v4.js is now 18,193 lines (texture block: cloud blobs ~6174-6198, flow field ~6205-6276, micro-flecks ~6278-6293); `test/stoneSetC/go-stone-renderer.js` 630 lines. Full `npm run test:all` green — the Set C texture change is additive (all suites pass); index.html cache-busters to 0.1.092. Version synced via `sync-docs.js` (SITEMAP frontmatter SSOT → index.html badge + `?v=` cache-busters, `tech-log/src/lib/version.ts`, `tech_log-0.1.092.html` redirect).
+##### Verification
+- `node --check` clean. `npm run test:all` green (196+ checks, 0 failed) — all 8 suites pass: bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, stone-offset 18, custom-stones 24+. annotation_v4.js is now 18,394 lines (lazy SFX 26-47, deferred init 1351-1405, `_loadSavedBoardStyles` 1298-1337, `_applySavedBoardSizes` 1339-1349); index.html is 2,671 lines (cache-busters to 0.2.000, all 9 script tags deferred).
 
-### v0.1.091 — BM NO LONGER ERASES GRID LINES AROUND STONES (THE "HOLLOW RING"): the bright/dark ring around every stone on image-background boards is gone. Root cause found by pixel-probing the real initial canvas in Brave (headless): `drawCellContent`'s composite Board Mask fills the mask circle with the board surface, which **erases the grid lines** that cross the stone out to the mask edge (`bmSize` r=15 vs stone r=13.2). On an image board the mask band reads as a visible "hollow ring" where the grid visibly stops short of the stone — identical on Stone Sets A/B/C and solid stones (so v0.1.090's shadow tweak was not the culprit). Scanline proof along grid line 9 through a centre stone: inside the mask the sampled pixel jumped to the raw texture gold `#f1c937` while the board beyond showed the grid-line-darkened `#8b7314`. **Fix:** after the BDL layer, the BM re-strokes this cell's own interior row/column lines across the mask band, clipped to the mask circle, using the board's own grid colour and width (`style.grid.lineColor` with the same `|| '#1C1917'` fallback as the base loop; raw `lineSize` on initial/study, `max(1.2, cellSize*0.035)*lineSize` on export). Boundary lines (r/c = 0/18) were already restored by the BDL layer, so edge stones on the 1/19/A/T lines keep their proper border overhang. After-pixel proof: the mask band now matches the board tone (`#968337` vs board `#8a7214`) and the bright gap is gone on centre, top-edge and black stones; corner stones render identically before/after.
+---
 
-**Verified.** `test/_pixel_probe.js` (scratch, deleted) drove the real canvas in headless Brave with an image BG and stones on the 0/9/18 lines, before/after via `git stash`: every scanline through a stone now shows the grid line restored in the mask band, matching the board. Full `npm run test:all` green (7 suites, 183 checks — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip). `node --check` clean. annotation_v4.js is now 18,133 lines (interior grid-line restoration after the BDL block in the composite mask); index.html cache-busters to 0.1.091.
+### v0.1.095 — Stone X/Y Offset (Layer 1 Surface Only)
 
-### v0.1.090 — STONE SET A/B GREY "HOLLOW RING" REMOVED + SESSION-STYLE RIM MIGRATION: the grey ring/halo around stones on the **initial board** (both colours, most visible with an image board BG) is gone. Root cause was **Stone Sets A and B**, not the BM/BR layers: `drawCellContent`'s gradient path for Sets A/B cast a heavier drop shadow (`shadowColor rgba(0,0,0,0.5)`, `shadowBlur max(3, radius·0.25)`, offsets `max(2, radius·0.15)` both axes) and stroked a grey rim on white stones (`#888888` Set A, `#a09880` Set B) at the stone perimeter — together reading as a thin dark/grey hollow ring around every A/B stone on the large initial canvas, while **Set C (`drawGoStone`) and custom/image stones stayed clean** because `drawGoStone` uses a lighter 0.45-alpha shadow and clears it (`:6298`) before any texture work, with no grey rim stroke. **Fix:** Set A/B now use exactly Set C's shadow (`rgba(0,0,0,0.45)`, `shadowBlur max(3, radius·0.28)`, offsets `max(2, radius·0.14)` / `max(2, radius·0.18)`) and the two grey white-rim strokes are removed, so all three sets render with the same clean edge (verified: A/B/C now record identical `shadowColor`/`shadowBlur`/offsets and no `#a09880`/`#888888` stroke). **Session-style rim migration:** the legacy white-rim downgrade (`brSize: 1` + `br: '#111827'` → `0`) from v0.1.089 is now also applied inside `getEffectiveInitialStyle()` (`annotation_v4.js:13857-13860`) — session styles captured in a Rec's `settings` never went through the page-load localStorage migration, so an open session could still draw the old white BR ring; `migrateLegacyWhiteRim` was hoisted to module scope (`:13846-13851`) and is applied to `gameBoardStyle` on every call (idempotent, null-safe).
+#### Bug Fixes
 
-**Verified.** `test/_dump_sets.js` (scratch, deleted) drove `drawCellContent` for Set A/B/C × white/black against a recording mock ctx on lightpanda: all six now share Set C's shadow params with no grey rim stroke. Full `npm run test:all` green (7 suites, 183 checks — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip). `node --check` clean. annotation_v4.js is now 18,101 lines; index.html cache-busters to 0.1.090.
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Stone X/Y Offset (Layer 1 Surface Only) |
 
-### v0.1.088 — "STONES" DOCS SECTION + COMPOSITE BOARD MASK FOR EDGE STONES: the docs page `system-design/stone-sets` is renamed to `system-design/stones` — a **Stones** section (with "Stone Sets" as a sub-section), served at `localhost:8577/tech-log-dist/docs/system-design/stones/` — and gains two new sub-sections. **The Stone's Elements** documents the 11-field per-element table (`bmSize`, `bgSize`, `bg`, `br`, `brSize`, `brRadius`, `brBlur`, `fg`, `fgSize`, `useColor`, `imgSrc`) and **How The Elements Compose** the 4 render layers (BM → BRr → surface → labels). **Edge Stones and the Board Mask** documents the new composite Board Mask: on every board except the Manual Scoring Modal, `drawCellContent`'s BM is no longer a single board-surface fill but a composite that mirrors the real draw order — the frame margin colour (`border.color`, or the board colour when the border override is OFF) fills the whole mask circle, the board surface (wood texture / solid bg) is painted on top clipped to the playing area, and finally the outer grid lines (the **BDL**: `grid.boundaryColor` / `grid.boundarySize`) are re-stroked where they cross the mask so an edge stone on the A/T/1/19 lines reads as Board's Border/BG exactly like the board behind it instead of erasing the boundary line under the mask. The mask region beyond the wood rect stays transparent so the pre-rendered canvas background shows through; the MSM scoring board keeps the legacy single-fill mask. **The BDL now joins as a perfect corner, and the interior grid lines are untouched.** The outer boundary line (the BDL) is stroked as a single `strokeRect` (`annotation_v4.js:5332-5343`) — the same way the MSM scoring board strokes its wood outline (`strokeRect` at :5197-5200) — so its 4 corners are clean miter joins instead of two independently butt-capped line ends meeting (a sub-pixel notch that shows up at thick boundary sizes); the export renderer gets a matching BDL corner fill at each shared boundary corner (`annotation_v4.js:8305-8326`). The interior grid lines (`i = 1..17`) and the export's solid/dashed grid loops draw exactly as before.
+##### Details
+the Stones (Black & White) style section gains a **Stone Offset** sub-section inside Custom Stones (last item), with X Offset and Y Offset rows (slider ±10 px, step 0.01, number input). A single shared `stoneOffset: { x, y }` on the style object drives both colours — one setting applied to both Black and White stones. **Scope:** the offset applies to **LAYER 1 (Stone Surface) ONLY** — the visible stone disk (gradient / custom image / solid colour) shifts while LAYER 3 (Board Mask composite), LAYER 2 (Border Ring), labels, annotations, highlights (quarter/hoshi/cell, CIRCLE_F), move numbers and territory overlays all stay centered on the intersection. At offset 0 no `translate()` calls are emitted (zero overhead). The Stone Offset has its own reset button (`data-section="stoneOffset"`) in the Stones accordion header. **Reset Stones button fix:** the Stones header reset button (`data-section="stones"`) now resets **both** Black and White stone styles (and clears both B/W image caches), instead of only Black — `resetSectionGroups` map expands the virtual `'stones'` key to `['blackStone', 'whiteStone']` in the section-reset handler. **Style keys:** `stoneOffset: { x: 0, y: 0 }` added to `state.initialBoardStyle`, `state.studyBoardStyle`, `state.exportBoardStyle`, and `DEFAULT_INITIAL_BOARD_STYLE`; UI inputs `ib-stone-offset-x` / `ib-stone-offset-y` wired via `populateStyleInputs()` and `bindStyleInputsEvents()`.
 
-**Verified.** `test/verify_bm_edge_mask.js` (new, 17 checks) drives `drawCellContent` against a recording mock ctx: the BM composite clips to the mask, the margin layer fills the full wood rect, the board surface clips to the playing area (19×19 grid on initial, wood-rect inset by margin on export, whole wood rect when the border override is OFF), the BDL is stroked after the board-surface layer at the raw `boundarySize` on initial/study and at the export-scaled width, a center stone's BDL is clipped invisible, the MSM board emits no composite layers and keeps its legacy single fill, and override-OFF uses the board colour as the margin. Corner joint pixel-verified in Brave: with an 8px boundary the whole corner region (including the previously-notched outer square) renders `#111111` boundary — a fully merged corner — while a default 1.5px boundary renders pixel-identical to before. All prior suites pass — two-step 108, custom-stones 27+3 skip, territory-counts 36+4 skip, territory-freeze 21+7 skip, replace-territory 12+1 skip, replace-click 10, replace-fix 7, rearrange 6, Set C 13+12 skip. `node --check` clean. annotation_v4.js is now 18,079 lines (BDL strokeRect 5332-5343, export BDL corner fill 8305-8326, composite BM block 6716-6895), docs nav maps `'Stones': 'stones'` in `sync-docs.js`, the old `stone-set-a-debug-log.mdx` cross-link now points at `/tech-log-dist/docs/system-design/stones`, index.html cache-busters to 0.1.088.
+##### Verification
+- `test/verify_stone_offset.js` (new, 18 checks) drives `drawCellContent()` with a recording mock 2D context: default offset 0 emits no translate calls; offset (3,−2) shifts the surface arc to (303,298); the BM mask arc stays at (300,300); the BR ring arc stays at (300,300) (with `brSize: 10` enabled); the CIRCLE_F highlight stays at (300,300); exactly 1 translate call (surface block only); the label stays at the intersection; `populateStyleInputs` fills the inputs; `DEFAULT_INITIAL_BOARD_STYLE` carries `stoneOffset`; HTML inputs have ±10 px range and 0.01 step; Reset Stones button restores both Black and White defaults while leaving `stoneOffset` untouched. Full `npm run test:all` green — 7 suites, 0 failed (replace-click 10, replace-fix 7, rearrange 6, two-step 108, bm_edge_mask 22, white-rim 7, stone-offset 18). `node --check` clean. annotation_v4.js is now 18,299 lines; index.html cache-busters to 0.1.095.
 
-### v0.1.085 — STONE SET C RENDERED AS TRUE MATERIALS (v4), ALL 9 SUITES GREEN ON LIGHTPANDA: Set C's renderer (`annotation_v4.js:5982-6392`) is replaced with the v4 spec, calibrated against real photos of Kuroki Goishiten hamaguri and nachiguro slate. The two material fixes that matter most: (1) **hamaguri grain is nearly-parallel diagonal bands with a gentle bow from a FAR origin** — real photos show growth rings as parallel-ish bands, NOT tight concentric loops, because the shell hinge sits far outside the stone's patch; `_getHamaguriTexture(radius, ringCount=14, jitter=1, originAngle=-2.3, originDistMult=6)` places the origin at `radius·6` and draws ~40-point jittered polylines over `[originDist ± radius·1.15]` as 2:1 light `rgba(255,252,240,0.05-0.11)` vs shadow `rgba(150,124,80,0.06-0.14)` bands, seed 2024; and (2) **slate is matte, mottled, near-uniform black with NO specular overlay and NO rim darkening** — v3's bright glassy core + drop to near-black `#020303` rim were both wrong; v4's base gradient keeps the whole disk near one dark value (`core #333739→#37403f` by tint, `brightCore` lifted toward `#4a5153` by only `specStrength·0.6`, `rimColor` lerped toward `#000000` just 0.4, stops 0.00/0.45/1.00), the black specular overlay is deleted, and `_getSlateTexture(radius, cloudSeed=0)` renders 7 broad soft cloud blobs plus fine speckle capped at `min(700, radius·9)` (fixing v3's `radius²·0.35` compounding crush on large stones), seed `9911 + cloudSeed`.
+---
+
+### v0.1.094 — Stone Set C Black Texture (Procedural fBm Noise)
+
+#### Features
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `feat` | Stone Set C Black Texture (Procedural fBm Noise) |
+
+##### Details
+** `_hash2D`, `_smoothstep`, `_valueNoise2D`, `_fbm` (fBm: 4 octaves default, amplitude 0.5, lacunarity **2.15**, lattice hash `ix·374761393 + iy·668265263 + seed·1442695040888963407`, seed per octave `seed + o·101`) — inserted after `_lerpColor` in both `annotation_v4.js` and the test renderer. **`_getSlateTexture` rewritten:** for every pixel inside the stone circle it computes the classic Inigo Quilez domain warp — two 3-octave warp fields at offset frequencies/offsets (`_fbm(nx + cloudSeed·3.1, ny + cloudSeed·1.7, cloudSeed·7 + 1, 3)` and `_fbm(nx + cloudSeed·5.3 + 5.2, ny + cloudSeed·2.9 + 1.3, cloudSeed·11 + 2, 3)`), then a final 4-octave field offset by `warpStrength·(q−0.5)` with `warpStrength = 2.6`, `freq = 3.2/radius` (tied to radius so grain reads at the same visual scale on every stone size) and `grainAmp = 30` → `gray = clamp(round(128 + (warped − 0.5)·2·grainAmp))`, stamped into `createImageData` with alpha 255 inside / 0 outside the circle (no clip needed — the alpha channel is the mask, `putImageData` ignores clips). **Micro-flecks:** sparser and fainter (`FLECK_COUNT = min(30, floor(radius·0.4))`, `fleckBrightness = 0.15 + rand()·0.35` → 0.15–0.5, alpha `(0.05 + rand()·0.09)·fleckBrightness`, `rgba(225,230,240,…)`). **KEY CHANGE — `drawGoStone` composite:** the slate texture is now drawn with `ctx.globalCompositeOperation = 'overlay'` at `globalAlpha = 0.55` (was normal alpha compositing at 0.85), then reset to `source-over`. The texture is pure grayscale so 'overlay' can only scale luminance, never shift hue — color is carried solely by the base radial gradient, so "texture only, color untouched" holds and none of the `_lerpColor` color logic changed. Cache key unchanged (`slate_${Math.round(radius)}_${cloudSeed}`). Hamaguri/`getStoneVariant` untouched. **Scope:** both `annotation_v4.js` and `test/stoneSetC/go-stone-renderer.js` (standalone copy for `stone-preview.html`) kept in sync.
+
+##### Verification
+- `node --check` clean on both files; `npm run test:all` green (7 suites — bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip), plus `verify_stone_set_c` (13 pass, 12 skip) and `verify_custom_stones_expand` (27/27). No flow-field/cloud-blob residue (`rg` clean of `FLOW_LINE_COUNT`, `flowAlpha`, `CLOUD_COUNT`); single definitions of `_getSlateTexture`/`drawGoStone`/`getStoneVariant` in each file. index.html cache-busters to 0.1.094.
+
+---
+
+### v0.1.093 — Composite Board Mask Edge Stone Margin Fix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Composite Board Mask Edge Stone Margin Fix |
+
+##### Details
+THE BORDER FRAME COLOUR PAINTED UNDERNEATH EVERY STONE'S BOARD MASK (VISIBLE WHEN BOARD'S BORDER IS ON). When `borderOverrideOn` is ON, the composite Board Mask first filled the **border frame colour** (`marginColor`) across the entire mask circle, then clipped to the playing grid and painted the board surface (`bgColor`/`boardImage`) on top. On a clean solid-colour board the frame colour is the same as the surface, so the under-layer was invisible — but on **image-background boards the frame colour differs from the board surface**, and canvas 2D sub-pixel anti-aliasing along the 360° mask-circle boundary let the frame colour bleed out from underneath, producing the yellow-gold halo ring around **every** stone (this is what v0.1.091's grid-line re-stroke was symptom-patching). **Fix:** the composite mask now draws the board surface **directly** into the mask circle inside the playing grid — no frame colour is ever painted underneath an interior stone — and the border margin colour is drawn **only** when an edge stone's mask actually overhangs the playing grid onto the outer frame (`isOverhangingEdge`), using an **evenodd clip** (`wood rect` minus `board-area rect`) so the frame colour is restricted strictly to the outer margin band ∩ mask circle. **Two-pass rendering:** because the BM now carries the frame/margin layer, `drawCellContent` gained a `renderPass` parameter (`'all'` default, `'bm'`, `'stone'`) and the three board renderers — `renderBoardToCtx` (initial + study), `generateDiagramDataURL` (export), `renderScoringBoardToCtx` (MSM) — now draw all BMs first (Pass 1), then all stone surfaces + labels (Pass 2), so a stone's BM and frame-colour overhang can never paint over a neighbouring stone (previously each cell drew BM-then-stone in row-major order, so a later cell's BM could cover an earlier cell's stone edge). The MSM scoring board keeps its legacy single-fill BM. **Also fixed while reviewing:** the What-If preview call passed a `styleObj` into the new `renderPass` slot (was a previously-ignored 12th arg; with the new signature it suppressed both the BM and stone layers, so the What-If hover/stone would render nothing) — now passes `'all'`; and `isOverhangingEdge` compares the mask against the actual `boardArea` rect (grid when override ON) instead of the on-screen `PADDING` constants, which were wrong for the export renderer (right/bottom edge stones in small exports would miss the frame-colour overhang).
+
+##### Verification
+- `test/verify_bm_edge_mask.js` (re-scoped to the new order, 22 checks): the board-surface fill is the first wood-rect fill after the mask clip; an edge stone's margin fill comes **after** the board-surface layer and is **evenodd-clipped** to the outer frame (`clip('evenodd')` precedes the margin `fillRect`); the frame colour appears in fills for edge stones; a **centre stone draws NO margin fill and no evenodd clip** (the key regression guard — interior stones can no longer carry the frame colour underneath); study mirrors initial; the export BM is clipped to the wood rect inset by the margin with the margin fill after the board layer; Border Override OFF draws no margin fill even on an edge stone; MSM keeps the legacy single-fill mask. Full `npm run test:all` green (7 suites — bm_edge_mask 22, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip), plus `verify_stone_set_c` (13 pass, 12 skip) and `verify_custom_stones_expand` (27/27) on Brave. `node --check` clean. annotation_v4.js is now 18,279 lines (BM composite 6901-7026, two-pass at 5537/5564/8498/8517/17984/17999, `renderPass` signature 6622); index.html cache-busters to 0.1.093.
+
+---
+
+### v0.1.092 — Stone Set C Slate Flow-Field Texture Upgrade
+
+#### Refactoring
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `refactor` | Stone Set C Slate Flow-Field Texture Upgrade |
+
+##### Details
+the slate texture that reads as "surface grain" instead of cracks. Full write-up: `stone_set_c_upgrade.md` (new). **Scope:** only `_getSlateTexture()` was modified — in both the test renderer (`test/stoneSetC/go-stone-renderer.js`, a standalone copy used by `test/stoneSetC/stone-preview.html`) and `annotation_v4.js`. Lighting, color, shape, white stones and `getStoneVariant` are untouched. The macro photo of real nachiguro shows the surface marks are NOT sparse random cracks — they are a DENSE FLOWING NETWORK of curved lines, like geological strata or a fingerprint whorl. The old 2-layer function (cloud blobs + fine speckle) becomes 4 layers: cloud blobs **adjusted** (7→8, highlight `rgba(200,205,208)` → `rgba(190,200,215)` to match nachiguro's blue-grey cast); fine speckle **unchanged**; **flow-field streamlines (new)**; **bright micro-flecks (new)**. The key addition is a sine-based flow field — a direction angle at every point `(px, py)` from two harmonics (`sin(rx·k·1.0 + ry·k·1.618 + phaseX)·π + sin(rx·k·2.414 − ry·k·0.866 + phaseY)·π·ampB`, `k = 2.0/radius`). **28 streamlines** seed across the stone and each follows the local field direction step by step (`flowStep = radius·0.032`); because the angle varies continuously across space, the lines naturally curve, loop and form enclosed regions — the organic whorl/strata quality — with no hand-authored paths. Per-stone variety comes from `phaseR/X/Y` derived from `cloudSeed` via a separate RNG stream (`_mulberry32(cloudSeed·6271 + 1777)`), so every stone gets a unique grain orientation that stays stable across redraws; `phaseR` also rotates the field. Micro-flecks: `fleckBrightness = 0.15 + rand()·0.4` is rolled once per stone (0.15–0.55), and each fleck's alpha is `(0.04 + rand()·0.08) · fleckBrightness` — effective per-fleck alpha **0.006–0.044**, barely perceptible, never glittery.
+
+##### Verification
+- `node --check` clean. annotation_v4.js is now 18,193 lines (texture block: cloud blobs ~6174-6198, flow field ~6205-6276, micro-flecks ~6278-6293); `test/stoneSetC/go-stone-renderer.js` 630 lines. Full `npm run test:all` green — the Set C texture change is additive (all suites pass); index.html cache-busters to 0.1.092. Version synced via `sync-docs.js` (SITEMAP frontmatter SSOT → index.html badge + `?v=` cache-busters, `tech-log/src/lib/version.ts`, `tech_log-0.1.092.html` redirect).
+
+---
+
+### v0.1.091 — Grid Lines Restoration Under Board Mask
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Grid Lines Restoration Under Board Mask |
+
+##### Details
+the bright/dark ring around every stone on image-background boards is gone. Root cause found by pixel-probing the real initial canvas in Brave (headless): `drawCellContent`'s composite Board Mask fills the mask circle with the board surface, which **erases the grid lines** that cross the stone out to the mask edge (`bmSize` r=15 vs stone r=13.2). On an image board the mask band reads as a visible "hollow ring" where the grid visibly stops short of the stone — identical on Stone Sets A/B/C and solid stones (so v0.1.090's shadow tweak was not the culprit). Scanline proof along grid line 9 through a centre stone: inside the mask the sampled pixel jumped to the raw texture gold `#f1c937` while the board beyond showed the grid-line-darkened `#8b7314`. **Fix:** after the BDL layer, the BM re-strokes this cell's own interior row/column lines across the mask band, clipped to the mask circle, using the board's own grid colour and width (`style.grid.lineColor` with the same `|| '#1C1917'` fallback as the base loop; raw `lineSize` on initial/study, `max(1.2, cellSize*0.035)*lineSize` on export). Boundary lines (r/c = 0/18) were already restored by the BDL layer, so edge stones on the 1/19/A/T lines keep their proper border overhang. After-pixel proof: the mask band now matches the board tone (`#968337` vs board `#8a7214`) and the bright gap is gone on centre, top-edge and black stones; corner stones render identically before/after.
+
+##### Verification
+- `test/_pixel_probe.js` (scratch, deleted) drove the real canvas in headless Brave with an image BG and stones on the 0/9/18 lines, before/after via `git stash`: every scanline through a stone now shows the grid line restored in the mask band, matching the board. Full `npm run test:all` green (7 suites, 183 checks — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip). `node --check` clean. annotation_v4.js is now 18,133 lines (interior grid-line restoration after the BDL block in the composite mask); index.html cache-busters to 0.1.091.
+
+---
+
+### v0.1.090 — Stone Set A/B Drop Shadow & Halo Removal
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Stone Set A/B Drop Shadow & Halo Removal |
+
+##### Details
+the grey ring/halo around stones on the **initial board** (both colours, most visible with an image board BG) is gone. Root cause was **Stone Sets A and B**, not the BM/BR layers: `drawCellContent`'s gradient path for Sets A/B cast a heavier drop shadow (`shadowColor rgba(0,0,0,0.5)`, `shadowBlur max(3, radius·0.25)`, offsets `max(2, radius·0.15)` both axes) and stroked a grey rim on white stones (`#888888` Set A, `#a09880` Set B) at the stone perimeter — together reading as a thin dark/grey hollow ring around every A/B stone on the large initial canvas, while **Set C (`drawGoStone`) and custom/image stones stayed clean** because `drawGoStone` uses a lighter 0.45-alpha shadow and clears it (`:6298`) before any texture work, with no grey rim stroke. **Fix:** Set A/B now use exactly Set C's shadow (`rgba(0,0,0,0.45)`, `shadowBlur max(3, radius·0.28)`, offsets `max(2, radius·0.14)` / `max(2, radius·0.18)`) and the two grey white-rim strokes are removed, so all three sets render with the same clean edge (verified: A/B/C now record identical `shadowColor`/`shadowBlur`/offsets and no `#a09880`/`#888888` stroke). **Session-style rim migration:** the legacy white-rim downgrade (`brSize: 1` + `br: '#111827'` → `0`) from v0.1.089 is now also applied inside `getEffectiveInitialStyle()` (`annotation_v4.js:13857-13860`) — session styles captured in a Rec's `settings` never went through the page-load localStorage migration, so an open session could still draw the old white BR ring; `migrateLegacyWhiteRim` was hoisted to module scope (`:13846-13851`) and is applied to `gameBoardStyle` on every call (idempotent, null-safe).
+
+##### Verification
+- `test/_dump_sets.js` (scratch, deleted) drove `drawCellContent` for Set A/B/C × white/black against a recording mock ctx on lightpanda: all six now share Set C's shadow params with no grey rim stroke. Full `npm run test:all` green (7 suites, 183 checks — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip). `node --check` clean. annotation_v4.js is now 18,101 lines; index.html cache-busters to 0.1.090.
+
+---
+
+### v0.1.089 — White Stone Grey Rim Removal (BR Layer Default)
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | White Stone Grey Rim Removal (BR Layer Default) |
+
+##### Details
+the thin dark/grey halo seen around the edge of white Go stones is gone. Root cause: every default stone style had `whiteStone.br: '#111827'` with `brSize: 1`, and `drawCellContent`'s BR layer stroked that colour as a ring hugging the stone edge — `currentStoneBrSize = (brSize/10)·currentStoneRadius·0.3` (`annotation_v4.js:6615-6619`), arc at `currentStoneRadius + currentStoneBrRadius + currentStoneBrSize/2` (`:7049-7062`) — visible against any non-white background, most obviously on the study board and on the initial board when its BG is set to an image. Pixel probing showed the artifact as a 1.3px band (`#ac976a`/`#aa8f57`) at r≈12.2–13.4 just inside the stone edge. **Fix:** all four default styles (initial, study, export, scoring) now use `brSize: 0`, so the BR block is skipped entirely and the stone edge blends cleanly into the board (probe: the dark band is replaced by a natural wood-blend `#f9d340`/`#e1be79`), while the stone's silhouette and shading are untouched. The BR feature is still fully honoured whenever a user explicitly sets `brSize > 0`. **Migration:** `initFloatingToolbar` applies `window.migrateLegacyWhiteRim()` to every saved board style loaded from localStorage — a saved `whiteStone.brSize: 1` with `br: '#111827'` (the old default) is downgraded to `0`, so already-saved styles lose the ring too; any non-default rim colour is preserved exactly. No rendering logic was touched beyond the defaults and the migration; grid loops draw exactly as before.
+
+##### Verification
+- `test/verify_white_rim_removed.js` (new, 7 checks) drives `drawCellContent` against a recording mock ctx on lightpanda (no Brave): a default white stone draws **no** `#111827` stroke; an explicit `brSize: 1` still draws the BR ring at exactly `stoneRadius + brSize/2` (13.398px vs 13.2 stone, 15 mask); black stones are unaffected; `migrateLegacyWhiteRim` downgrades the legacy `brSize: 1` style, preserves a user's own rim colour, and is null-safe; no page errors. All suites pass — bm_edge_mask 17, white-rim 7, two-step 108, replace-click 10, replace-fix 7, rearrange 6, territory-freeze 21+7 skip. `node --check` clean. annotation_v4.js is now 18,095 lines (BR block 7049-7062, brSize scaling 6615-6619, migration in `initFloatingToolbar`), index.html cache-busters to 0.1.089, `npm run test:all` now also runs the BM-edge-mask and white-rim suites.
+
+---
+
+### v0.1.088 — Stones Documentation & Composite Board Mask
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Stones Documentation & Composite Board Mask |
+
+##### Details
+the docs page `system-design/stone-sets` is renamed to `system-design/stones` — a **Stones** section (with "Stone Sets" as a sub-section), served at `localhost:8577/tech-log-dist/docs/system-design/stones/` — and gains two new sub-sections. **The Stone's Elements** documents the 11-field per-element table (`bmSize`, `bgSize`, `bg`, `br`, `brSize`, `brRadius`, `brBlur`, `fg`, `fgSize`, `useColor`, `imgSrc`) and **How The Elements Compose** the 4 render layers (BM → BRr → surface → labels). **Edge Stones and the Board Mask** documents the new composite Board Mask: on every board except the Manual Scoring Modal, `drawCellContent`'s BM is no longer a single board-surface fill but a composite that mirrors the real draw order — the frame margin colour (`border.color`, or the board colour when the border override is OFF) fills the whole mask circle, the board surface (wood texture / solid bg) is painted on top clipped to the playing area, and finally the outer grid lines (the **BDL**: `grid.boundaryColor` / `grid.boundarySize`) are re-stroked where they cross the mask so an edge stone on the A/T/1/19 lines reads as Board's Border/BG exactly like the board behind it instead of erasing the boundary line under the mask. The mask region beyond the wood rect stays transparent so the pre-rendered canvas background shows through; the MSM scoring board keeps the legacy single-fill mask. **The BDL now joins as a perfect corner, and the interior grid lines are untouched.** The outer boundary line (the BDL) is stroked as a single `strokeRect` (`annotation_v4.js:5332-5343`) — the same way the MSM scoring board strokes its wood outline (`strokeRect` at :5197-5200) — so its 4 corners are clean miter joins instead of two independently butt-capped line ends meeting (a sub-pixel notch that shows up at thick boundary sizes); the export renderer gets a matching BDL corner fill at each shared boundary corner (`annotation_v4.js:8305-8326`). The interior grid lines (`i = 1..17`) and the export's solid/dashed grid loops draw exactly as before.
+
+##### Verification
+- `test/verify_bm_edge_mask.js` (new, 17 checks) drives `drawCellContent` against a recording mock ctx: the BM composite clips to the mask, the margin layer fills the full wood rect, the board surface clips to the playing area (19×19 grid on initial, wood-rect inset by margin on export, whole wood rect when the border override is OFF), the BDL is stroked after the board-surface layer at the raw `boundarySize` on initial/study and at the export-scaled width, a center stone's BDL is clipped invisible, the MSM board emits no composite layers and keeps its legacy single fill, and override-OFF uses the board colour as the margin. Corner joint pixel-verified in Brave: with an 8px boundary the whole corner region (including the previously-notched outer square) renders `#111111` boundary — a fully merged corner — while a default 1.5px boundary renders pixel-identical to before. All prior suites pass — two-step 108, custom-stones 27+3 skip, territory-counts 36+4 skip, territory-freeze 21+7 skip, replace-territory 12+1 skip, replace-click 10, replace-fix 7, rearrange 6, Set C 13+12 skip. `node --check` clean. annotation_v4.js is now 18,079 lines (BDL strokeRect 5332-5343, export BDL corner fill 8305-8326, composite BM block 6716-6895), docs nav maps `'Stones': 'stones'` in `sync-docs.js`, the old `stone-set-a-debug-log.mdx` cross-link now points at `/tech-log-dist/docs/system-design/stones`, index.html cache-busters to 0.1.088.
+
+---
+
+### v0.1.085 — Stone Set C True Materials Specification (v4)
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Stone Set C True Materials Specification (v4) |
+
+##### Details
+Set C's renderer (`annotation_v4.js:5982-6392`) is replaced with the v4 spec, calibrated against real photos of Kuroki Goishiten hamaguri and nachiguro slate. The two material fixes that matter most: (1) **hamaguri grain is nearly-parallel diagonal bands with a gentle bow from a FAR origin** — real photos show growth rings as parallel-ish bands, NOT tight concentric loops, because the shell hinge sits far outside the stone's patch; `_getHamaguriTexture(radius, ringCount=14, jitter=1, originAngle=-2.3, originDistMult=6)` places the origin at `radius·6` and draws ~40-point jittered polylines over `[originDist ± radius·1.15]` as 2:1 light `rgba(255,252,240,0.05-0.11)` vs shadow `rgba(150,124,80,0.06-0.14)` bands, seed 2024; and (2) **slate is matte, mottled, near-uniform black with NO specular overlay and NO rim darkening** — v3's bright glassy core + drop to near-black `#020303` rim were both wrong; v4's base gradient keeps the whole disk near one dark value (`core #333739→#37403f` by tint, `brightCore` lifted toward `#4a5153` by only `specStrength·0.6`, `rimColor` lerped toward `#000000` just 0.4, stops 0.00/0.45/1.00), the black specular overlay is deleted, and `_getSlateTexture(radius, cloudSeed=0)` renders 7 broad soft cloud blobs plus fine speckle capped at `min(700, radius·9)` (fixing v3's `radius²·0.35` compounding crush on large stones), seed `9911 + cloudSeed`.
 
 `_parseColor` now accepts both `#rrggbb` and `rgb(r,g,b)` and `_lerpColor` routes through it — this fixes a real v3 bug where chained lerps fed the rgb output of one `_lerpColor` call into a hex-only parser, NaN-coerced by bitwise ops to black, silently collapsing every slate stone regardless of tint/value. `drawGoStone` destructures `ringCount, ringJitter, originAngle, originDistMult, whiteness, cloudSeed, tintAmount, valueShift, specularStrength`. Hamaguri now draws whites `#fffdf6`/`#f8f0da`, mid `#efdfbb`→`#f6eeda` and edge `#dcc593`→`#e6d4a8` by `whiteness`, a warm translucent rim band over radius 0.72→1.0 (`rgba(200,160,90,0)`→`rgba(160,120,60,0.22)`), a glint peaked at `0.75·specularStrength` at `(cx+0.1r, cy+0.02r)`, and a thin `rgba(150,120,70,0.4)` rim stroke (`max(0.5, r·0.02)`). `getStoneVariant` (seed `(row·19+col)·137 + (B?911:313)`) rolls per position: Black → `tintAmount rand()`, `valueShift (rand()-0.5)·1.2`, `cloudSeed floor(rand()·10000)`, `specularStrength rand()·0.5` (HARD CAP 0.5); White → `snowProbability 0.2` (ADJUSTABLE; real incidence ~5-10%), Snow grade `ringCount 30-46 / ringJitter 0.3-0.65 / originDistMult 7-10 / whiteness 0.75-1.0`, Blossom `8-17 / 0.7-1.5 / 3.5-6 / 0.1-0.65`. The `useGradientC` hook (6843-6850) passes the live loop vars `r`/`c` to `getStoneVariant` — no code change needed there.
 
 **Test infrastructure — lightpanda is now the ONLY test runner** (per user directive; Brave removed). `test/lightpanda-launcher.js` gains `probeCapabilities(page)` (probes `createRadialGradient` on a fresh canvas → `caps.gradients`, and a 123px div's `getBoundingClientRect().height` → `caps.layout`, since lightpanda measures layout ≈5px) and spawns `lightpanda serve ... --enable-external-stylesheets` (CSS required). Pixel/layout-reliant checks are `[SKIP]`ped on lightpanda (`caps.gradients` gates render/pixel checks, `caps.layout` gates layout-height and real-click-through-overlay checks) so the harnesses stay green — excluded from pass/fail, counted in the skipped column. `test/verify_territory_counts.js` (575 → 609 lines) adds the probe + `skip()` helper, gates the three badge-fill checks (merged-fill count, dame badge disappearance, post-lock badge render) and replaces the real `page.click` through the frozen overlay with a `LAYOUT_OK`-gated click + a direct state/redraw fallback so the frozen-regular-font check still runs everywhere.
 
-**Verified.** All 9 suites green on lightpanda (239 passed, 0 failed, 27 skipped = 266 checks): two-step 108, custom-stones-expand 27+3 skip, territory-counts 36+4 skip, territory-frozen 21+7 skip, replace-territory 12+1 skip, replace-click 10, replace-fix 7, rearrange 6, Set C 12+12 skip (render/pixel checks gated — lightpanda has no canvas gradients, so stone rendering is unreachable there; the variant/purity/determinism/bucket logic runs). `test/verify_stone_set_c.js` restored to 24 checks re-calibrated to v4: `valueShift` in `-0.6..0.6`, integer `cloudSeed`, `originDistMult` range, Snow/Blossom bucket consistency, both grades present across a 19×19 board of white stones. `node --check` clean. annotation_v4.js is now 17,807 lines (renderer block 5982-6392, useGradientC hook 6843-6850), territory-counts harness 609 lines, Set C harness 215 lines, index.html 2,641 (cache-busters to 0.1.085).
+##### Verification
+- All 9 suites green on lightpanda (239 passed, 0 failed, 27 skipped = 266 checks): two-step 108, custom-stones-expand 27+3 skip, territory-counts 36+4 skip, territory-frozen 21+7 skip, replace-territory 12+1 skip, replace-click 10, replace-fix 7, rearrange 6, Set C 12+12 skip (render/pixel checks gated — lightpanda has no canvas gradients, so stone rendering is unreachable there; the variant/purity/determinism/bucket logic runs). `test/verify_stone_set_c.js` restored to 24 checks re-calibrated to v4: `valueShift` in `-0.6..0.6`, integer `cloudSeed`, `originDistMult` range, Snow/Blossom bucket consistency, both grades present across a 19×19 board of white stones. `node --check` clean. annotation_v4.js is now 17,807 lines (renderer block 5982-6392, useGradientC hook 6843-6850), territory-counts harness 609 lines, Set C harness 215 lines, index.html 2,641 (cache-busters to 0.1.085).
 
-### v0.1.084 — W/# ITALIC HONORS "BOARD SAVED ✓" (FROZEN = REGULAR): the v0.1.082 italic trigger was tied to `interactionMode` only, but after Save the lock keeps `interactionMode` FORCED to `'replace'` — so the digits stayed italic even in the frozen "Board Saved ✓" state. The editing cue is now gated on the frozen state: `countsEditing = !scoringState.frozen && (interactionMode === 'replace' || interactionMode === 'rearrange')` (`annotation_v4.js:17610-17614`). So the digits render ITALIC while editing (post-lock Replacing / re-Arranging AND the Edit-unfrozen post-Save view) and return to REGULAR Figtree-SemiBold once the session is frozen — the frozen flag is the only reliable "not editing" signal since the lock permanently pins the mode to 'replace'.
+---
 
-**Verified.** `test/verify_territory_counts.js` (562 → 575 lines, 38 → 40 checks) added two checks around the Save/Edit transition: with `setScoringFrozen(true)` ("Board Saved ✓") a real toggle click's redraw captures all 6 digits as REGULAR (`16px Figtree, sans-serif` — no `italic`); after `setScoringFrozen(false)` (the Edit button) a manual redraw captures all 6 as `italic ... px 'Figtree'` again. The pre-lock marking and post-lock replace/re-arrange italic checks are unchanged. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 40, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 264 checks total. `node --check` clean. annotation_v4.js is now 17,744 lines (font block 17610-17614), territory-counts harness 575 lines, index.html 2,638 (cache-busters to 0.1.084).
+### v0.1.084 — Territory Count Font Italic State on Edit/Save
 
-### v0.1.083 — DISPLAY OPTIONS STAY CLICKABLE AFTER "BOARD SAVED ✓": the `#scoring-frozen-overlay` (index.html:1701) is an absolute `inset: 0` layer at `z-index: 100` that `setScoringFrozen(true)` shows over the whole modal body — so once Save Board froze the session, it silently swallowed EVERY pointer event beneath it, including the left sidebar's Display Options checkboxes (Show territory / w/# / Show dead stones / Show coordinates), which looked available but would not click. The frozen overlay still dims and locks the BOARD, but the left sidebar now rides ABOVE it (`position: relative; z-index: 101`, index.html:1704-1706) so the four Display Options toggles work in the "Board Saved ✓" state. That is safe because every sidebar control self-gates on frozen/locked anyway (board click `handleScoringBoardClick` returns on `frozen`, undo/redo, komi, rule-mode, lock, and clear-buckets are all no-ops), and the board canvas remains physically overlay-locked so a frozen board cannot be edited until the Edit button unfreezes.
+#### Features
 
-**Verified.** `test/verify_territory_counts.js` (528 → 562 lines, 35 → 38 checks) added three frozen-state checks: `setScoringFrozen(true)` shows the overlay (`display: block`) with w/# unchecked; a REAL Puppeteer/CDP hit-test click on `#scoring-opt-territory-counts` lands on the checkbox through the overlay and flips `scoringState.showTerritoryCounts` to true (proving the z-index 101 sidebar is clickable post-Save — the previous full-body overlay would have intercepted this click); and a dispatched canvas click at a grid intersection leaves `scoringState.board[3][3]` untouched (the board is still click-locked while frozen). All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 38, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 262 checks total. `node --check` clean. index.html is 2,638 lines (cache-busters to 0.1.083; sidebar z-index 101 at 1704-1706), territory-counts harness 562 lines.
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `feat` | Territory Count Font Italic State on Edit/Save |
 
-### v0.1.082 — W/# DIGITS NOW USE FIGTREE-SEMIBOLD (AND TURN ITALIC WHILE EDITING): the MSM "w/#" group-count numbers swap their `bold ... 'Pretendard'` canvas font for `'Figtree', sans-serif` (`annotation_v4.js:17603-17612`) — the registered 400-weight 'Figtree' face IS `f0nts/Figtree-SemiBold.ttf`, so the digits render in the semi-bold weight with no `bold` keyword (which would only stack a faux-bold on top of it). While an EDITING mode is active — the post-D&T-Lock counting modes `interactionMode === 'replace'` (Replacing Dead Stones) or `'rearrange'` (re-Arranging Stones) — the digits switch to the matching italic face (`figtree-SemiBoldItalic.ttf`) as a visual cue that the counts are still adapting to the playground edits; pre-lock marking (Mark Dead Stones / Mark Territories) and the frozen "Board Saved ✓" view stay non-italic. This is exactly when Display Options are all live anyway: the w/# checkbox (like Show territory / Show dead / Show coords) is never disabled, so after Save/Lock the full Display Options row — w/# included — remains available and the digits italicize only in the replace/re-arrange editing modes.
+##### Details
+the v0.1.082 italic trigger was tied to `interactionMode` only, but after Save the lock keeps `interactionMode` FORCED to `'replace'` — so the digits stayed italic even in the frozen "Board Saved ✓" state. The editing cue is now gated on the frozen state: `countsEditing = !scoringState.frozen && (interactionMode === 'replace' || interactionMode === 'rearrange')` (`annotation_v4.js:17610-17614`). So the digits render ITALIC while editing (post-lock Replacing / re-Arranging AND the Edit-unfrozen post-Save view) and return to REGULAR Figtree-SemiBold once the session is frozen — the frozen flag is the only reliable "not editing" signal since the lock permanently pins the mode to 'replace'.
 
-**Verified.** `test/verify_territory_counts.js` (506 → 528 lines, 32 → 35 checks) re-scoped the digit-capture patch from `/bold|700/` to Figtree-non-`normal` (`/Figtree/ && !/normal/` — the `normal ... 'Figtree'` comment labels and `system-ui` coordinate row digits are excluded, so the six count numbers are still captured exactly) and the font check now asserts Figtree-SemiBold with NO `bold`/`normal`/`italic`/Pretendard while marking; three new checks prove the italic: post-lock `applyScoringLock()` forces `interactionMode` to `'replace'`, so the locked 6-group shots all read `italic 17.4/21.6/... px 'Figtree'`, a replace that shrinks the black 6→5 keeps the italic on the adapted group, and forcing `'rearrange'` italicizes too (all six shots `italic ... px 'Figtree'`). All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 35, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 259 checks total (territory-frozen's pre-existing exact-pixel flake reproduced once 26/28 then passed 28/28; the badge code is fully gated behind `showTerritoryCounts`, false there). `node --check` clean. annotation_v4.js is now 17,741 lines (font block 17603-17612), territory-counts harness 528 lines, index.html 2,638 (cache-busters to 0.1.082).
+##### Verification
+- `test/verify_territory_counts.js` (562 → 575 lines, 38 → 40 checks) added two checks around the Save/Edit transition: with `setScoringFrozen(true)` ("Board Saved ✓") a real toggle click's redraw captures all 6 digits as REGULAR (`16px Figtree, sans-serif` — no `italic`); after `setScoringFrozen(false)` (the Edit button) a manual redraw captures all 6 as `italic ... px 'Figtree'` again. The pre-lock marking and post-lock replace/re-arrange italic checks are unchanged. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 40, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 264 checks total. `node --check` clean. annotation_v4.js is now 17,744 lines (font block 17610-17614), territory-counts harness 575 lines, index.html 2,638 (cache-busters to 0.1.084).
 
-### v0.1.081 — FONT FIXES: the 'SGF Properties' code text is no longer Courier New — the DD/MA/TB/TW labels and value lists (index.html:1918-1959) now render in the GoogleSansCode family (`'GoogleSansCode', 'GoogleSansCodeProp', monospace`), backed by a new `@font-face` that actually registers the `'GoogleSansCode'` family name (annotation.css:41-51) to `f0nts/GoogleSansCode_Proportional-Regular.ttf` (previously only referenced inline and silently falling through to `GoogleSansCodeProp`); and the main text now matches the site-wide body font — the Manual Scoring Modal root (index.html:1668) dropped `system-ui` for `'Anthropic Sans', -apple-system, ...` (the same stack the `body` rule uses), and the kifu status hint (index.html:2050) swapped its `-apple-system/Inter` stack for Anthropic Sans too. annotation.css cache-buster bumped 4.2 → 4.3.
+---
 
-**Verified.** Static font-fix sweep, verified by grep: the eight SGF Properties code-font spots in index.html (DD/MA/TB/TW labels + value lists, ~1918-1959) all read `'GoogleSansCode', 'GoogleSansCodeProp', monospace` and the remaining `Courier New` occurrences drop to 4 — every one a fallback position inside the separate SGF code-editor modal, where `'GoogleSansCode'` sits first; the `'GoogleSansCode'` family name is now genuinely registered (`@font-face` at annotation.css:41-51 → `f0nts/GoogleSansCode_Proportional-Regular.ttf`), so those inline references no longer silently fall through; the MSM root (index.html:1668) and the kifu status hint (index.html:2050) both carry the site-wide `'Anthropic Sans', -apple-system, ...` body stack. No behavior changes, so no harness churn — all 9 suites still pass at 256 checks. `node --check` clean. index.html is 2,638 lines (cache-busters to 0.1.081, `annotation.css?v=4.3`), annotation.css is now 4,192 lines.
+### v0.1.083 — Display Options Sidebar Clickability on Frozen Board
 
-### v0.1.080 — EVERY w/# TOGGLE REPLAYS THE POP-IN: the pop-in is no longer first-click-only — the checkbox `change` handler (`annotation_v4.js:15474-15489`) now bumps every `territoryBoxAnims` entry's `t0` to `performance.now()` whenever w/# turns ON, so the very next draw starts the ease-out-back scale over for ALL groups even when no count or extent changed; turning the toggle off draws nothing (fresh badges on a first-ever ON click still create their own entries). The self-driving `requestAnimationFrame` loop completes each replay on its own. Harness gained two re-pop regression checks (toggle off→on with NO data change → badges must be mid-animation at ~120ms with fresh timestamps, then reach full scale without a manual redraw): 32 checks, all suites green at 256.
+#### Features
 
-**Verified.** `test/verify_territory_counts.js` (473 → 506 lines, 30 → 32 checks) added the re-pop regression right after the first-click pop proof: it toggles w/# off then back on with the SAME count and extent, waits 120ms, and asserts all 24 captured cells are mid-scale (between 5% and 99% of `CELL`) with all six `territoryBoxAnims` entries still inside their 350ms window (fresh `t0`), then waits out the rest and asserts the replay reached full scale on its own. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 32, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 256 checks total. `node --check` clean. annotation_v4.js is now 17,733 lines (toggle handler 15474-15489), territory-counts harness 506 lines, index.html 2,638 (cache-busters to 0.1.080).
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `feat` | Display Options Sidebar Clickability on Frozen Board |
 
-### v0.1.079 — ONE CONTINUOUS BOX PER TERRITORY AREA: the per-cell badges from v0.1.078 now merge into a single seam-free shape — all of a group's CELL-sized member squares join into ONE path (single `beginPath()` + per-corner subpaths + one `fill()`, nonzero winding) so the badge is a solid crossword-block outline with NO seams between cells and NO empty bounding-box padding. A member's corner is ROUNDED (`CELL·0.45`) only at an exposed OUTER corner — where BOTH the orthogonal neighbor and the next cell along that edge are outside the group — and stays SQUARE along straight edges; a cell whose four orthogonal neighbors are all in the group (interior) is a plain square. New shared `roundedRectPathCorners(ctx,x,y,w,h,rTL,rTR,rBR,rBL)` (17292-17317) takes per-corner radii (each clamped to `[0, min(r, w/2, h/2)]`) and builds a subpath WITHOUT `beginPath()`, so callers can accumulate one group's cells and fill once; `roundedRectPath` is now a single-radius wrapper that begins a fresh path then delegates (legacy callers keep fresh-path semantics). The ease-out-back pop-in still scales the whole merged shape about the group's intersection midpoint with re-pop on count OR extent change. Harness re-scoped: 24 member cells (each CELL-sized, radius rules per corner) + ONE merged fill per group (6 fills), 15 cells + 5 fills after dame removal, 24 cells + 6 fills post-lock — 30 checks, all suites green at 254.
+##### Details
+the `#scoring-frozen-overlay` (index.html:1701) is an absolute `inset: 0` layer at `z-index: 100` that `setScoringFrozen(true)` shows over the whole modal body — so once Save Board froze the session, it silently swallowed EVERY pointer event beneath it, including the left sidebar's Display Options checkboxes (Show territory / w/# / Show dead stones / Show coordinates), which looked available but would not click. The frozen overlay still dims and locks the BOARD, but the left sidebar now rides ABOVE it (`position: relative; z-index: 101`, index.html:1704-1706) so the four Display Options toggles work in the "Board Saved ✓" state. That is safe because every sidebar control self-gates on frozen/locked anyway (board click `handleScoringBoardClick` returns on `frozen`, undo/redo, komi, rule-mode, lock, and clear-buckets are all no-ops), and the board canvas remains physically overlay-locked so a frozen board cannot be edited until the Edit button unfreezes.
 
-**Verified.** `test/verify_territory_counts.js` (457 → 473 lines) re-scoped from per-cell fills to the merged model: `__tcBoxes` now captures `roundedRectPathCorners` calls (per-corner radii), and the color check moved from a per-cell 1:1 pairing to ONE merged fill per group (6 fills in row-major group order). The 30 checks now assert: 24 member cells each CELL-sized and centered on its intersection; the radius rule per corner (`CELL·0.45` only where the orthogonal neighbor AND the edge-adjacent cell are both outside the group — interior cells and straight-edge corners are square 0, verified across the "6" rect, the "9" square, the "2" domino, and the "5" bar); exactly 6 merged fills in black/white/black/black/black/white order; full-scale extents equal the intersection-oriented bboxes; dame removal drops 9 cells and ONE fill (24→15 cells, 6→5 fills); post-lock keeps 24 cells/6 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 30, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 254 checks total. `node --check` clean. annotation_v4.js is now 17,725 lines (merged badge block, `roundedRectPathCorners`/`roundedRectPath` at 17292-17317), territory-counts harness 473 lines, index.html 2,638 (cache-busters to 0.1.079).
+##### Verification
+- `test/verify_territory_counts.js` (528 → 562 lines, 35 → 38 checks) added three frozen-state checks: `setScoringFrozen(true)` shows the overlay (`display: block`) with w/# unchecked; a REAL Puppeteer/CDP hit-test click on `#scoring-opt-territory-counts` lands on the checkbox through the overlay and flips `scoringState.showTerritoryCounts` to true (proving the z-index 101 sidebar is clickable post-Save — the previous full-body overlay would have intercepted this click); and a dispatched canvas click at a grid intersection leaves `scoringState.board[3][3]` untouched (the board is still click-locked while frozen). All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 38, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 262 checks total. `node --check` clean. index.html is 2,638 lines (cache-busters to 0.1.083; sidebar z-index 101 at 1704-1706), territory-counts harness 562 lines.
 
-### v0.1.078 — Fix: every territory intersection now gets its own box — the v0.1.077 crossword badge drew only ONE cell per group because `roundedRectPath` begins a fresh path internally, so each member cell in the merged union wiped the previous ones and only the last cell of each group survived the `fill()`; now each member square is drawn AND filled on its own, so a group shows one distinct 40%-translucent rounded box per territory square, clustering along its actual area like letter cells in a crossword
+---
+
+### v0.1.082 — Territory Counter Figtree-SemiBold Typography
+
+#### Features
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `feat` | Territory Counter Figtree-SemiBold Typography |
+
+##### Details
+the MSM "w/#" group-count numbers swap their `bold ... 'Pretendard'` canvas font for `'Figtree', sans-serif` (`annotation_v4.js:17603-17612`) — the registered 400-weight 'Figtree' face IS `f0nts/Figtree-SemiBold.ttf`, so the digits render in the semi-bold weight with no `bold` keyword (which would only stack a faux-bold on top of it). While an EDITING mode is active — the post-D&T-Lock counting modes `interactionMode === 'replace'` (Replacing Dead Stones) or `'rearrange'` (re-Arranging Stones) — the digits switch to the matching italic face (`figtree-SemiBoldItalic.ttf`) as a visual cue that the counts are still adapting to the playground edits; pre-lock marking (Mark Dead Stones / Mark Territories) and the frozen "Board Saved ✓" view stay non-italic. This is exactly when Display Options are all live anyway: the w/# checkbox (like Show territory / Show dead / Show coords) is never disabled, so after Save/Lock the full Display Options row — w/# included — remains available and the digits italicize only in the replace/re-arrange editing modes.
+
+##### Verification
+- `test/verify_territory_counts.js` (506 → 528 lines, 32 → 35 checks) re-scoped the digit-capture patch from `/bold|700/` to Figtree-non-`normal` (`/Figtree/ && !/normal/` — the `normal ... 'Figtree'` comment labels and `system-ui` coordinate row digits are excluded, so the six count numbers are still captured exactly) and the font check now asserts Figtree-SemiBold with NO `bold`/`normal`/`italic`/Pretendard while marking; three new checks prove the italic: post-lock `applyScoringLock()` forces `interactionMode` to `'replace'`, so the locked 6-group shots all read `italic 17.4/21.6/... px 'Figtree'`, a replace that shrinks the black 6→5 keeps the italic on the adapted group, and forcing `'rearrange'` italicizes too (all six shots `italic ... px 'Figtree'`). All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 35, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 259 checks total (territory-frozen's pre-existing exact-pixel flake reproduced once 26/28 then passed 28/28; the badge code is fully gated behind `showTerritoryCounts`, false there). `node --check` clean. annotation_v4.js is now 17,741 lines (font block 17603-17612), territory-counts harness 528 lines, index.html 2,638 (cache-busters to 0.1.082).
+
+---
+
+### v0.1.081 — GoogleSansCode Monospace Font Family Integration
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | GoogleSansCode Monospace Font Family Integration |
+
+##### Details
+the 'SGF Properties' code text is no longer Courier New — the DD/MA/TB/TW labels and value lists (index.html:1918-1959) now render in the GoogleSansCode family (`'GoogleSansCode', 'GoogleSansCodeProp', monospace`), backed by a new `@font-face` that actually registers the `'GoogleSansCode'` family name (annotation.css:41-51) to `f0nts/GoogleSansCode_Proportional-Regular.ttf` (previously only referenced inline and silently falling through to `GoogleSansCodeProp`); and the main text now matches the site-wide body font — the Manual Scoring Modal root (index.html:1668) dropped `system-ui` for `'Anthropic Sans', -apple-system, ...` (the same stack the `body` rule uses), and the kifu status hint (index.html:2050) swapped its `-apple-system/Inter` stack for Anthropic Sans too. annotation.css cache-buster bumped 4.2 → 4.3.
+
+##### Verification
+- Static font-fix sweep, verified by grep: the eight SGF Properties code-font spots in index.html (DD/MA/TB/TW labels + value lists, ~1918-1959) all read `'GoogleSansCode', 'GoogleSansCodeProp', monospace` and the remaining `Courier New` occurrences drop to 4 — every one a fallback position inside the separate SGF code-editor modal, where `'GoogleSansCode'` sits first; the `'GoogleSansCode'` family name is now genuinely registered (`@font-face` at annotation.css:41-51 → `f0nts/GoogleSansCode_Proportional-Regular.ttf`), so those inline references no longer silently fall through; the MSM root (index.html:1668) and the kifu status hint (index.html:2050) both carry the site-wide `'Anthropic Sans', -apple-system, ...` body stack. No behavior changes, so no harness churn — all 9 suites still pass at 256 checks. `node --check` clean. index.html is 2,638 lines (cache-busters to 0.1.081, `annotation.css?v=4.3`), annotation.css is now 4,192 lines.
+
+---
+
+### v0.1.080 — Territory Counter Pop-In Animation Replay
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | Territory Counter Pop-In Animation Replay |
+
+##### Details
+the pop-in is no longer first-click-only — the checkbox `change` handler (`annotation_v4.js:15474-15489`) now bumps every `territoryBoxAnims` entry's `t0` to `performance.now()` whenever w/# turns ON, so the very next draw starts the ease-out-back scale over for ALL groups even when no count or extent changed; turning the toggle off draws nothing (fresh badges on a first-ever ON click still create their own entries). The self-driving `requestAnimationFrame` loop completes each replay on its own. Harness gained two re-pop regression checks (toggle off→on with NO data change → badges must be mid-animation at ~120ms with fresh timestamps, then reach full scale without a manual redraw): 32 checks, all suites green at 256.
+
+##### Verification
+- `test/verify_territory_counts.js` (473 → 506 lines, 30 → 32 checks) added the re-pop regression right after the first-click pop proof: it toggles w/# off then back on with the SAME count and extent, waits 120ms, and asserts all 24 captured cells are mid-scale (between 5% and 99% of `CELL`) with all six `territoryBoxAnims` entries still inside their 350ms window (fresh `t0`), then waits out the rest and asserts the replay reached full scale on its own. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 32, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 256 checks total. `node --check` clean. annotation_v4.js is now 17,733 lines (toggle handler 15474-15489), territory-counts harness 506 lines, index.html 2,638 (cache-busters to 0.1.080).
+
+---
+
+### v0.1.079 — Continuous Crossword Shape Territory Area Merging
+
+#### Features
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `feat` | Continuous Crossword Shape Territory Area Merging |
+
+##### Details
+the per-cell badges from v0.1.078 now merge into a single seam-free shape — all of a group's CELL-sized member squares join into ONE path (single `beginPath()` + per-corner subpaths + one `fill()`, nonzero winding) so the badge is a solid crossword-block outline with NO seams between cells and NO empty bounding-box padding. A member's corner is ROUNDED (`CELL·0.45`) only at an exposed OUTER corner — where BOTH the orthogonal neighbor and the next cell along that edge are outside the group — and stays SQUARE along straight edges; a cell whose four orthogonal neighbors are all in the group (interior) is a plain square. New shared `roundedRectPathCorners(ctx,x,y,w,h,rTL,rTR,rBR,rBL)` (17292-17317) takes per-corner radii (each clamped to `[0, min(r, w/2, h/2)]`) and builds a subpath WITHOUT `beginPath()`, so callers can accumulate one group's cells and fill once; `roundedRectPath` is now a single-radius wrapper that begins a fresh path then delegates (legacy callers keep fresh-path semantics). The ease-out-back pop-in still scales the whole merged shape about the group's intersection midpoint with re-pop on count OR extent change. Harness re-scoped: 24 member cells (each CELL-sized, radius rules per corner) + ONE merged fill per group (6 fills), 15 cells + 5 fills after dame removal, 24 cells + 6 fills post-lock — 30 checks, all suites green at 254.
+
+##### Verification
+- `test/verify_territory_counts.js` (457 → 473 lines) re-scoped from per-cell fills to the merged model: `__tcBoxes` now captures `roundedRectPathCorners` calls (per-corner radii), and the color check moved from a per-cell 1:1 pairing to ONE merged fill per group (6 fills in row-major group order). The 30 checks now assert: 24 member cells each CELL-sized and centered on its intersection; the radius rule per corner (`CELL·0.45` only where the orthogonal neighbor AND the edge-adjacent cell are both outside the group — interior cells and straight-edge corners are square 0, verified across the "6" rect, the "9" square, the "2" domino, and the "5" bar); exactly 6 merged fills in black/white/black/black/black/white order; full-scale extents equal the intersection-oriented bboxes; dame removal drops 9 cells and ONE fill (24→15 cells, 6→5 fills); post-lock keeps 24 cells/6 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 30, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 254 checks total. `node --check` clean. annotation_v4.js is now 17,725 lines (merged badge block, `roundedRectPathCorners`/`roundedRectPath` at 17292-17317), territory-counts harness 473 lines, index.html 2,638 (cache-busters to 0.1.079).
+
+---
+
+### v0.1.078 — Per-Intersection Territory Box Union Fix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | Per-Intersection Territory Box Union Fix |
+
+##### Details
+every territory intersection now gets its own box — the v0.1.077 crossword badge drew only ONE cell per group because `roundedRectPath` begins a fresh path internally, so each member cell in the merged union wiped the previous ones and only the last cell of each group survived the `fill()`; now each member square is drawn AND filled on its own, so a group shows one distinct 40%-translucent rounded box per territory square, clustering along its actual area like letter cells in a crossword
 
 **The union never happened — `roundedRectPath` resets the path.** v0.1.077 built the crossword shape as `beginPath()` → loop `roundedRectPath(...)` for every member → one `ctx.fill()`. But `roundedRectPath` itself calls `ctx.beginPath()` (`annotation_v4.js:17294`), so every cell after the first discarded the accumulating path — only the LAST member of each group was in the path when the single `fill()` ran. Result: exactly one box per territory area (the user's report: "boxes being drawn only one intersect per territory area"), even though the app intended a box per intersection.
 
 **Fix: one fill per cell.** The badge block (`annotation_v4.js:17622-17636`) now draws each member square and immediately fills it: for every `(my, mx)` it computes the cell (`CELL`-sized, centered on the grid intersection, radius `CELL·0.45`, scaled by the pop-in about the group's intersection midpoint) and runs `roundedRectPath` + `fill()` with the group's 40% territory color. Since each `roundedRectPath` legitimately starts its own path, each fill is exactly one cell. Every territory square in the group now renders its own distinct box; adjacent boxes abut edge-to-edge (each cell spans half a grid spacing from its center, so neighbors touch at their outer edges with the rounded-corner notches between), reading as a cluster of crossword letter cells that follows the group's actual shape. The digits, the pop-in bookkeeping (`territoryBoxAnims` keyed by centroid, count-or-extent re-pop), and the self-driving `requestAnimationFrame` loop that completes the first-click pop are unchanged.
 
-**Verified.** `test/verify_territory_counts.js` (452 → 457 lines) re-scoped the color check to the per-cell model: `__tcBoxes[i]` pairs 1:1 with `__tcBoxFills[i]` (each cell's fill call immediately follows its path call), and every one of the 24 cells must carry its group's color — black 40% on black territory, white 40% on white. All 29 checks pass: 24 cells each centered on its member intersection at `CELL` size with `CELL·0.45` radius; per-cell fill colors; full-scale union extents equal the intersection-oriented bboxes; size scaling; digits inside their group's extent; the first-click pop regression (boxes reach full scale with no manual redraw); dame removal drops 9 cells and 9 fills (24→15); post-lock keeps 24 cells/24 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 29, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 253 checks total. `node --check` clean. annotation_v4.js is now 17,705 lines (per-cell badge loop 17622-17636), territory-counts harness 457 lines, index.html 2,638 (cache-busters only).
+##### Verification
+- `test/verify_territory_counts.js` (452 → 457 lines) re-scoped the color check to the per-cell model: `__tcBoxes[i]` pairs 1:1 with `__tcBoxFills[i]` (each cell's fill call immediately follows its path call), and every one of the 24 cells must carry its group's color — black 40% on black territory, white 40% on white. All 29 checks pass: 24 cells each centered on its member intersection at `CELL` size with `CELL·0.45` radius; per-cell fill colors; full-scale union extents equal the intersection-oriented bboxes; size scaling; digits inside their group's extent; the first-click pop regression (boxes reach full scale with no manual redraw); dame removal drops 9 cells and 9 fills (24→15); post-lock keeps 24 cells/24 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 29, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 253 checks total. `node --check` clean. annotation_v4.js is now 17,705 lines (per-cell badge loop 17622-17636), territory-counts harness 457 lines, index.html 2,638 (cache-busters only).
 
-### v0.1.077 — The MSM "w/#" badge is now a CROSSWORD-STYLE shape that hugs the actual territory area — every territory square the group owns draws as a rounded cell centered on its grid intersection, merged into ONE fill (nonzero winding) so the box follows the group's outline with rounded outer corners and notched inner corners instead of a bounding rectangle — AND the pop-in drives itself to completion so the boxes appear on the first w/# click
+---
+
+### v0.1.077 — MSM Crossword-Style Territory Box
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | MSM Crossword-Style Territory Box |
+
+##### Details
+The MSM "w/#" badge is now a CROSSWORD-STYLE shape that hugs the actual territory area — every territory square the group owns draws as a rounded cell centered on its grid intersection, merged into ONE fill (nonzero winding) so the box follows the group's outline with rounded outer corners and notched inner corners instead of a bounding rectangle — AND the pop-in drives itself to completion so the boxes appear on the first w/# click
 
 **Bug 1 — the first w/# click drew nothing.** Every fresh badge starts its pop-in at `boxScale 0.05` (ease-out-back at `t=0`), and the toggle handler's single `drawBoard()` is the only redraw — so on the first click the badges were rendered at 5% scale and stayed there, invisible, until some unrelated redraw happened. Fix: the counter block now schedules its own follow-ups — while any `territoryBoxAnims` entry is still animating (`(now − t0) / 350 < 1`), it `requestAnimationFrame`s a full `window.drawBoard()` (`annotation_v4.js:17663-17671`). The loop self-terminates: once every entry reaches `t=1` no further frame is scheduled, and it stops naturally if the scoring canvas goes away. A harness can opt out via `window.__tcDisableTerritoryAnim` to keep capture draws deterministic.
 
 **Bug 2 — the box was a bounding rectangle, not the territory shape.** v0.1.075/076 drew one rounded rect over the group's bbox, so a non-rectangular territory got an empty padding box. Now each group draws a crossword-style union: for every member square `(my, mx)`, a `CELL`-sized rounded cell centered on its grid intersection (`roundedRectPath` with radius `CELL·0.45`, all added to one `beginPath`), then a single `fill()` — the nonzero winding rule merges abutting cells into one continuous shape that follows the group's outline. Rounded outer corners come from each cell's own corner arcs; a diagonal pair renders as two cells that touch only at a point (notched inner corner); a 2×3 block renders as a smooth 2×3 rounded plate. The pop-in still pivots about the group's intersection midpoint (`boxCX = PADDING + (fcMin+fcMax)/2·CELL`), scaling every cell about it, so at `scale=1` each cell lands exactly on its intersection. Digits, fills (`rgba(17,24,39,0.4)` black / `rgba(255,255,255,0.4)` white), and the count-or-extent re-pop trigger are unchanged.
 
-**Verified.** `test/verify_territory_counts.js` (414 → 452 lines, 28 → 29 checks) gained the bug-1 regression — after the real toggle click the harness waits 450ms with NO manual redraw and asserts the pop-in loop drew every one of the 24 member cells to full scale (`framesDrew=528 fullScaleCells=144 shots=132 anims=6`) — and re-scoped the badge checks to the crossword model: 24 cells each centered on its member intersection at `CELL` size with `CELL·0.45` radius; the six fills in row-major group order are black/white 40% as owned (`[B,W,B,B,B,W]`); at full scale each group's union extent equals its intersection-oriented bbox exactly; size scaling holds (3-cell-tall 6/9, 5-wide 5); every digit inside its group's union; dame removal drops 9 cells (24→15) and one fill; post-lock keeps 24 cells / 6 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 29, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 253 checks total (territory-frozen clean; the pop-in loop is fully gated behind `showTerritoryCounts`, which stays `false` there). `node --check` clean. annotation_v4.js is now 17,706 lines (badge union 17595-17637, pop-in loop 17663-17671), territory-counts harness 452 lines, index.html 2,638 (cache-busters only).
+##### Verification
+- `test/verify_territory_counts.js` (414 → 452 lines, 28 → 29 checks) gained the bug-1 regression — after the real toggle click the harness waits 450ms with NO manual redraw and asserts the pop-in loop drew every one of the 24 member cells to full scale (`framesDrew=528 fullScaleCells=144 shots=132 anims=6`) — and re-scoped the badge checks to the crossword model: 24 cells each centered on its member intersection at `CELL` size with `CELL·0.45` radius; the six fills in row-major group order are black/white 40% as owned (`[B,W,B,B,B,W]`); at full scale each group's union extent equals its intersection-oriented bbox exactly; size scaling holds (3-cell-tall 6/9, 5-wide 5); every digit inside its group's union; dame removal drops 9 cells (24→15) and one fill; post-lock keeps 24 cells / 6 fills. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 29, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 253 checks total (territory-frozen clean; the pop-in loop is fully gated behind `showTerritoryCounts`, which stays `false` there). `node --check` clean. annotation_v4.js is now 17,706 lines (badge union 17595-17637, pop-in loop 17663-17671), territory-counts harness 452 lines, index.html 2,638 (cache-busters only).
 
-### v0.1.076 — The MSM "w/#" territory-count badge is now intersection-oriented: its rounded box anchors to the grid INTERSECTIONS — edges midway between grid lines, half a grid spacing outside the group's outermost points — instead of sitting on the outer grid lines, so a single territory point gets a box centered on its intersection and a multi-point group's box is centered on the group's intersection midpoint
+---
+
+### v0.1.076 — MSM Intersection-Oriented Territory Counter
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | MSM Intersection-Oriented Territory Counter |
+
+##### Details
+its rounded box anchors to the grid INTERSECTIONS — edges midway between grid lines, half a grid spacing outside the group's outermost points — instead of sitting on the outer grid lines, so a single territory point gets a box centered on its intersection and a multi-point group's box is centered on the group's intersection midpoint
 
 **The v0.1.075 box was anchored to cells, not points.** The v0.1.075 badge spanned `PADDING + fcMin·CELL .. PADDING + (fcMax+1)·CELL` (and the same for rows) — i.e., its edges sat ON the outer grid lines of the group. But a Go group's territory points sit ON those grid lines (each territory square renders centered on an intersection, `CELL·0.45` half-size), so the box was offset half a grid spacing from the territory: it clipped the squares that straddle the top/left grid lines, and a single "1" got a box whose corner coincided with its intersection rather than one centered on it. The box must be intersection-oriented — the natural frame for points lying on grid lines.
 
 **Fix: shift the box half a grid spacing outward on each axis.** The badge block in `renderScoringBoardToCtx` (`annotation_v4.js:17595-17621`) now anchors the box to the mid-gap between grid lines: `boxX0 = PADDING + (fcMin − 0.5)·CELL`, `boxY0 = PADDING + (frMin − 0.5)·CELL`, spanning to `PADDING + (fcMax + 0.5)·CELL` / `PADDING + (frMax + 0.5)·CELL`. Width and height are unchanged (`(fcMax−fcMin+1)·CELL`, `(frMax−frMin+1)·CELL`) — only the origin moves, so each box shifts −0.5·CELL in both axes and its center becomes the group's intersection midpoint (`PADDING + (fcMin+fcMax)/2·CELL`), the exact spot the count digit already sits for the odd groups and the natural center for the even ones. Every territory square is now fully enclosed with a uniform half-spacing frame, a single-point group gets a `CELL`-sized box centered on its intersection, and the ease-out-back pop-in (which pivots about that box center) grows from the territory's middle. The digit, fills (`rgba(17,24,39,0.4)` black / `rgba(255,255,255,0.4)` white), pure Pretendard text, and the count-or-extent re-pop trigger are unchanged.
 
-**Verified.** `test/verify_territory_counts.js` (413 → 414 lines) re-anchored every expected box to the intersection frame — `[PADDING−0.5·CELL, PADDING−0.5·CELL, 2·CELL, 3·CELL]` for the black 2×3 "6", `[PADDING+13.5·CELL, PADDING+17.5·CELL, 5·CELL, CELL]` for the white 1×5 "5", `[PADDING+9.5·CELL, PADDING+3.5·CELL, 3·CELL, 3·CELL]` for the white "9", `[PADDING+3.5·CELL, PADDING+7.5·CELL, CELL, CELL]` for each black "1" — and the color/center mapping now matches the intersection midpoints (the "6" centers at `PADDING+0.5·CELL, PADDING+1.0·CELL`, the "5" at `PADDING+16·CELL, PADDING+18·CELL`, etc.). All 28 checks pass: one box per group covering its territory, black/white 40% fills, full-scale rects equal the intersection-oriented bboxes exactly, size scaling (3-cell-tall 6/9, 5-wide 5, 2-wide 2), every digit inside its box (the "6" digit now sits dead-center of its box at the group's intersection midpoint), and pop-in bookkeeping. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 28, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 252 checks total (territory-frozen clean this run). `node --check` clean. annotation_v4.js is now 17,687 lines (badge block 17595-17621), territory-counts harness 414 lines, index.html 2,638 (cache-busters only).
+##### Verification
+- `test/verify_territory_counts.js` (413 → 414 lines) re-anchored every expected box to the intersection frame — `[PADDING−0.5·CELL, PADDING−0.5·CELL, 2·CELL, 3·CELL]` for the black 2×3 "6", `[PADDING+13.5·CELL, PADDING+17.5·CELL, 5·CELL, CELL]` for the white 1×5 "5", `[PADDING+9.5·CELL, PADDING+3.5·CELL, 3·CELL, 3·CELL]` for the white "9", `[PADDING+3.5·CELL, PADDING+7.5·CELL, CELL, CELL]` for each black "1" — and the color/center mapping now matches the intersection midpoints (the "6" centers at `PADDING+0.5·CELL, PADDING+1.0·CELL`, the "5" at `PADDING+16·CELL, PADDING+18·CELL`, etc.). All 28 checks pass: one box per group covering its territory, black/white 40% fills, full-scale rects equal the intersection-oriented bboxes exactly, size scaling (3-cell-tall 6/9, 5-wide 5, 2-wide 2), every digit inside its box (the "6" digit now sits dead-center of its box at the group's intersection midpoint), and pop-in bookkeeping. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-counts 28, territory-frozen 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 252 checks total (territory-frozen clean this run). `node --check` clean. annotation_v4.js is now 17,687 lines (badge block 17595-17621), territory-counts harness 414 lines, index.html 2,638 (cache-busters only).
 
-### v0.1.075 — The MSM "w/#" rounded badge now COVERS the whole territory area of its group: the box is sized to the group's full-cell bounding box (every territory square it owns) instead of hugging just the digits — so a big territory shows one translucent rounded box around its entire region, while the count digit, colors, translucency, and pop-in animation stay exactly as v0.1.074
+---
+
+### v0.1.075 — MSM Group Territory Area Coverage
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | MSM Group Territory Area Coverage |
+
+##### Details
+the box is sized to the group's full-cell bounding box (every territory square it owns) instead of hugging just the digits — so a big territory shows one translucent rounded box around its entire region, while the count digit, colors, translucency, and pop-in animation stay exactly as v0.1.074
 
 **The badge grew from the digits to the territory.** v0.1.074 sized each rounded box to the measured count text (`boxW = textWidth + 2·padX`, `boxH = fontPx·1.68`) — a small pill around the number. The request was that the box cover the entire territory area, so the counter block in `renderScoringBoardToCtx` (`annotation_v4.js:17571-17630`) now tracks each group's extent while BFS-ing members — `frMin/frMax/fcMin/fcMax` join the existing centroid sums in the member loop (`:17569-17580`) — and draws the box as the group's FULL-CELL bounding box: `boxX0 = PADDING + fcMin·CELL`, `boxY0 = PADDING + frMin·CELL`, `boxW = (fcMax−fcMin+1)·CELL`, `boxH = (frMax−frMin+1)·CELL`. The box therefore spans every territory square the group owns (plus the half-cell frame around them, since territory squares render at `CELL·0.45`), so a 3×3 territory shows one rounded rectangle around all nine squares and a single "1" shows a cell-sized box. Corner radius is `min(CELL·0.45, boxW/2, boxH/2)` (a modest rounded corner, no longer a pill); fill stays 40%-translucent in the territory color (`rgba(17,24,39,0.4)` black / `rgba(255,255,255,0.4)` white); the digits stay the v0.1.073 pure Pretendard text at the group centroid.
 
 **The pop-in now pivots about the box's own center.** Because the box is anchored to the territory's bbox (its settled position is `(boxX0, boxY0, boxW, boxH)`), the ease-out-back scale animation scales about the bbox center `boxCX/boxCY` — `roundedRectPath(ctx, boxCX−bw/2, boxCY−bh/2, bw, bh, rad)` — so at `scale=1` the box lands exactly on the territory bbox, and mid-pop it grows outward from the territory's middle. The `territoryBoxAnims` Map entry now also records the four extent values, and the re-pop trigger is `count` OR any extent change — so a replace/re-arrange that moves a group's boundary re-pops the box even when the count is unchanged. The centroid-based key (`Math.round(fr·10),Math.round(fc·10)`) is unchanged, and the per-draw prune against `seenKeys` is unchanged.
 
-**Verified.** `test/verify_territory_counts.js` (383 → 413 lines, 26 → 28 checks) re-scoped the badge checks to the new geometry: each of the 6 badges' centers match its group's bbox center (stable under the scale pivot) and its fill is still black-40% on black territory / white-40% on white territory; at full scale (animation settled after 450ms) every badge rect equals the group's full-cell bbox exactly (`[36,36,59,88]` for the black 2×3 "6", `[447,564,147,29]` for the white 1×5 "5", `[153,359,59,29]` for the 1×2 "2", etc., each within 1px); badge size scales with territory size (the 3-cell-tall "6"/"9" boxes are taller than the "5"/"2", and the 5-cell-wide "5" is wider than "9" > "2"); and every count digit renders inside its own territory box (including the "6" digit, whose centroid sits at the group's grid-crossing rather than the bbox center). All 8 stable suites pass — two-step 108, custom-stones-expand 30, territory-counts 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 224 checks, plus territory-frozen 28 with its pre-existing ~1-in-5 exact-pixel flake (reproduces on the unmodified baseline; the badge code is fully gated behind `showTerritoryCounts`, which stays `false` in that suite). `node --check` clean. annotation_v4.js is now 17,686 lines (member loop bbox tracking 17569-17580, badge block 17589-17630), territory-counts harness 413 lines, index.html 2,638 (cache-busters only).
+##### Verification
+- `test/verify_territory_counts.js` (383 → 413 lines, 26 → 28 checks) re-scoped the badge checks to the new geometry: each of the 6 badges' centers match its group's bbox center (stable under the scale pivot) and its fill is still black-40% on black territory / white-40% on white territory; at full scale (animation settled after 450ms) every badge rect equals the group's full-cell bbox exactly (`[36,36,59,88]` for the black 2×3 "6", `[447,564,147,29]` for the white 1×5 "5", `[153,359,59,29]` for the 1×2 "2", etc., each within 1px); badge size scales with territory size (the 3-cell-tall "6"/"9" boxes are taller than the "5"/"2", and the 5-cell-wide "5" is wider than "9" > "2"); and every count digit renders inside its own territory box (including the "6" digit, whose centroid sits at the group's grid-crossing rather than the bbox center). All 8 stable suites pass — two-step 108, custom-stones-expand 30, territory-counts 28, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 224 checks, plus territory-frozen 28 with its pre-existing ~1-in-5 exact-pixel flake (reproduces on the unmodified baseline; the badge code is fully gated behind `showTerritoryCounts`, which stays `false` in that suite). `node --check` clean. annotation_v4.js is now 17,686 lines (member loop bbox tracking 17569-17580, badge block 17589-17630), territory-counts harness 413 lines, index.html 2,638 (cache-busters only).
 
-### v0.1.074 — Every MSM "w/#" territory-count number now sits in an adaptable rounded-corner box: a pill-shaped badge sized to the measured digits, filled 40%-translucent with the territory's own color (black box on black territory, white box on white territory), that pops in with a smooth ease-out-back 2D scale animation on its first draw or on a count change — while the digits themselves stay the same pure Pretendard text as v0.1.073
+---
+
+### v0.1.074 — MSM Rounded Badge with Ease-Out-Back Animation
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `perf` | MSM Rounded Badge with Ease-Out-Back Animation |
+
+##### Details
+a pill-shaped badge sized to the measured digits, filled 40%-translucent with the territory's own color (black box on black territory, white box on white territory), that pops in with a smooth ease-out-back 2D scale animation on its first draw or on a count change — while the digits themselves stay the same pure Pretendard text as v0.1.073
 
 **The badge adapts to the text.** The territory-group counter block in `renderScoringBoardToCtx` (`annotation_v4.js:17586-17620`) now measures each label via `ctx.measureText(label)` and draws a rounded-rect box behind it before the digits — `padX = fontPx * 0.42`, `padY = fontPx * 0.34`, so `boxW = textWidth + 2·padX` and `boxH = fontPx + 2·padY`, i.e. a pill whose short sides are the two `padY` stubs (corner radius `r = bh/2`). The fill is 40%-translucent and matches the territory color: `rgba(17, 24, 39, 0.4)` (Black `#111827`) behind a Black territory count, `rgba(255, 255, 255, 0.4)` behind a White count — the two 0.4-alpha fills are unique to these badges (no other draw op uses a 0.4 alpha). The corner geometry is drawn by a new shared path helper `roundedRectPath(ctx, x, y, w, h, r)` (`:17292-17301`) built on `arcTo` (works on Brave/Chrome, no `ctx.roundRect()` dependency); it respects the stroke state and saves/restores nothing, so the caller's `ctx.save()`/`restore()` pairing is unchanged.
 
 **The pop-in is a smooth 2D simple animation.** A module-level `territoryBoxAnims` Map (`:17290`) keys each badge by its group centroid (`Math.round(fr*10),Math.round(fc*10)` — centroid-relative, so it re-keys automatically when a replace/re-arrange moves a group) plus the count, storing `{ count, t0 }`. On the first draw of a badge (or when its count changes) `t0 = performance.now()` is set and the box renders at an animated scale: `t = min(1, (now − t0)/350)` with a cubic ease-out-back (`1 + 2.70158(t−1)³ + 1.70158(t−1)²`) that overshoots ~10% before settling at 1.0 — the badge scales about its own center (`bw/bh = boxW·scale`, drawn at `cx−bw/2, cy−bh/2`), so the digits never shift. Steady redraws reuse the entry and render the box at full scale instantly; only a fresh badge or a count change re-animates. Stale entries are pruned each draw against the `seenKeys` set (`:17617-17620`), so `territoryBoxAnims` holds exactly the current groups — clearing a group (DamE) or a post-lock replace that shrinks a group (6 → 5) drops the old entry and grows a fresh one. The digits are untouched: still `bold {fontPx}px 'Pretendard', sans-serif` in `#FCD102`/`#101389`, still zeroed shadow state, still pure text — the box is painted strictly behind them.
 
-**Verified.** `test/verify_territory_counts.js` (295 → 383 lines, 18 → 26 checks) patches `roundedRectPath` and the 0.4-alpha `fill()` calls (both unique to the badges) to prove: exactly one rounded badge per number, each centered on its digit's position (scale preserves the center); black territories get `rgba(17, 24, 39, 0.4)`, white get `rgba(255, 255, 255, 0.4)`, one-to-one in draw order; at full scale (animation settled after 450ms) badge heights equal `fontPx·1.68` within ±3px and scale with group size (9 > 6 > 5); `territoryBoxAnims` holds exactly one entry per group after a draw, shrinks to 5 when a group is cleared, and re-keys a fresh entry (count 5 at `12,4`) while dropping the old one when a post-lock replace shrinks the black 6-group. All 8 stable suites pass — two-step 108, custom-stones-expand 30, territory-counts 26, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 222 checks, plus territory-frozen 28 which has a pre-existing ~1-in-5 exact-pixel timing flake at the (4,4) vacated-point probe (reproduces on the unmodified baseline; runtime probes confirm `showTerritoryCounts` stays `false` with zero badge draws in that suite, and the badge code is fully gated behind that flag). `node --check` clean. annotation_v4.js is now 17,676 lines (`territoryBoxAnims` 17290, `roundedRectPath` 17292-17301, badge block 17586-17620, prune 17617-17620), territory-counts harness 383 lines, index.html 2,638 unchanged.
+##### Verification
+- `test/verify_territory_counts.js` (295 → 383 lines, 18 → 26 checks) patches `roundedRectPath` and the 0.4-alpha `fill()` calls (both unique to the badges) to prove: exactly one rounded badge per number, each centered on its digit's position (scale preserves the center); black territories get `rgba(17, 24, 39, 0.4)`, white get `rgba(255, 255, 255, 0.4)`, one-to-one in draw order; at full scale (animation settled after 450ms) badge heights equal `fontPx·1.68` within ±3px and scale with group size (9 > 6 > 5); `territoryBoxAnims` holds exactly one entry per group after a draw, shrinks to 5 when a group is cleared, and re-keys a fresh entry (count 5 at `12,4`) while dropping the old one when a post-lock replace shrinks the black 6-group. All 8 stable suites pass — two-step 108, custom-stones-expand 30, territory-counts 26, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 222 checks, plus territory-frozen 28 which has a pre-existing ~1-in-5 exact-pixel timing flake at the (4,4) vacated-point probe (reproduces on the unmodified baseline; runtime probes confirm `showTerritoryCounts` stays `false` with zero badge draws in that suite, and the badge code is fully gated behind that flag). `node --check` clean. annotation_v4.js is now 17,676 lines (`territoryBoxAnims` 17290, `roundedRectPath` 17292-17301, badge block 17586-17620, prune 17617-17620), territory-counts harness 383 lines, index.html 2,638 unchanged.
 
-### v0.1.073 — The MSM "w/#" Territory Counter now renders every group count as PURE font text in Pretendard Medium — no shadow, no halo, no border — with Black territory counts inked in #FCD102 and White territory counts in #101389
+---
+
+### v0.1.073 — MSM Territory Counter Pure Pretendard Font
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `perf` | MSM Territory Counter Pure Pretendard Font |
+
+##### Details
+The MSM "w/#" Territory Counter now renders every group count as PURE font text in Pretendard Medium — no shadow, no halo, no border — with Black territory counts inked in #FCD102 and White territory counts in #101389
 
 **The halo is gone; the digits are plain text.** The territory-group counter inside `renderScoringBoardToCtx` (`annotation_v4.js:17556-17576`) previously drew each 4-connected group's point count with `700 {px}px system-ui, sans-serif`, black fill `#111827` / white fill `#ffffff`, and a soft contrast halo (a `shadowBlur` at the 0° point behind the digits). Now the count is pure text: `ctx.font` is `bold {fontPx}px 'Pretendard', sans-serif` — the `@font-face` table (`annotation.css:49-55`) maps the `bold` weight exactly to `f0nts/PretendardEN-Medium.otf`, the requested face — and the fill is `#FCD102` for Black territory (`color === 1`) / `#101389` for White (`color === 2`), the same ink the app already uses for study opponent terms, so the read stays on-brand. The halo's shadow state is explicitly zeroed (`shadowBlur 0`, `shadowColor rgba(0, 0, 0, 0)`) so a leftover shadow from a prior draw op can never leak onto the digits — the old code set shadow state explicitly, so the new code must too. Text size still scales with group size (`Math.min(CELL_SIZE * 0.9, 9 + count * 1.4)`); the group/count/centroid algorithm is untouched.
 
 **Font readiness.** The board font warm-up (`init`, `annotation_v4.js:1281`) now also loads `bold 12px 'Pretendard'` so the Medium face is ready before the first board draw (the `@font-face` uses `font-display: swap`, and the same family was already canvas-used by comment rendering).
 
-**Verified.** `test/verify_territory_counts.js` (289 → 295 lines, 17 → 18 checks) re-scoped the old halo check to assert the opposite — every count shot has `shadowBlur 0`, `shadowColor rgba(0, 0, 0, 0)`, and no bold-digit `strokeText` (pure text) — re-scoped the color checks to `#FCD102` / `#101389` (compared case-normalized, since Chrome's canvas `fillStyle` getter lowercases hex: `#FCD102` reads back as `#fcd102`), and added a new font check proving every count uses a bold `Pretendard` family string (which resolves to `PretendardEN-Medium.otf`). `test/verify_custom_stones_expand.js` also gained a small robustness pass: the accordion-content assertions now allow sub-pixel layout drift (±4px, headless Brave measures the accordion's inline max-height a hair under the later `scrollHeight`), and it inits `window._scoringDirty = false` after each load — mirroring the modal path — so the app's pre-existing bare-global `_scoringDirty` read in the `beforeunload` handler never throws on a reload of a page that never opened MSM. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-frozen 28, territory-counts 18, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 242 checks total. `node --check` clean. annotation_v4.js is now 17,630 lines (counter block 17556–17576, `fillStyle` 17570, font warm-up 1286), territory-counts harness 295 lines, index.html 2,638 unchanged.
+##### Verification
+- `test/verify_territory_counts.js` (289 → 295 lines, 17 → 18 checks) re-scoped the old halo check to assert the opposite — every count shot has `shadowBlur 0`, `shadowColor rgba(0, 0, 0, 0)`, and no bold-digit `strokeText` (pure text) — re-scoped the color checks to `#FCD102` / `#101389` (compared case-normalized, since Chrome's canvas `fillStyle` getter lowercases hex: `#FCD102` reads back as `#fcd102`), and added a new font check proving every count uses a bold `Pretendard` family string (which resolves to `PretendardEN-Medium.otf`). `test/verify_custom_stones_expand.js` also gained a small robustness pass: the accordion-content assertions now allow sub-pixel layout drift (±4px, headless Brave measures the accordion's inline max-height a hair under the later `scrollHeight`), and it inits `window._scoringDirty = false` after each load — mirroring the modal path — so the app's pre-existing bare-global `_scoringDirty` read in the `beforeunload` handler never throws on a reload of a page that never opened MSM. All 9 suites pass — two-step 108, custom-stones-expand 30, territory-frozen 28, territory-counts 18, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 242 checks total. `node --check` clean. annotation_v4.js is now 17,630 lines (counter block 17556–17576, `fillStyle` 17570, font warm-up 1286), territory-counts harness 295 lines, index.html 2,638 unchanged.
 
-### v0.1.072 — The Floating Panel's "Custom Stones" section is now available for every Default Stone Set: selecting Set A/B/C auto-collapses it (instead of hard-locking it), and it stays expandable afterward — with the header click re-fitting the enclosing Stones accordion so the expanded controls are never clipped
+---
+
+### v0.1.072 — Custom Stones Panel Expansion for Default Sets
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Custom Stones Panel Expansion for Default Sets |
+
+##### Details
+selecting Set A/B/C auto-collapses it (instead of hard-locking it), and it stays expandable afterward — with the header click re-fitting the enclosing Stones accordion so the expanded controls are never clipped
 
 **The lock is gone; the collapse is now just a default state.** Since the Set A/B/C renderers arrived, the Custom Stones section (manual BG/FG/BR colors + stone-image uploads) was hard-LOCKED whenever a stone set was active: `syncCustomStonesSection()` (`annotation_v4.js:13233`) added a `.locked` class, the header click handler (`:13055`) early-returned on `.locked`, and `.custom-stones-section.locked .custom-stones-header` dimmed it to 0.38 opacity with a `not-allowed` cursor. Now the controls are available under every set — the section auto-collapses on set selection but the header stays fully clickable, so the user can expand it to view/edit the custom colors, which take effect the moment the set is deselected (the no-set base path draws from the same custom style unchanged).
 
 **One shared expand/collapse helper carries the accordion re-fit.** Both the auto-collapse-on-set-select and the manual header toggle now route through a single `setCustomStonesExpanded(section, expanded)` helper (`annotation_v4.js:13220`), replacing the duplicated inline max-height animations in `syncCustomStonesSection` (`:13250`) and the header click handler (`:13052-13058`). The helper preserves the re-fit fix for the Stones accordion: the accordion opens by setting a FIXED inline max-height measured at open time (`initAccordion`, `:14224`), so an accordion opened while a set is active (custom body collapsed) measures SHORT — expanding Custom Stones would then clip its growth behind the accordion's `overflow:hidden` and appear to never expand. `setCustomStonesExpanded` measures the body at natural size, then re-fits the enclosing `.accordion-content` to its final `scrollHeight` in the same frame the body starts expanding, so the accordion grows with the section. The now-dead `.custom-stones-section.locked` CSS block is removed from annotation.css.
 
-**Verified.** New harness `test/verify_custom_stones_expand.js` (30 checks, run against Brave Chrome for real layout metrics — lightpanda's layout engine measures the form-control-rich custom body as ~5px, so the pixel assertions need a full browser): initial no-set state expands the section with the accordion open at full content height (body 545px / accordion 693px); selecting Set A auto-collapses (`expanded` off, body `max-height: 0px`) with no `locked` class while the radio and `style.stoneSet` both persist; reopening the accordion under A measures SHORT (148px vs the 693px full), then a header click re-fits the accordion back to 693px with the body fully visible (545px == `scrollHeight`); collapse-under-A works; switching to Set B auto-collapses and stays expandable; deselecting B auto-expands; Set C collapses, survives a reload (radio pre-selected, section collapsed-but-expandable on the restored page). All 9 suites pass — custom-stones-expand 30, two-step 108, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 241 checks total. `node --check` clean. annotation_v4.js is now 17,629 lines (`setCustomStonesExpanded` 13220, `syncCustomStonesSection` 13250, header wiring 13052-13058), new harness 30 checks, index.html 2,638 unchanged, annotation.css 4,181 lines (locked block removed).
+##### Verification
+- New harness `test/verify_custom_stones_expand.js` (30 checks, run against Brave Chrome for real layout metrics — lightpanda's layout engine measures the form-control-rich custom body as ~5px, so the pixel assertions need a full browser): initial no-set state expands the section with the accordion open at full content height (body 545px / accordion 693px); selecting Set A auto-collapses (`expanded` off, body `max-height: 0px`) with no `locked` class while the radio and `style.stoneSet` both persist; reopening the accordion under A measures SHORT (148px vs the 693px full), then a header click re-fits the accordion back to 693px with the body fully visible (545px == `scrollHeight`); collapse-under-A works; switching to Set B auto-collapses and stays expandable; deselecting B auto-expands; Set C collapses, survives a reload (radio pre-selected, section collapsed-but-expandable on the restored page). All 9 suites pass — custom-stones-expand 30, two-step 108, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 241 checks total. `node --check` clean. annotation_v4.js is now 17,629 lines (`setCustomStonesExpanded` 13220, `syncCustomStonesSection` 13250, header wiring 13052-13058), new harness 30 checks, index.html 2,638 unchanged, annotation.css 4,181 lines (locked block removed).
 
-### v0.1.071 — The komi "(default)" tag now shows the real SGF komi on every MSM open path (a reopened saved D&T session no longer displays the static "0 (default)" placeholder while the input/formula/session correctly held 5), and the Floating Panel's "Board & Border" section grows a Canvas BG color picker (c-BG) that only tints the initial and study board canvases — export and scoring renderers stay untouched
+---
+
+### v0.1.071 — SGF Komi Default Tag & Canvas BG Color Picker
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | SGF Komi Default Tag & Canvas BG Color Picker |
+
+##### Details
+The komi "(default)" tag now shows the real SGF komi on every MSM open path (a reopened saved D&T session no longer displays the static "0 (default)" placeholder while the input/formula/session correctly held 5), and the Floating Panel's "Board & Border" section grows a Canvas BG color picker (c-BG) that only tints the initial and study board canvases — export and scoring renderers stay untouched
 
 **Komi display regression, display-only fix.** `#scoring-komi-default-tag` is written only in `resetScoringBoardFromState()` — the modal's first-entry path — so after Save Board → close → reopen, the restore branch (`openScoringModal` → saved-session path) never ran it and the reopened modal kept the static HTML placeholder `0 (default)` (index.html) while the editable input, the formula, and the persisted session all held the real komi (5 for `KM[5]`). `openScoringModal` (`annotation_v4.js:16151`) now sets the tag on EVERY open — restore AND first-entry — right after the result tag block (`:16190-16199`), mirroring `#scoring-result-default-tag`: `elKomiDefaultTag.textContent` is set to the SGF komi followed by `" (default)"`. `extractSgfKomi()` (`:10907`) stays the SSOT komi resolver (SGF `km` → `gameInfo` km/KM/komi → `DEFAULT_KOMI` 6.5 fallback), so `KM[0]` games render "0 (default)" correctly and the komi input/±0.5 remain editable exactly as before — this is a display-only fix, the editable komi control is unchanged.
 
 **Canvas BG (c-BG) picker.** `DEFAULT_INITIAL_BOARD_STYLE` (`:13424`) gains `bg: { color: '#ffffff' }` (after `border`); `populateStyleInputs` (`:13632`) fills `#ib-canvas-bg-color` with a `#ffffff` guard, `bindStyleInputsEvents` (`:13743`) registers it as `{ section: 'bg', key: 'color' }` (so the shared handler at `:13820` updates the `#ib-canvas-bg-color-val` badge and `saveStyleAndRedraw` persists it), and the panel gets a third `data-section="bg"` reset button reading the default from `DEFAULT_INITIAL_BOARD_STYLE['bg']`. Rendering scope: `renderBoardToCtx` (`:5050-5054`) fills the canvas with `style.bg.color` ONLY when the canvas is the initial board (`isInitialCanvas`) or the study board (`isStudyMode`) — export preview and scoring keep `#ffffff` (scoring already routes through the separate `renderScoringBoardToCtx`, which never reads `bg`). The panel section title is renamed to "Board, Border & BG"; the bg picker is a per-view style like border/stone images, so the study board tints its own `studyBoardStyle` when the panel targets the study view and the initial board keeps its own.
 
-**Verified.** `test/verify_msm_2step.js` (668 → 911 lines) added S15 (komi regression: fresh open, same-page reopen after Save Board, and saved-session value all read `5 (default)` / input `5` / formula `5 (komi)` / `scoringData.komi === 5`), S16 (c-BG: section title, picker default `#ffffff`, reset button; renderer fill-style spy — lightpanda's `getImageData` returns zeros even on freshly filled detached canvases, so the harness spies on the first `fillRect` fillStyle instead of pixels — proves the initial render honors the chosen bg while study/export/scoring stay white, the study view tints its own style, the section reset restores white, and the two views never clobber each other) and S17 (fresh-page restore: reload, re-apply the SGF, reopen the saved session → tag still `5 (default)`, input 5, session komi 5) — 77 → 108 checks. All 8 suites pass — two-step 108, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 211 checks total. `node --check` clean. annotation_v4.js is now 17,637 lines (`openScoringModal` 16151, komi tag 16190–16199, `bg` in `DEFAULT_INITIAL_BOARD_STYLE` ~13452, `populateStyleInputs` 13632, `bindStyleInputsEvents` 13743, `canvasBgColor` 5050–5054), harness 911 lines, index.html 2,638 lines (section title, bg reset button, bg picker row after Border).
+##### Verification
+- `test/verify_msm_2step.js` (668 → 911 lines) added S15 (komi regression: fresh open, same-page reopen after Save Board, and saved-session value all read `5 (default)` / input `5` / formula `5 (komi)` / `scoringData.komi === 5`), S16 (c-BG: section title, picker default `#ffffff`, reset button; renderer fill-style spy — lightpanda's `getImageData` returns zeros even on freshly filled detached canvases, so the harness spies on the first `fillRect` fillStyle instead of pixels — proves the initial render honors the chosen bg while study/export/scoring stay white, the study view tints its own style, the section reset restores white, and the two views never clobber each other) and S17 (fresh-page restore: reload, re-apply the SGF, reopen the saved session → tag still `5 (default)`, input 5, session komi 5) — 77 → 108 checks. All 8 suites pass — two-step 108, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 211 checks total. `node --check` clean. annotation_v4.js is now 17,637 lines (`openScoringModal` 16151, komi tag 16190–16199, `bg` in `DEFAULT_INITIAL_BOARD_STYLE` ~13452, `populateStyleInputs` 13632, `bindStyleInputsEvents` 13743, `canvasBgColor` 5050–5054), harness 911 lines, index.html 2,638 lines (section title, bg reset button, bg picker row after Border).
 
-### v0.1.070 — Closing the MSM now warns on unsaved scoring changes: the '✕' button and a backdrop click both route through a new close-without-saving confirm dialog whenever `_scoringDirty` is set, mirroring the v0.1.069 beforeunload warning — a close discards the unsaved edits and the reopen restores the last Saved Board, so the user gets the same heads-up on every close path instead of only on page refresh
+---
+
+### v0.1.070 — MSM Unsaved Scoring Changes Close Warning
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `perf` | MSM Unsaved Scoring Changes Close Warning |
+
+##### Details
+the '✕' button and a backdrop click both route through a new close-without-saving confirm dialog whenever `_scoringDirty` is set, mirroring the v0.1.069 beforeunload warning — a close discards the unsaved edits and the reopen restores the last Saved Board, so the user gets the same heads-up on every close path instead of only on page refresh
 
 **Every user-initiated close path now intercepts a dirty scoring board.** v0.1.069 added the unsaved-changes warning to `beforeunload` only — a refresh warns, but clicking the '✕' (`#btn-close-scoring-modal`) or clicking the backdrop outside the panel closed the modal silently, discarding the unsaved edits without a word (the reopen restores the last Saved Board, so the edit was lost either way). Both paths now call `requestCloseScoringModal()` instead of `closeScoringModal()` directly (`annotation_v4.js:15408`, `:15413`): when the modal is active and `_scoringDirty`, the close is intercepted by a new `#scoring-close-confirm-dialog` ("Close without saving?", with **Close Without Saving** / **Cancel** buttons), and only **Close Without Saving** proceeds to `closeScoringModal()` (`:16295`, which also hides the dialog on any close). **Cancel** dismisses the dialog and keeps the modal open, so a user who actually wants to keep the work can stay and press Save Board.
 
 **The message adapts to whether a Save exists.** With `_scoringHasSaved` the text reads "You have unsaved changes on the scoring board. Closing will discard them and restore the last Saved Board on reopen — press Save Board to keep them first."; in the pre-Save first-entry flow it reads "You have unsaved changes on the scoring board. Close without saving?" (`:16319-16329`). A clean board (no `_scoringDirty`) closes directly with no dialog, and the raw `closeScoringModal()` (`window.closeScoringModal`, `:16582`) stays as the programmatic path the v0.1.069 persistence tests use — user closes warn, scripted closes do not.
 
-**Verified.** `test/verify_msm_2step.js` (668 lines) added S13 (post-Save: a dirty '✕' click shows the dialog with the modal still open; Cancel hides it and keeps the modal; a dirty backdrop click also shows it; confirm closes and the reopen lands frozen "Board Saved ✓"; a clean '✕' closes directly with no dialog; a backdrop close-without-saving discards the unsaved edit) and S14 (pre-Save: an Edit-first first-entry mark is dirty and unlocked, a '✕' close shows the dialog, confirm closes, and the reopen restores the live marks) — 64 → 77 checks. All 8 suites pass — two-step 77, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 180 checks total. `node --check` clean. annotation_v4.js is now 17,608 lines (wiring 15408/15413, `closeScoringModal` 16295, `requestCloseScoringModal` 16319, confirm/cancel 16334/16340, window alias 16582), harness 668 lines, index.html 2,632 lines (dialog after the unlock dialog).
+##### Verification
+- `test/verify_msm_2step.js` (668 lines) added S13 (post-Save: a dirty '✕' click shows the dialog with the modal still open; Cancel hides it and keeps the modal; a dirty backdrop click also shows it; confirm closes and the reopen lands frozen "Board Saved ✓"; a clean '✕' closes directly with no dialog; a backdrop close-without-saving discards the unsaved edit) and S14 (pre-Save: an Edit-first first-entry mark is dirty and unlocked, a '✕' close shows the dialog, confirm closes, and the reopen restores the live marks) — 64 → 77 checks. All 8 suites pass — two-step 77, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 180 checks total. `node --check` clean. annotation_v4.js is now 17,608 lines (wiring 15408/15413, `closeScoringModal` 16295, `requestCloseScoringModal` 16319, confirm/cancel 16334/16340, window alias 16582), harness 668 lines, index.html 2,632 lines (dialog after the unlock dialog).
 
-### v0.1.069 — The MSM now persists ONLY the last Saved Board: once a Save exists, unsaved post-Save edits (playground re-arranges, Reset Board/Score) can never survive a close/reopen or a page refresh, every reopen lands on the frozen "Board Saved ✓" resolution, and an unsaved scoring board now warns before close/refresh — plus the w/# territory-counts display toggle with its vacated-square reveal and contrast halo
+---
+
+### v0.1.069 — MSM Saved Board Persistence & Territory Reveal
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `perf` | MSM Saved Board Persistence & Territory Reveal |
+
+##### Details
+once a Save exists, unsaved post-Save edits (playground re-arranges, Reset Board/Score) can never survive a close/reopen or a page refresh, every reopen lands on the frozen "Board Saved ✓" resolution, and an unsaved scoring board now warns before close/refresh — plus the w/# territory-counts display toggle with its vacated-square reveal and contrast halo
 
 **One source of truth for what survives.** Previously the modal persisted whatever live `scoringState` was current when it closed — so a post-Save playground session (re-arranged stones, a Reset Board, a Reset Score) could overwrite the committed resolution, and a reopen could land on a board that had drifted from the saved one. `saveScoringBoard` now captures the committed state into a new module-level source of truth `_lastSavedSession` (`annotation_v4.js:15069`, cleared on every fresh `loadSGF` at `:12488`), and both `persistScoringSessionData` (`:16053`) and `closeScoringModal` (`:16287`) persist `_lastSavedSession` — not the live board — whenever a Save exists (`:16058`, `:16293`). Before the first Save (no `savedBoard`/`_scoringHasSaved`) the original live-persist first-entry flow is untouched, so the pre-Save experience is identical.
 
@@ -229,9 +489,21 @@ How the application files interact — UI shell, script load order, scoring pipe
 
 **w/# territory-counts display toggle + contrast halo.** The per-point territory counts are now a user toggle (`scoringState.showTerritoryCounts`, `:15086`, wired to the `w/#` checkbox at `:15456`); `renderScoringBoardToCtx` draws the point numbers (`:17455`) using `computeVacatedTerritory` (`:16816`, shared with the Replace-mode placement check) for the vacated-square reveal nuance and `scoringTerritoryColorForPoint` (`:16867`) for the ink color, each number backed by a soft contrast halo so it stays readable on both flood-fill shades.
 
-**Verified.** `test/verify_msm_2step.js` (556 lines) re-scoped S5/S6 to "Reset Board / Reset Score KEEP the last Saved Board in `rec.scoringData`" and added, via a new `findStoneNot` helper, S10 (unsaved post-Save edit → close → reopen discards it and lands frozen "Board Saved ✓"), S11 (Reset Board → change → close → reopen keeps ONLY the last Saved Board), and S12 (the `beforeunload` warning fires only while dirty and clears on Save Board) — 53 → 64 checks. `test/verify_territory_freeze.js` (263 lines) grew 19 → 28 checks covering the vacated-square territory reveal nuance. All 8 suites pass — two-step 64, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 167 checks total; `node --check` clean. annotation_v4.js is now 17,567 lines (`_lastSavedSession` 15069/12488, persist 16053/16287/16293, open 16125–16179, save 16369–16400, `beforeunload` 3576, w/# toggle 15086/15456, territory-counts rendering 17455), harnesses 556 + 263 lines, index.html 2,620 lines.
+##### Verification
+- `test/verify_msm_2step.js` (556 lines) re-scoped S5/S6 to "Reset Board / Reset Score KEEP the last Saved Board in `rec.scoringData`" and added, via a new `findStoneNot` helper, S10 (unsaved post-Save edit → close → reopen discards it and lands frozen "Board Saved ✓"), S11 (Reset Board → change → close → reopen keeps ONLY the last Saved Board), and S12 (the `beforeunload` warning fires only while dirty and clears on Save Board) — 53 → 64 checks. `test/verify_territory_freeze.js` (263 lines) grew 19 → 28 checks covering the vacated-square territory reveal nuance. All 8 suites pass — two-step 64, territory-frozen 28, territory-counts 17, replace-territory 13, replace-click 10, replace-fix 7, rearrange 6, Set C 22 = 167 checks total; `node --check` clean. annotation_v4.js is now 17,567 lines (`_lastSavedSession` 15069/12488, persist 16053/16287/16293, open 16125–16179, save 16369–16400, `beforeunload` 3576, w/# toggle 15086/15456, territory-counts rendering 17455), harnesses 556 + 263 lines, index.html 2,620 lines.
 
-### v0.1.068 — Territory is now frozen after D&T Lock: post-lock re-arrange / replace "playground" edits can never move the marked territory overlay or a manually marked territory point — the fix closes the last live-read inside the frozen scoring resolution
+---
+
+### v0.1.068 — Territory Freezing After D&T Lock
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Territory Freezing After D&T Lock |
+
+##### Details
+post-lock re-arrange / replace "playground" edits can never move the marked territory overlay or a manually marked territory point — the fix closes the last live-read inside the frozen scoring resolution
 
 Since v0.1.059 the score itself has been frozen at the Lock commit: the formula, totals, result badge, `DD`/`MA`/`TB`/`TW` bars, and every post-lock consumer read `lockedSnapshot`, so the counting-phase Replace / Re-arrange ritual is a pure cosmetic display aid. But the TERRITORY **overlay** still had two live reads. In `renderScoringBoardToCtx`, section 5 built the GoScorer input from the LIVE `scoringState.board` / `markedDead` / `deadStonesInfo` (`locScores`/`areaScores` for the flood-fill squares) and section 7 drew the manual-territory marks from LIVE `scoringState.manualTerritory` — so after Lock, re-arranging or replacing stones would re-flood-fill the playground board and visibly re-draw (move) the marked territory area, contradicting the frozen score sitting next to it.
 
@@ -239,7 +511,18 @@ Since v0.1.059 the score itself has been frozen at the Lock commit: the formula,
 
 **Verified both ways (the test must prove the freeze is lock-specific).** Headless-verified against Brave via puppeteer-core with a new harness (`test/verify_territory_freeze.js`, 19 checks): a seeded white cage (interior 3×3 = white territory) bounded by a black ring. While UNLOCKED, lifting one cage stone flips the interior territory 2 → 0 in both the GoScorer read-out and the rendered overlay (the white squares actually disappear — proves the test would catch the old behavior), and restoring the stone brings the overlay back byte-for-byte. A pre-lock manual territory mark renders. After `applyScoringLock` the overlay equals the pre-lock pixels, and after a post-lock live cage removal + manual-mark clear the overlay and the manual mark are byte-for-byte unchanged (FROZEN), black/white score totals are identical, `lockedSnapshot` is unmodified while the live board provably did change, `countPostLockActions()` reports the discarded playground edits, and Unlock restores the committed resolution. All prior suites still pass (replace-click 10, replace-fix 7, rearrange 6, two-step 53) plus the new 19 — 95 checks total. `node --check` clean. annotation_v4.js is now 17,357 lines (territory freeze inside `renderScoringBoardToCtx` 17090–17337, `terrSrc` at 17186), new harness 214 lines, index.html unchanged at 2,615 lines.
 
-### v0.1.067 — Set C now models the ACTUAL materials, per Kuroki Goishiten's own material descriptions: slate variation comes from POLISH/TONE (kuro neutral-black vs ao blue-green cast), not surface grain, and hamaguri grades (Snow vs Blossom) drive both tone and ring density/width
+---
+
+### v0.1.067 — Set C Physical Material Modeling (Hamaguri & Slate)
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Set C Physical Material Modeling (Hamaguri & Slate) |
+
+##### Details
+slate variation comes from POLISH/TONE (kuro neutral-black vs ao blue-green cast), not surface grain, and hamaguri grades (Snow vs Blossom) drive both tone and ring density/width
 
 v0.1.065/066 rendered Set C from a reasonable "generic shell/slate" look, but the research behind the real materials points a different way. Chapter 3 of Kuroki Goishiten's Go Story (kurokigoishiten.com/en/pages/go-story-03) describes nachiguro-ishi as "a beautiful jet-black stone that gives off a greater and greater shine the more it is finely polished" — essentially uniform jet-black, with NO visible grain listed as a feature. So the fix for "every black stone looks identical" is not more texture, it is varying **polish and tone** per stone. For white stones, the grades page (www.kurokigoishi.co.jp/goworks) is explicit: "Snow Grade" stones have "unparalleled whiteness and the delicate, exquisite grain that runs through each stone" (the highest grade, only a small percentage of shells qualify), while "Blossom Grade" stones "have a wider grain than Snow Grade" — a concrete, implementable difference in **ring density/width**, not just ring direction.
 
@@ -251,7 +534,18 @@ Set A, Set B, the custom-image path, and the solid-color fallback remain byte-fo
 
 Headless-verified against Brave via puppeteer-core (harness `test/verify_stone_set_c.js` extended 19 → 22 checks): three new checks pass — `tintAmount` is in 0–1 and deterministic per position, `whiteness` is in 0–1 and deterministic per position, and the grade link holds exactly (`ringCount === 10 + Math.floor(whiteness * 28)`), i.e. a Snow-grade stone provably gets more/denser rings than a Blossom-grade one. All prior Set C checks pass (variant purity/determinism, per-position + per-player variety, originAngle range/determinism/variety, 0.5 specular cap, error-free A/B/C renders, dark/light stones, byte-for-byte stable redraws, A/B/C distinct, per-position variety, texture cache stability) plus the four legacy suites (replace-click 10, rearrange 6, replace-fill 7, two-step 53) — 98 checks total. `node --check` clean. annotation_v4.js is now 17,345 lines (renderer block 5939–6313, Set C branch 6765–6771), harness 173 lines, index.html unchanged at 2,615 lines.
 
-### v0.1.066 — Set C hamaguri stones now vary their shell-grain direction per position: the ring-origin angle is randomized across the full 0–2π circle instead of every stone sharing one fixed hinge, so neighboring white stones visibly curve their growth rings in different directions
+---
+
+### v0.1.066 — Set C Hamaguri Grain Origin Variation
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Set C Hamaguri Grain Origin Variation |
+
+##### Details
+the ring-origin angle is randomized across the full 0–2π circle instead of every stone sharing one fixed hinge, so neighboring white stones visibly curve their growth rings in different directions
 
 v0.1.065's hamaguri renderer fixed the ring "hinge" at a single angle (`originAngle = -2.3` radians), so every Set C white stone on a board showed its growth rings curving the same way — like a whole set cut from one spot on a shell. Real hamaguri sets are cut across the shell, so adjacent stones angle their grain differently. The renderer now derives a per-position ring direction from the same mulberry32 seed that already drives the other texture params.
 
@@ -259,7 +553,18 @@ v0.1.065's hamaguri renderer fixed the ring "hinge" at a single angle (`originAn
 
 Headless-verified against Brave via puppeteer-core (harness `test/verify_stone_set_c.js` extended 16 → 19 checks): three new checks pass — `originAngle` always lands in the full-circle range 0–2π, is byte-identical for identical `(row, col, player)` calls (deterministic per position), and differs across positions (grain-direction variety, so two stones on the same board don't share a direction by default). All 16 v0.1.065 checks still pass (purity, per-position variety, A/B/C distinct, stable redraws, cache stability) plus the prior suites: replace-click 10, rearrange-mode 6, replace-fill 7, and two-step 53 (95 checks total). `node --check` clean. annotation_v4.js is now 17,278 lines (renderer block 5940–6246, Set C branch 6697–6705), test harness 167 lines, index.html unchanged at 2,615 lines.
 
-### v0.1.065 — Stone Set C is now real: a true-to-material renderer for hamaguri (clam-shell white) and nachiguro-style slate black stones, replacing the Set C placeholder
+---
+
+### v0.1.065 — Stone Set C Clam-Shell & Slate Materials
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Stone Set C Clam-Shell & Slate Materials |
+
+##### Details
+a true-to-material renderer for hamaguri (clam-shell white) and nachiguro-style slate black stones, replacing the Set C placeholder
 
 The floating panel's Default Stone Set selector has always offered a third option, Set C, but it was a placeholder that rendered no differently from the solid-color default. Set C now renders each stone from its actual material — white as warm ivory hamaguri shell with concentric growth-ring lines radiating from an off-center hinge and a translucent amber rim, black as matte-glossy nachiguro slate with a faint blue-green mineral tint and sparse, roughly-parallel grain streaks.
 
@@ -269,7 +574,18 @@ The floating panel's Default Stone Set selector has always offered a third optio
 
 Headless-verified against Brave via puppeteer-core (new harness `test/verify_stone_set_c.js`, 16 checks): `getStoneVariant` is a pure function of `(row, col, player)` — identical calls return identical variants, different positions differ, different players differ, and specular is capped at 0.5; Sets A/B/C each render without errors with stones visibly dark/light; Set C pixels are byte-for-byte identical across repeated `drawBoard()` calls (no flicker); the three sets render visually distinct from each other; two different black stones differ from each other (per-position variety); and the texture cache holds both hamaguri and slate textures and stays stable across redraws. All prior harnesses still pass: the v0.1.064 replace-click 10 checks, the v0.1.063 rearrange-mode 6 checks, the v0.1.062 replace-fill 7 checks, and the v0.1.061 two-step 53 checks (S1–S9). `node --check` clean. annotation_v4.js is now 17,268 lines, index.html unchanged at 2,615 lines.
 
-### v0.1.064 — Clicking a replaced dead stone on the MSM board removes it and returns the prisoner to its bucket: replace-fill placements are now trackable and reversible, so a fill placed from the Dead pile goes back to the Dead pile and one drawn from the Caps counter restores the capture
+---
+
+### v0.1.064 — Replaced Dead Stone Removal & Prisoner Return
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `perf` | Replaced Dead Stone Removal & Prisoner Return |
+
+##### Details
+replace-fill placements are now trackable and reversible, so a fill placed from the Dead pile goes back to the Dead pile and one drawn from the Caps counter restores the capture
 
 Reported: on the Manual Scoring Modal, once a replace fill placed a stone (from the Dead pile or the Caps counter), there was no way to take it back — clicking the placed stone did nothing, because fill accounting happens in the bucket pools, not on the board, so the point just read as an ordinary live stone. The user's requirement: in Replace mode, clicking a replaced Dead stone must remove it from the board and add it back to its bucket.
 
@@ -277,7 +593,18 @@ Reported: on the Manual Scoring Modal, once a replace fill placed a stone (from 
 
 Headless-verified (puppeteer against the repo, 10 checks): a seeded replace session locks and fills — a dead-source White fill drains `deadWhite` and records the map entry; clicking the placed stone removes it and restores `deadWhite`; after the dead pile empties, a cap-source fill drains `blackCaptures` and is recorded as `cap`, and clicking it restores the capture; reversing a dead-source fill restores the dead pile; a non-replaced live-stone click is a byte-for-byte no-op; black-side symmetric; and a Save Board → close → reopen cycle restores the replaced stone WITH its map entry, still reversible on click. All prior harnesses still pass: the v0.1.061 two-step 53 checks (S1–S9), the v0.1.062 replace-fill 7 checks, and the v0.1.063 rearrange-mode 6 checks. `node --check` clean. annotation_v4.js is now 16,961 lines, index.html 2,615 lines.
 
-### v0.1.063 — Re-Arranging is now strictly re-Arrange: an empty-point click in re-Arranging mode places ONLY from the Re-arrange piles — never Dead or Caps — so when both Re-arrange piles are empty the click is a no-op
+---
+
+### v0.1.063 — Re-Arranging Stones Pool Isolation
+
+#### Features
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `feat` | Re-Arranging Stones Pool Isolation |
+
+##### Details
+an empty-point click in re-Arranging mode places ONLY from the Re-arrange piles — never Dead or Caps — so when both Re-arrange piles are empty the click is a no-op
 
 Reported: with both bucket Re-arrange piles empty, clicking an empty point in re-Arranging mode still let the user "re-arrange" — because the rearrange empty-point branch fell back to the Dead/Caps pools. When the mode-type pile was empty, the handler opened the color picker's sub-type step (`showPickerStep2`), which listed the Dead and Cap. sources for the chosen color and placed a dead stone (or consumed a capture) as if it were a re-arranged stone. Re-Arranging should only move stones the user actually picked up into the Re-arrange pile.
 
@@ -285,7 +612,18 @@ Reported: with both bucket Re-arrange piles empty, clicking an empty point in re
 
 Headless-verified (puppeteer against the repo, 6 checks): with Re-arrange Black = 3 and Dead/Caps seeded, an empty-point click auto-places Black and drains ONLY `rearrangeBlack` (2) with `deadWhite`, `deadBlack`, `blackCaptures`, `whiteCaptures` all pinned; with both Re-arrange piles empty the click is a no-op — nothing placed, picker stays hidden, Dead/Caps unchanged; symmetric for White; with both piles non-empty the color picker shows with the sub-type step hidden, and picking Black consumes only Re-arrange Black; with only Dead/Caps available the click remains a no-op. The v0.1.062 two-step harness still passes all 53 checks (S1–S9); the v0.1.062 replace-fill verify still passes 7 checks. `node --check` clean. annotation_v4.js is now 16,904 lines, index.html 2,615 lines.
 
-### v0.1.062 — Replacing dead stones no longer double-deducts: a fill consumes exactly ONE prisoner pool — the Dead pile first, then the Caps counter — so 5 dead + 4 caps = 9 replaceable and the buckets drain one stone per placement
+---
+
+### v0.1.062 — Replace Dead Stones Single-Pool Deduction
+
+#### Features
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `feat` | Replace Dead Stones Single-Pool Deduction |
+
+##### Details
+a fill consumes exactly ONE prisoner pool — the Dead pile first, then the Caps counter — so 5 dead + 4 caps = 9 replaceable and the buckets drain one stone per placement
 
 Reported in the MSM Buckets: for Black's score 68 territory + 5 dead + 4 caps, the user expected to replace all 9 dead/captured White stones back onto the board, but only 5 could be placed — and each fill visibly cost the tray two stones. Root cause: a single replace fill consumed BOTH pools. `handleScoringBoardClick`'s replace branch popped the dead pile AND decremented the capture counter (`deadWhite.pop()` then `blackCaptures--` for a White-territory fill, mirrored for Black), and `placeScoringStoneByMode`'s replace branches plus the color-picker dialog's "Dead" source did the same. Because the fill guard only permits a placement while *some* pool is non-empty, the coupled drain collapsed both pools at the same rate (5 dead → 0 and 4 caps → 0 after 5 fills): the 6th placement was blocked and the tray read a double deduction (9 → 7 → 5 → …). The non-replace branches (`mark` mode and the fallbacks) already drained a single pool, confirming the coupling was an oversight, not intent.
 
@@ -293,7 +631,18 @@ Reported in the MSM Buckets: for Black's score 68 territory + 5 dead + 4 caps, t
 
 Headless-verified (puppeteer against the repo): a targeted test seeds 5 dead White + 4 caps, locks, and replaces — fills 1–5 drain Dead 5→0 with caps pinned at 4, fills 6–9 drain Caps 4→0, all 9 stones land, the 10th+ is blocked, and every fill drains exactly one pool (no double deduction). The v0.1.061 two-step harness still passes all 53 checks (S1–S9), `node --check` clean. annotation_v4.js is now 16,937 lines, index.html 2,615 lines.
 
-### v0.1.061 — Manual Scoring Save is now a 2-step ritual: Lock Score COMMITS the D&T resolution to the SGF (DD/MA/TB/TW + isSgfDirty + workingSgf), then Save Board freezes the modal and captures the post-lock playground to memory — the SGF is never rewritten by saving
+---
+
+### v0.1.061 — Manual Scoring 2-Step Save Ritual
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Scoring 2-Step Save Ritual |
+
+##### Details
+Lock Score COMMITS the D&T resolution to the SGF (DD/MA/TB/TW + isSgfDirty + workingSgf), then Save Board freezes the modal and captures the post-lock playground to memory — the SGF is never rewritten by saving
 
 v0.1.060 ended with a single `saveScoringResult` (the old "Save Scoring") that did both jobs at once: it baked the committed `lockedSnapshot` into the terminal SGF node AND froze the modal. The user's refinement splits the ceremony — "Lock the Score" should be the moment the file changes, and "Save Board" should only preserve the counting playground the user just built. Lock Score now owns the SGF write; Save Board is memory-only.
 
@@ -307,7 +656,18 @@ v0.1.060 ended with a single `saveScoringResult` (the old "Save Scoring") that d
 
 Headless-verified (puppeteer against the repo, 51 checks across S1–S9): fresh opens unlocked with Save Board grayed; marking → Lock writes DD and mirrors it onto the direct field, sets isSgfDirty, and shows the badge; Save Board freezes the modal, shows "Board Saved ✓", captures `savedBoard`, and provably does NOT rewrite the terminal DD or `workingSgf`; reopen restores the playground while `lockedSnapshot` and Run keep the committed board and marks; Reset Board restores the committed board, keeps the lock, and drops `savedBoard` from `rec.scoringData`; unlock restores pre-lock labels, grays Save Board, and Reset Score rebuilds the pristine board with no marks and no `savedBoard`; a file carrying its own DD/MA/TB/TW pre-engages the lock WITHOUT touching the SGF (isSgfDirty stays false, terminal DD stays exactly the file's 3); a fresh load clears `savedBoard`/persist data and opens unlocked; unlock after save clears `savedBoard` and retains the pre-lock marks. The harness also surfaced two test-side fixes (the modal must be opened before stone clicks, and the game-end popup must be dismissed because its 99999 z-index card overlays the board) and one real blocker: the game-end popup literally sits on top of the scoring canvas, so board clicks in a fresh headless open hit the popup instead of the board. `node --check` clean; annotation_v4.js is now 16,933 lines, index.html unchanged at 2,616 lines.
 
-### v0.1.060 — After Lock the board is a counting "playground": the Stone Buckets (Dead/Caps/Re-arrange) now MIRROR the ritual — a post-lock fill visibly consumes a prisoner and shrinks the piles — while the score stays frozen at the committed resolution, and the Mark Dead Stones / Mark Territories tools are now UNAVAILABLE after Lock, exactly as Replace/Re-arrange are unavailable before it
+---
+
+### v0.1.060 — Post-Lock Counting Playground & Bucket Sync
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Post-Lock Counting Playground & Bucket Sync |
+
+##### Details
+the Stone Buckets (Dead/Caps/Re-arrange) now MIRROR the ritual — a post-lock fill visibly consumes a prisoner and shrinks the piles — while the score stays frozen at the committed resolution, and the Mark Dead Stones / Mark Territories tools are now UNAVAILABLE after Lock, exactly as Replace/Re-arrange are unavailable before it
 
 v0.1.059 froze the read-out but left the counting tools' *tray* frozen too: a post-lock replace fill landed the stone on the board, yet the Dead/Caps buckets and capture counters stayed pinned to the locked resolution, and the Lock hint simply vanished. The user's refinement is that the board after Lock is a playground — "just have fun with replacing / rearranging stones, without affecting real Score" — so the tray is *also* cosmetics: it should move with the ritual (mirror the fill) while the Score itself never does. And because Mark Dead Stones / Mark Territories are resolution tools that cannot exist after the resolution is committed, they are now disabled after Lock — symmetric to Replace/Re-arrange being disabled before it.
 
@@ -317,7 +677,18 @@ v0.1.059 froze the read-out but left the counting tools' *tray* frozen too: a po
 
 Headless-verified (puppeteer against the repo, 66 checks across sections A–L, harness extended from 56): (A/B) locked plain-territory fills now shrink the prisoner pool and change the tray pills (the mirror) while the frozen read-out and `lockedSnapshot` board stay byte-for-byte identical across four fills; (C) a dead-X cell fill keeps its mark and `DD`/`MA`, dropping only the cosmetic territory; (F) fresh files open unlocked with Mark Dead + Mark Territories enabled and Replace/Re-arrange disabled, while file markup pre-engages the lock with the inverse gating and the hint shows the Unlock message; (H) Mark Dead + Mark Territories are disabled while locked, selecting them snaps back to a counting mode, and Unlock restores the resolution stage with marking working again; (I) the gating persists through close/reopen; (J) Undo while locked still caps at the lock commit point; (K) locked Reset still restores the post-D&T resolution; (L) Save while locked still persists the COMMITTED resolution, not the cosmetic board. All regression harnesses pass (`verify_no_autoseed`, `verify_gate_btn`, `verify_result_tag`, `verify_see_scoring`). `node --check` clean; annotation_v4.js is now 16,839 lines, index.html unchanged at 2,616 lines.
 
-### v0.1.059 — Locking freezes the score: once Dead Stones + Territory are Locked the computation is DONE — the formula, totals, and result badge freeze to the committed locked resolution, and every post-lock counting action (replace / re-arrange) becomes a pure cosmetic display aid that can never move the displayed score
+---
+
+### v0.1.059 — Score Freezing on D&T Lock
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Score Freezing on D&T Lock |
+
+##### Details
+once Dead Stones + Territory are Locked the computation is DONE — the formula, totals, and result badge freeze to the committed locked resolution, and every post-lock counting action (replace / re-arrange) becomes a pure cosmetic display aid that can never move the displayed score
 
 The Lock stage (v0.1.058) committed the resolution, but only the SGF Properties bars froze: the modal's own read-out — the section-8 formula, the totals, and the result badge — still recomputed from the LIVE board/marks/captures, so a post-lock fill moved the displayed score in the modal while the bars stayed pinned, and a user could close the modal with a "counted" resolution that no longer matched the frozen commit. v0.1.059 makes the freeze total.
 
@@ -331,7 +702,18 @@ The Lock stage (v0.1.058) committed the resolution, but only the SGF Properties 
 
 Headless-verified (puppeteer against the repo, 56 checks across sections A–L, harness extended from 47): (A/B) a locked plain-territory fill places the stone on the live board but the formula/totals/result read-out, the tray buckets, `DD`/`MA`, the capture counters, and the `lockedSnapshot` board are byte-for-byte frozen across four fills; (C) a dead-X cell fill keeps its mark and `DD`/`MA`, dropping only the cosmetic territory; (F) fresh files open unlocked while file markup pre-engages the lock; (G) the SGF Properties bars freeze while locked; (H) editing a locked stone shows the unlock dialog and applies the parked click after the reset; (I) `locked` + `lockedSnapshot` persist through close/reopen; (J) Undo while locked caps exactly at the lock commit point (a third Undo is a no-op) and can never reach a pre-lock board; (K) Reset while locked restores the post-D&T resolution with the undo stack capped, and Unlock → Undo×N walks back to the pristine terminal board; (L) Save while locked persists the COMMITTED resolution to the terminal node — reopen shows the frozen resolution, not the cosmetic fill. All regression harnesses pass (`verify_no_autoseed`, `verify_gate_btn`, `verify_result_tag`, `verify_see_scoring`; the two pre-v0.1.055 `verify_source_note*` harnesses are stale). `node --check` clean; annotation_v4.js is now 16,865 lines, index.html 2,616 lines.
 
-### v0.1.058 — The Manual Scoring Modal now runs on a committed "Lock" stage: Mark Dead Stones + Mark Territories are the mandatory first stage, locking freezes the SGF Properties read-out and unlocks Replace/Re-arrange, and dead marks NEVER clear — the dead X survives every fill
+---
+
+### v0.1.058 — Manual Scoring Modal Committed Lock Stage
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Scoring Modal Committed Lock Stage |
+
+##### Details
+Mark Dead Stones + Mark Territories are the mandatory first stage, locking freezes the SGF Properties read-out and unlocks Replace/Re-arrange, and dead marks NEVER clear — the dead X survives every fill
 
 The counting tools exposed a deep inconsistency. *Replacing Dead Stones* and *Re-arranging* existed only as a physical-count ritual that is meaningless before the Life & Death resolution exists, yet they were always available; and the previous mark-clearing behavior (v0.1.057 kept it only for the dead-X cell: "marks survive replacing" everywhere except a fill into a cell that already carried the dead X) meant the one spot the physical ritual most wants to fill — the dead-marked point — silently erased its own dead-stone resolution from `DD`/`MA`. This version introduces a real professional workflow: **resolve → Lock → count**, with the dead X as an immutable overlay that never clears.
 
@@ -343,8 +725,6 @@ The counting tools exposed a deep inconsistency. *Replacing Dead Stones* and *Re
 
 Headless-verified (puppeteer against the repo, 44 checks across sections A–I): (A/B) markup-file plain-territory fills keep `DD`/`MA` and the mark set byte-for-byte unchanged with the margin pinned (−1 per player per fill); (C) a dead-X cell fill places the stone, keeps its mark, keeps `DD`/`MA`, stops being territory (−1 total), and keeps the dead stone a prisoner via the mark (only the territory side drops); (D) manual marks → Lock → replace fills keep `DD`/`MA` intact; (E) Save writes the FULL pre-fill `DD` set to the terminal node; (F) fresh SGF opens unlocked with Replace/Re-arrange disabled + hint visible, and file `DD`/`MA`/`TB`/`TW` pre-engages the lock with both enabled + badge visible; (G) while locked the SGF Properties bars stay frozen through a counting fill while the live read-out moves, the pending-action unlock shows the confirm dialog, confirming restores the locked resolution, and Replace re-disables; (H) clicking a live stone while locked shows the dialog, and the intended mark edit is APPLIED after the reset; (I) `locked` + `lockedSnapshot` persist through close/reopen and Replace re-enables. All regression harnesses pass (`verify_no_autoseed`, `verify_gate_btn`, `verify_result_tag`, `verify_see_scoring`; the two pre-v0.1.055 `verify_source_note*` harnesses are stale — they assert the removed auto-seed behavior). `node --check` clean; annotation_v4.js is now 16,880 lines, index.html 2,616 lines.
 
-
-
 Replacing a dead stone (clicking a territory point in *Replacing Dead Stones* mode) must never shrink the game's resolved Life & Death set: the "Marked Dead Stones" value in SGF Properties (the `DD`/`MA` counts derived from `markedDead`/`deadStonesInfo` via `computeSgfPropertyBars`) dropped by 1 on every fill, even though the user was only physically counting prisoners — the game's dead-stone resolution was silently being erased.
 
 Root cause: the replace branch cleared one dead mark per fill through the `consumeDeadMarkFromState` helper (introduced in v0.1.042 to keep the score's dead term falling with the fill), and since the SGF Properties bars and the score both read the marks, each fill subtracted one from `DD`/`MA`. That mark-clearing existed only to make the score arithmetic work — it conflated the counting ritual with the Life & Death resolution.
@@ -353,7 +733,18 @@ Fix in `annotation_v4.js`: `consumeDeadMarkFromState` is deleted and every repla
 
 Headless-verified (puppeteer against the repo): on the Go Seigen test SGF — a plain-territory replace fill leaves `DD`/`MA` counts and the mark set byte-for-byte unchanged while both totals drop by exactly 1 (B 16→15, W 41→40, margin pinned); three further fills keep `DD`/`MA` intact with the margin pinned through all of them; a fill on a dead-marked cell still succeeds and drops `DD`/`MA` by exactly 1 (only its own cell); manual-mark fills keep `DD`/`MA` intact; and Save after a replace writes the FULL pre-fill `DD` set to the terminal node — the marks are never consumed by replacing. All checks pass.
 
-### v0.1.056 — The Manual Scoring Modal now shows the record's result read-out: a "Result ... (default)" row directly below the "Komi ... (default)" row, derived from the SGF's `RE` value, or "n/a (default)" when the record defines none
+---
+
+### v0.1.056 — Manual Scoring Modal Result Display
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | Manual Scoring Modal Result Display |
+
+##### Details
+a "Result ... (default)" row directly below the "Komi ... (default)" row, derived from the SGF's `RE` value, or "n/a (default)" when the record defines none
 
 The modal's sidebar showed the game's komi (with its SGF-derived "(default)" tag) but gave no read-out of the recorded result. The Scoring Modal is where a user confirms a game's end state, so the game's own `RE` (e.g. `W+2`) belongs right next to it.
 
@@ -361,7 +752,18 @@ Fix: a new `scoring-result-default-tag` span was added to the modal sidebar imme
 
 Verified with puppeteer against the repo (3 checks): the repo's test SGF (`RE[W+2]`) → tag reads `W+2 (default)`; the Result row sits directly below the Komi Control row in the sidebar; a copy of the SGF with `RE` stripped → tag reads `n/a (default)`. `node --check` clean. Bump to v0.1.056 with changelog narrative; annotation_v4.js table (16,691 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.055 — The Manual Scoring Modal never auto-marks dead stones: first open on a record without DD/MA/TB/TW starts with zero dead marks (only territory may auto-derive); dead stones are recorded only from the user's manual marks when they hit Save
+---
+
+### v0.1.055 — Manual Scoring Initial Zero Dead Marks
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Scoring Initial Zero Dead Marks |
+
+##### Details
+first open on a record without DD/MA/TB/TW starts with zero dead marks (only territory may auto-derive); dead stones are recorded only from the user's manual marks when they hit Save
 
 The dead-stone heuristic (goscorer/Sabaki `detectDeadStonesHeuristic`) auto-seeded dead marks on the FIRST open of the Manual Scoring Modal whenever the loaded record declared no endgame markup — and closing the modal persisted that "auto-seeded" session, so the Estimation panel's Run then computed a score from machine-guessed dead stones (15 in the test game) instead of showing the Dead-Stone Gate. The v0.1.050–v0.1.054 work only *labeled* this provenance (red "auto-seeded"); the spec is now explicit: dead stones are always the file's own DD/MA/TB/TW *or* the user's manual marks — never a heuristic.
 
@@ -369,7 +771,18 @@ Fix: `resetScoringBoardFromState()` no longer calls `seedAutoDeadMarks()` on fir
 
 Verified with puppeteer against the repo (13 checks): (A) first MSM open on a no-markup file → zero auto-marked dead stones, empty dead buckets (previously 15); (B) open+close MSM with no marks → the session does not resolve and Run still shows the "No DD/MA/TB/TW Endgame Markup Found" gate; (C) a file WITH DD/MA/TB/TW still seeds dead stones from its own markup and stays yellow "(SGF)"; (D) manual click → Save → DD written to the terminal SGF node, `computeSgfPropertyBars()` derives it, `isSgfDirty` set, and Run after Save computes JTS with the yellow "(SGF)" note; (E) manual marks closed WITHOUT Save → session resolves, Run computes JTS with the red "manual dead-stone marks" note (no "auto-seeded" text anywhere). `node --check` clean. Bump to v0.1.055 with changelog narrative; annotation_v4.js table (16,684 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.054 — The source note now keys on whether the SGF FILE declares DD/MA/TB/TW, not on provenance: a scoring session on a record whose SGF carries the markup still reads yellow "Deterministic JTS from DD/MA/TB/TW endgame markup (SGF)." — red "auto-seeded" is reserved for resolutions that exist only through the dead-stone heuristic with no SGF markup
+---
+
+### v0.1.054 — Deterministic JTS SGF Source Attribution
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Deterministic JTS SGF Source Attribution |
+
+##### Details
+a scoring session on a record whose SGF carries the markup still reads yellow "Deterministic JTS from DD/MA/TB/TW endgame markup (SGF)." — red "auto-seeded" is reserved for resolutions that exist only through the dead-stone heuristic with no SGF markup
 
 The v0.1.052 note labeled by provenance, so a game like REC_NO 003 whose SGF declares DD/MA/TB/TW still showed the red "auto-seeded" note once a Manual Scoring session existed on the record — even though the modal seeds that session from the record's own DD/MA/TB/TW (never the heuristic when markup exists), so the JTS was in fact computing from SGF markup. The "(SGF)" yellow text the v0.1.052 spec called for was not honored in that case.
 
@@ -377,7 +790,18 @@ Fix: `scoringSourceNote` now decides by `findEndgameMarkup(false)` (pure SGF sou
 
 Verified with puppeteer against the repo (4 checks): no-markup fresh load → gray default; SGF with terminal DD/MA/TB/TW, no session → yellow "(SGF)"; SGF with DD/MA/TB/TW PLUS a persisted/closed scoring session (prov=`Manual Scoring session`) → still yellow "(SGF)"; no-markup game with an auto-seeded session → red "auto-seeded". `node --check` clean. Bump to v0.1.054 with changelog narrative; annotation_v4.js table (16,725 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.053 — The Dead-Stone Gate's "Open Manual Scoring Modal" button now behaves exactly like "See Scoring": it closes the Estimation panel (⌘⇧E toggle) and then opens the Manual Scoring Modal
+---
+
+### v0.1.053 — Dead-Stone Gate Open Scoring Modal Shortcut
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Dead-Stone Gate Open Scoring Modal Shortcut |
+
+##### Details
+it closes the Estimation panel (⌘⇧E toggle) and then opens the Manual Scoring Modal
 
 Inside the "No DD/MA/TB/TW Endgame Markup Found" gate card, clicking "Open Manual Scoring Modal" opened the modal while the Estimation panel stayed open underneath — inconsistent with the "See Scoring" button, which closes the panel first.
 
@@ -385,7 +809,18 @@ Fix: the `#btn-open-manual-scoring` click handler now mirrors the "See Scoring" 
 
 Verified with puppeteer against the repo (3 checks): no-markup game at the final move → Run → Dead-Stone Gate card with the button shows; clicking it removes the `#estimate-rich-panel` (panel and Run button gone from the DOM) AND reveals the `#scoring-modal-overlay` (hidden class removed, display flex). `node --check` clean. Bump to v0.1.053 with changelog narrative; annotation_v4.js table (16,722 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.052 — The blue panel's Run subtitle now names the JTS input source in color: red "Deterministic JTS from \"auto-seeded\" endgame markup." when the compute runs off the Manual Scoring session (its auto-seeded dead-stone heuristic), yellow "Deterministic JTS from DD/MA/TB/TW endgame markup (SGF)." when the SGF itself declares DD/MA/TB/TW
+---
+
+### v0.1.052 — Computational Method JTS Source Indicator
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Computational Method JTS Source Indicator |
+
+##### Details
+red "Deterministic JTS from \"auto-seeded\" endgame markup." when the compute runs off the Manual Scoring session (its auto-seeded dead-stone heuristic), yellow "Deterministic JTS from DD/MA/TB/TW endgame markup (SGF)." when the SGF itself declares DD/MA/TB/TW
 
 When a game with no endgame markup had its Manual Scoring Modal opened (auto-seeded dead stones from the goscorer heuristic) and closed again, the Run control still carried the generic subtitle "Deterministic Japanese territory scoring from DD/MA/TB/TW endgame markup." — so the deterministic JTS appeared to be scoring from markup the SGF never actually declared.
 
@@ -393,7 +828,18 @@ Fix: the subtitle under "Run / Compute >" is now a source-aware `#scoring-source
 
 Verified with puppeteer against the repo (8 checks): fresh no-markup load → gray default note + gate fires; an SGF with terminal DD/MA/TB/TW markup → yellow "(SGF)" note + JTS computes and the note stays yellow after Run; opening/closing the MSM on a no-markup game (auto-seeds 15 dead stones, persists the session) → red "auto-seeded" note + JTS computes and the note stays red after Run. `node --check` clean. Bump to v0.1.052 with changelog narrative; annotation_v4.js table (16,717 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.051 — Clicking "See Scoring" now closes the Estimation panel (exactly like pressing ⌘⇧E) and then opens the Manual Scoring Modal
+---
+
+### v0.1.051 — Estimation Panel Close on Scoring Open
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Estimation Panel Close on Scoring Open |
+
+##### Details
+Clicking "See Scoring" now closes the Estimation panel (exactly like pressing ⌘⇧E) and then opens the Manual Scoring Modal
 
 After the "Run / Compute >" button morphs into "See Scoring", clicking it opened the Manual Scoring Modal while the Estimation panel stayed open underneath — the user had to close it manually to get back to the board.
 
@@ -401,7 +847,18 @@ Fix: the "See Scoring" click handler now closes the Estimation panel first by in
 
 Verified with puppeteer against the repo: load an SGF, jump to the final move, open the estimate panel → button reads "Run / Compute >"; clicking it morphs the text to "See Scoring" and the result block (Dead-Stone Gate card, no markup in the test game) still renders below; clicking "See Scoring" removes the `#estimate-rich-panel` (panel and Run button gone from the DOM) AND reveals the `#scoring-modal-overlay` (hidden class removed, display flex). `node --check` clean. Bump to v0.1.051 with changelog narrative; docs rebuilt and all version consumers synced.
 
-### v0.1.050 — After running the Computational Method (Japanese Territory Rules), the "Run / Compute >" button becomes "See Scoring", which opens the Manual Scoring Modal exactly like the ⚑ Endgame Scoring shortcut
+---
+
+### v0.1.050 — Computational Method Post-Run Scoring Button
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Computational Method Post-Run Scoring Button |
+
+##### Details
+After running the Computational Method (Japanese Territory Rules), the "Run / Compute >" button becomes "See Scoring", which opens the Manual Scoring Modal exactly like the ⚑ Endgame Scoring shortcut
 
 At game end, running the deterministic Japanese territory scorer once still rendered the full score detail inside the blue panel, but the green button above it stayed "Run / Compute >" — clicking it just re-ran the computation, with no quick way back to the Manual Scoring Modal from the result.
 
@@ -409,7 +866,18 @@ Fix: the first click on "Run / Compute >" runs the scorer exactly as before (dea
 
 Verified with puppeteer against the repo: load an SGF, jump to the final move, open the estimate panel → button reads "Run / Compute >"; clicking it morphs the text to "See Scoring" and the result block (Dead-Stone Gate card, no markup in the test game) still renders below; clicking "See Scoring" reveals the `#scoring-modal-overlay` (hidden class removed, display flex). `node --check` clean. Bump to v0.1.050 with changelog narrative; annotation_v4.js table (16,689 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.049 — The Board's Border now has an Override toggle and can never be covered by a board image: max border size is hard-capped at 100%, and a board set from an image file is clipped to the 19×19 grid so it stays out of the border margin in every size and in repeat mode
+---
+
+### v0.1.049 — Board Border Override & Image Clipping
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **renderer** | `fix` | Board Border Override & Image Clipping |
+
+##### Details
+max border size is hard-capped at 100%, and a board set from an image file is clipped to the 19×19 grid so it stays out of the border margin in every size and in repeat mode
 
 The Border section's size slider previously allowed values well past 100%, which, combined with an image board, let the wood/texture bleed over — and a board image would always paint over the margin regardless of the chosen border color, so the picked border color never actually showed.
 
@@ -417,7 +885,18 @@ Fix: the Border size is now capped at 100% (the slider's `max` went 200→100 an
 
 Verified with puppeteer against the repo: override ON + image board → margin shows picked red, grid shows the image, outside-wood stays white canvas, repeat mode stays clean; override OFF → margin shows the image; size forced to 200 clamps to 100%; size 0 leaves no border band; the toggle flips `style.border.override`, the ON/OFF label and the dimmed color controls update, and typing 250 in the size field clamps to 100 in the style, input, and slider. Export renders show red bands on all four sides with Override ON (image confined to the grid) and the image filling the margin with Override OFF. `node --check` clean. Bump to v0.1.049 with changelog narrative; annotation_v4.js table (16,679 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.048 — Manual stone placement now makes the same stone/remove sounds as replay: hand-drawn stones were the one silent path
+---
+
+### v0.1.048 — Manual Stone Placement Sound Effects
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Stone Placement Sound Effects |
+
+##### Details
+hand-drawn stones were the one silent path
 
 v0.1.047 made every sound bulletproof (base64 data URIs + re-armed unlock), and replay sounded right, but drawing on the board by hand was still silent. Root cause: `recordMoveAt()` (the manual stone/play-mode placement path, annotation_v4.js:1133) commits the move and then calls `goToMove(state.currentMoveIndex)` to rebuild the display — but `goToMove` only plays the stone sound when the target is a **single-step forward** (`isSingleStepForward = index === state.currentMoveIndex + 1`, annotation_v4.js:10728), and `recordMoveAt` has already advanced `currentMoveIndex` before that call, so the rebuild is a zero-step refresh and never played anything. Manual stones were therefore the one board action with no sound while replay (`goToMove` ±1) clicked away.
 
@@ -425,7 +904,18 @@ Fix: a successful placement in `recordMoveAt` now plays `playSfx(stoneSound)` di
 
 Verified with puppeteer against the repo: select `stone-b` → click board center → a stone is placed and an unmuted `stone` play resolves; `removeLastMove()` empties the cell and an unmuted `remove` play resolves; replay (`goToMove` forward after loading an SGF) still produces its unmuted stone play. `node --check` clean. Bump to v0.1.048 with changelog narrative; annotation_v4.js table (16,625 lines) updated; docs rebuilt and all version consumers synced.
 
-### v0.1.047 — Sound effects are permanently immune to the browser: all six SFX are embedded as base64 data URIs and the autoplay unlock re-arms on every gesture until a real sound actually plays
+---
+
+### v0.1.047 — Embedded Base64 Sound Effects & Autoplay Resilience
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Embedded Base64 Sound Effects & Autoplay Resilience |
+
+##### Details
+all six SFX are embedded as base64 data URIs and the autoplay unlock re-arms on every gesture until a real sound actually plays
 
 The `_sfx` sound kept failing across browser updates and environments even though the files and code paths were verified intact. Two separate weaknesses made the old design permanently fragile, and both are now gone.
 
@@ -435,7 +925,18 @@ The `_sfx` sound kept failing across browser updates and environments even thoug
 
 Verified with puppeteer against the repo (15 checks): all six pool elements use `data:` URIs and decode to the exact source byte sizes; **zero** network requests to `_sfx/` over a full session; a simulated autoplay block (all six muted pre-plays reject) on the first *and* second gesture leaves the unlock armed, then one real `playSfx(stoneSound)` resolves unmuted and flips `sfxUnlocked` so later gestures make no further play calls; clicking `btn-flip-pov` plays `flipSound` through `playSfx` and flips the board; the fast-forward pool creates from `SFX_BASE64.stone` (volume 0.4) and registers itself into `sfxGlobalPool`. `node --check` clean; no `new Audio('_sfx/…')` file paths and no direct `.play()` calls remain outside the two sanctioned paths.
 
-### v0.1.046 — In-session board-style edits are session-scoped: a Rec game's style no longer leaks into (or clobbers) the page-load initial-board setting
+---
+
+### v0.1.046 — Session-Scoped Board Style Isolation
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Session-Scoped Board Style Isolation |
+
+##### Details
+a Rec game's style no longer leaks into (or clobbers) the page-load initial-board setting
 
 v0.1.045 stopped Resume from overwriting the page-load initial-board setting with the rec's stale snapshot, but in-session edits went the other way: while a Rec game was open, editing the game board style (toolbar inputs, Stone Set radio, Reset-to-default, Derive from source, board-size slider) wrote straight into `state.initialBoardStyle` and `baduk_initial_board_style`, so a customization made **during** a session clobbered the user's page-load setting. The result was two-way leakage between boards that should be independent: the empty page-load board and the active game board each ended up carrying the other's style, and a session could not even reopen with its own look after a hard refresh.
 
@@ -443,7 +944,18 @@ Fix: the main board now has a session-scoped style while a Rec game is active. `
 
 Browser-verified (puppeteer against the repo): set initial color `#aa1111` on page load → seed a Rec with initial `#333333` / study `#4444ff` / export `#00ff00` → resume → edit the game board to `#7722cc` and pick Stone Set B, hit Reset, and Derive-from-study. In-session edits update the game board and are saved into the rec (`rec.settings.initialBoardStyle` = `#7722cc` + set B) while `#aa1111` stays untouched in memory and in localStorage; after a hard refresh the empty board shows `#aa1111`, and re-opening the Rec shows the rec's own customized `#7722cc`. Fresh `loadSGF`/paste clears the game style back to the page-load `#aa1111`; editing with no Rec active still writes the page-load setting. All 23 style-routing harness checks + the v0.1.045 regression harness pass; `test_estimate.js` passes; `node --check` clean.
 
-### v0.1.045 — The initial page-load board keeps its own board style: selecting a Rec Game no longer clobbers it
+---
+
+### v0.1.045 — Initial Board Style Preservation on Game Select
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | Initial Board Style Preservation on Game Select |
+
+##### Details
+selecting a Rec Game no longer clobbers it
 
 Setting the board style on the empty page-load board (via the floating panel), then selecting a Rec Game, then hard-refreshing showed the **game's** board style on the initial board instead of the setting made on page load. Root cause: every Resume applies `applyAppSettings(rec.settings)`, and that function **overwrote** `state.initialBoardStyle` from the rec's snapshot — the initial style captured during the rec's last play session, i.e. the "game play setting" — and **re-persisted** it to `baduk_initial_board_style`. So the moment a Rec Game was selected, the user's page-load initial setting was replaced (and written back to localStorage), and after a refresh the empty board showed the stale game-era style.
 
@@ -451,7 +963,18 @@ Fix in `applyAppSettings` (annotation_v4.js:1845): the initial board style is no
 
 Browser-verified (puppeteer against the repo): set initial board color `#aa1111` on page load → seed a Rec whose snapshot carries initial `#333333` / study `#4444ff` / export `#00ff00` / replayer `showMoveNumbers:false` → select the Rec → hard refresh. Pre-fix: after selecting the Rec the persisted initial color became `#333333` and stayed after refresh (bug). Post-fix: `#aa1111` survives selection AND refresh, while study `#4444ff`, export `#00ff00`, and replayer options are still restored. `test_estimate.js` passes; `node --check` clean.
 
-### v0.1.044 — Floating panel: unselecting a Stone Set now auto-expands the Custom Stones section even while the Stones accordion is open
+---
+
+### v0.1.044 — Floating Style Palette Persistence
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Floating Style Palette Persistence |
+
+##### Details
+unselecting a Stone Set now auto-expands the Custom Stones section even while the Stones accordion is open
 
 When a Stone Set is selected (by default or from a previous session) the Custom Stones section is locked and collapsed, so the Stones accordion — which opens by setting a **fixed inline `max-height` measured at open time** (`initAccordion` at annotation_v4.js:13554) — measures itself *short* if it is opened in that state. Unselecting the stone set then expands the Custom Stones body to its full height, but the accordion's stale fixed `max-height` plus its `overflow: hidden` clipped the growth — the Custom Stones options looked like they never appeared.
 
@@ -459,21 +982,47 @@ Fix in `syncCustomStonesSection()` (annotation_v4.js:12663): on the expand path 
 
 Verified in a real browser (puppeteer against the repo): with stone set A persisted, opening the Stones accordion measures 148 px; unselecting expands the body to 545 px and re-fits the accordion to 693 px (== its `scrollHeight`, last control fully visible, body opacity 1) — pre-fix the 148 px clip hid the 545 px body entirely. Regressions pass: re-selecting a stone set re-locks and collapses the section, and clicking the Custom Stones header while locked does nothing.
 
-### v0.1.043 — Replacing Dead Stones works on the dead-marked cell itself (freed point = territory), dame stays prohibited
+---
+
+### v0.1.043 — Dead Stone Replacement on Marked Intersection
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Dead Stone Replacement on Marked Intersection |
+
+##### Details
+Replacing Dead Stones works on the dead-marked cell itself (freed point = territory), dame stays prohibited
 
 v0.1.042 guarded the replace branch against clicking a cell that already carried a dead X — that guard over-reached: the dead-marked cell is itself a *territory point*. The dead stone was lifted, so its intersection reads as territory (the freed point) and a prisoner of that territory's color must be placeable there, exactly like on any other territory point. Blocking it meant the user literally could not fill the spots the physical ritual most wants to fill.
 
 Behavior now:
 
 - **A dead-marked cell fills like any other territory point.** Clicking a dead-white X (freed point = Black territory) places a BLACK prisoner; a dead-black X (freed point = White territory) places a WHITE prisoner. The stone that *was* on the clicked point stays a prisoner — its accounting is relocated from the mark set to the capture counter (`mark → capture` is a wash inside that side's prisoner total: dead white → `blackCaptures`, dead black → `whiteCaptures`, popped out of its `deadWhite`/`deadBlack` + transfer buckets). So the totals still drop by exactly 1 per player and the margin never moves — the same invariant as any plain territory fill.
+
 - **Dame stays prohibited.** Any intersection whose territory is not defined (`terrColor === 0` — dame or seki) still refuses the replace: a dame fill would cost only the prisoner's side (−1) and drift the margin, and the physical count never fills neutral ground.
+
 - **No prisoner → no fill.** A fill requires a prisoner of the territory's color (`deadBlack`/`deadWhite` bucket or the capture counter); with an empty pool the click does nothing.
+
 - **Marks survive replacing (v0.1.057, extended in v0.1.058).** Filling any territory point pops the dead bucket for placement but leaves `markedDead`/`deadStonesInfo` untouched — the prisoner term in the score drops by decrementing the capture counter instead, so the `DD`/`MA` counts in SGF Properties never shrink while Replacing Dead Stones. v0.1.058 extends this to the dead-marked cell itself (the v0.1.043 exception is deleted: a fill into a dead-X cell keeps the X) and gates the tools behind the Lock stage; dead-X fills drop only the territory side while the mark keeps the stone a prisoner, and occupied cells are never counted as territory (`countTerritoryFromScores` + the score loop skip `board[y][x] !== 0`).
+
 - **Undo covers captures.** `getScoringSnapshot`/`restoreScoringSnapshot` now capture and restore `blackCaptures`/`whiteCaptures` (they previously omitted them, so undoing any fill that consumed or relocated a capture left the counters out of sync with the restored board).
 
 Headless-verified: the `replace_marked_dead.js` harness mirrors the modal's exact click + scoring path over a sandwich board (black box with 6 dead white inside, white box with 4 dead black inside, captures 4/2) — dead-white Xs read as Black territory and dead-black Xs as White territory; a fill on each succeeds, the fill cell ends occupied by the territory color with its dead mark cleared, and BOTH players drop by exactly 1 per fill (B 129→128→127, W 110→109→108, margin pinned at 19); a full sequence of marked-cell + plain-territory fills keeps the margin fixed with zero drift; a dame click is prohibited and leaves the state byte-for-byte unchanged. `test_estimate.js` passes; `node --check` clean.
 
-### v0.1.042 — "Replacing Dead Stones" never moves the final margin: each prisoner fill drops BOTH players by exactly 1
+---
+
+### v0.1.042 — Scoring Margin Stability During Stone Replacement
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Scoring Margin Stability During Stone Replacement |
+
+##### Details
+each prisoner fill drops BOTH players by exactly 1
 
 The Manual Scoring Modal's *Replacing Dead Stones* tool fills a dead stone into the territory of its own color — click a Black-territory empty cell and a dead BLACK stone (one of White's prisoners) is placed there; click a White-territory cell and a dead WHITE stone (Black's prisoner) is placed there. The Go-domain score identity is `margin = (W_T + W_C) − (B_T + B_C)`, so the physical count must cancel exactly: filling a prisoner into the opponent's territory does `W_C − 1` (the prisoner is gone) **and** `B_T − 1` (the fill point is no longer territory) — the ±1 cancels and the margin never moves.
 
@@ -482,138 +1031,301 @@ It was drifting by exactly 1 per fill. Root cause: the score formulas read the d
 Fix in `annotation_v4.js`:
 
 - **New `consumeDeadMarkFromState(ss, colorVal)` helper** (next to `countMarkedDeadStones`): clears exactly ONE dead mark of the given color — the last one in traversal, pairing with the bucket's LIFO pop — leaving the lifted cell empty so its freed point stays territory. Added to every consumption path: the `replace` branches of `placeScoringStoneByMode` (both colors) and the color-picker dialog's "Dead" source buttons. (Superseded in v0.1.057: the helper is deleted and replacement fills no longer clear marks — the prisoner term drops via the capture counter so `DD`/`MA` stay intact; see the v0.1.057 entry.)
+
 - **Board-click replace branch**: on a fill it now also clears one matching dead mark, and two guards enforce the invariant physically — clicking a cell already marked dead is rejected (its freed point is already territory; filling it would re-place the stone and desync the bucket/mark pairing), and **dame is no longer fillable in replace mode** (dame belongs to neither player, so a dame fill costs only the prisoner's side −1 and the margin would drift; the physical count never fills dame). Fills are allowed only into the territory of the stone's own color.
+
 - Undo/redo restore the cleared mark via the existing snapshot (`getScoringSnapshot`/`restoreScoringSnapshot` copy `markedDead` + `deadStonesInfo`), so a replace-then-restore cycle is exact.
 
 Headless-verified: the `replace_invariance.js` harness mirrors the modal's exact scoring path (`territoryScoring` on `stonesWithDead`, manual-territory overrides, `countMarkedDead`, captures, komi) over a sandwich board (black box with 6 dead white inside, white box with 4 dead black inside, captures 4/2) — reproduces the pre-fix drift (margin 19 → 9 after 10 fills) and post-fix performs all 10 fills with margin 19 → 19 and each fill dropping BOTH players by exactly 1. All prior harnesses (komi SSOT, terr_gap, auto_seed_lift, result badge, reset_pristine, markup_warning, territory parity) + `test_estimate.js` still pass; `node --check` clean.
 
-### v0.1.041 — JTS blue panel no longer double-counts dead-stone freed points (B+3 → B+2 parity with the MSM)
+---
+
+### v0.1.041 — JTS Dead Stone Freed Points Double-Count Fix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | JTS Dead Stone Freed Points Double-Count Fix |
+
+##### Details
+JTS blue panel no longer double-counts dead-stone freed points (B+3 → B+2 parity with the MSM)
 
 Same game, same saved session, two answers: the Manual Scoring Modal said **B+2** (territory 68/69) but the blue Computational Method panel said **B+3** (territory 73/73). Investigation proved the dead-stone *freed points* were counted **twice** in the blue panel's session path:
 
 - `computeScoringPropsFromSession` derives the `TB`/`TW` lists from GoScorer, which treats marked-dead stones as transparent during flood-fill (goscorer.js:1416-1423) — so a dead stone's freed point is already territory and enters the `TB` list (dead *white* stones → Black territory) / `TW` list (dead *black* stones → White territory).
+
 - `evaluateJapaneseTerritory` then counted `tbOnBoard.length`/`twOnBoard.length` (which already contained those 9 points) **and** re-added every dead stone's freed point by flood-fill owner (board-estimate.js:650-657). That loop was written for the SGF-markup path, where `TB`/`TW` only mark empty intersections and the freed points genuinely are absent from the lists.
 
 The math matched the report exactly: 73 = 68 + 5 (five dead white stones) and 73 = 69 + 4 (four dead black stones) — a +9 territory over-count, all of it the 9 dead stones' freed points — which flipped the margin B+2 → B+3. The modal's 68/69 is the correct Japanese count (a dead stone counts once as a prisoner *and* its enclosed point counts once as territory).
 
 Fix: the freed-point loop now skips any point already present in the explicit `TB`/`TW` lists. The SGF-markup path is unchanged (freed points still added exactly once), the flood-fill fallback is unchanged, and session-path territory now equals the modal exactly. Headless-verified: a synthetic board (6 dead white inside a black enclosure, 4 dead black inside a white enclosure) reproduces the pre-fix double count (JTS territory = modal + 6/+4) and, post-fix, JTS territory == modal territory on all three paths (session lists, SGF-style lists, flood-fill fallback); all prior harnesses + `test_estimate.js` pass; `node --check` clean.
 
-### v0.1.040 — Missing DD/MA now REFUSES the JTS score (hard prerequisite), not just warns
+---
+
+### v0.1.040 — Mandatory DD/MA Prerequisite for JTS Score
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Mandatory DD/MA Prerequisite for JTS Score |
+
+##### Details
+Missing DD/MA now REFUSES the JTS score (hard prerequisite), not just warns
 
 v0.1.039 warned alongside the result; this hardens it. Resolved dead stones (`DD`/`MA`) are the true prerequisite for a correct Japanese-rules score — without them the scorer can only assume every stone is alive, which is not a Japanese score. The blue panel's Dead-Stone Gate now refuses whenever `snapshot.deadStones` is empty:
 
 - **No markup at all** (`DD`/`MA`/`TB`/`TW` none) — unchanged amber gate: *"No DD/MA/TB/TW Endgame Markup Found"*.
+
 - **TB/TW declared but dead stones absent** (the reported game) — NEW amber gate: *"No DD/MA Dead-Stone Resolution Found"* — *"This game declares TB/TW territory but no dead stones, so every stone would be assumed alive — no score is rendered for an unresolved Life & Death state."*
 
 Both gates carry the **Open Manual Scoring Modal** button: mark the dead stones with the X tool, save, re-run — then the score renders (territory from explicit TB/TW or flood-fill, dead prisoners added). The incomplete-markup card from v0.1.039 now only ever appears for territory: when `DD`/`MA` are resolved but `TB`/`TW` are absent, the score still renders with flood-fill territory plus the "Not Defined in the SGF" card and its Define-in-MSM button. A completely unresolved position can therefore never silently produce a number again. Headless-verified: the gate condition (`!hasSgfMarkup || snapshot.deadStones.length === 0`), both gate titles/bodies, the MSM wiring on both buttons, and the surviving TB/TW-only warning card; helper + all prior harnesses + `test_estimate.js` pass; `node --check` clean.
 
-### v0.1.039 — JTS warns when any DD/MA/TB/TW is missing and offers to define it in the MSM
+---
+
+### v0.1.039 — Endgame Markup Missing Warning & Resolution
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Endgame Markup Missing Warning & Resolution |
+
+##### Details
+JTS warns when any DD/MA/TB/TW is missing and offers to define it in the MSM
 
 The blue Computational Method panel computes a deterministic score from whatever endgame markup the SGF declares — but when the SGF declares only PART of it, the missing pieces are silently assumed. Example (the reported game): SGF had `TB`/`TW` but no `DD`/`MA`, so every stone was treated as alive and zero dead prisoners were added (`Scrubbed Dead: 0/0`); the score was still computed because the No-Markup Gate only fires when NONE of DD/MA/TB/TW exists. Now, whenever the scorer runs with any of the four missing, the panel appends an amber **"Incomplete Endgame Markup — Not Defined in the SGF"** warning listing exactly which elements are missing and the implication the scorer assumed:
 
 - `Dead stones (DD/MA)` — no stone is treated as dead, so dead prisoners are not counted
+
 - `Black territory (TB)` — computed by flood-fill instead of explicit markup
+
 - `White territory (TW)` — computed by flood-fill instead of explicit markup
 
 A **"Define in Manual Scoring Modal"** button opens the MSM so the user can mark the missing elements (dead stones with the X tool, territory via click) and re-run — turning an assumed score into the locked, exact Japanese score. The all-missing case still short-circuits in the existing No-Markup Gate (no score rendered at all); this warning only appears alongside a computed result. Verified headlessly: the real `buildScoringMarkupWarnings(snapshot)` covers TB/TW-only (warns DD/MA), DD/MA-only (warns TB+TW), complete (none), and empty (all three); source audit confirms the warning card, button id, and `openScoringModal` wiring; all prior harnesses + `test_estimate.js` still pass; `node --check` clean.
 
-### v0.1.038 — MSM "Reset Board" now rebuilds the pristine SGF terminal, exactly like opening the file in goscorer
+---
+
+### v0.1.038 — MSM Reset Board SGF Terminal Rebuild
+
+#### Performance Improvements
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `perf` | MSM Reset Board SGF Terminal Rebuild |
+
+##### Details
+MSM "Reset Board" now rebuilds the pristine SGF terminal, exactly like opening the file in goscorer
 
 "Reset Board" promised a clean slate but produced a board that did not match the source game: it rebuilt from the main app's **current** position (not the SGF terminal) and then re-applied the recorded DD/MA/TB/TW markup (or the dead-stone heuristic) — marking stones dead and **lifting them off the board**. goscorer's test page (`lightvector.github.io/goscorer/web_test/test.html`) behaves differently: it loads the SGF and plays to the **last move** with **every stone present and zero dead marks** (dead marking is manual there), but its `TerritoryLayer` then overlays the **computed** territory — `territoryScoring(stones, markedDead)` with `markedDead` all-false — plus the score line. Verified from goscorer's source: `player.loadSgf(contents)` → WGo plays to the end; `markedDead` starts all-false; territory shading is an always-on computed layer, not marks.
 
 1. **Reset is now the "re-open the file" action.** `resetScoringBoardFromState({ pristine: true })` (wired to both the Reset button and its confirm dialog) rebuilds the board from `replayToTerminal()` — the full SGF replayed to its last move, independent of where the user is in the move tree — with the replay's own in-game captures and the SGF's komi. No dead marks, no territory marks, no buckets — exactly the inputs goscorer's test page has after `Last` (it draws the SGF's final position and then overlays the COMPUTED territory from `territoryScoring(stones, markedDead)` with `markedDead` all-false). The modal draws the same computed overlay from the same inputs (`locScores = territoryScoring(stonesWithDead, markedDead, false)`, `showTerritory` on by default), so Reset shows the identical territory shading and score as the page — territory + 0 dead + game captures + SGF komi.
+
 2. **First-open behavior is unchanged.** Opening the modal without a saved session still seeds from the game's recorded DD/MA/TB/TW (or the Sabaki dead-stone heuristic when none exists), so a fresh session still starts from the game's resolved Life & Death marks. Only the explicit Reset is pristine — the user can then mark dead stones manually, exactly as on the goscorer page.
 
 (Verified: a harness extracts the real `resetScoringBoardFromState()` and drives both modes with stubs — pristine yields the replayed terminal with zero marks, replay captures, and SGF komi, and never calls `findEndgameMarkup`/`seedAutoDeadMarks`; first-open still runs the markup seed and (when no markup) the heuristic; the Reset handlers pass `{ pristine: true }`. Komi SSOT harness, `test_estimate.js`, the v0.1.034 lift harness, and the v0.1.035 badge harness all pass; `node --check` clean.)
 
-### v0.1.037 — Komi SSOT completed: every komi default is one named constant, zero literals left (REC 004)
+---
+
+### v0.1.037 — Komi SSOT Synchronization
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **scoring** | `fix` | Komi SSOT Synchronization |
+
+##### Details
+every komi default is one named constant, zero literals left (REC 004)
 
 v0.1.036 fixed the blue panel's `KM[0]`→6.5 slip, but an audit for remaining hardcoded `6.5` values found more: the codebase had **8 hardcoded `6.5` sites** in 3 files. Two were real drift risks and are fixed here; the rest are now routed through one constant.
 
 1. **YSE yellow panel had its own third komi reader.** `runScoreEstimate` kept a private `let komi = 6.5` plus its own `parseFloat(state.sgfMetadata.km)` block — it never used the `extractSgfKomi()` resolver v0.1.036 introduced, only checked `sgfMetadata.km` (ignoring the `gameInfo` fallbacks), and carried its own default. It happened to keep `KM[0]` at 0 thanks to its `isNaN` guard, but three independent readers is exactly the drift shape that produced the v0.1.036 bug. It now calls `extractSgfKomi()` like every other surface.
+
 2. **Legacy-session restore hardcoded 6.5.** `restoreScoringFromSavedData` used `data.komi != null ? data.komi : 6.5` — a saved session missing a komi field was forced to 6.5 even when the SGF says `KM[0]`. The fallback is now `extractSgfKomi()`, so a zero-komi game restores as zero.
+
 3. **One named default.** `const DEFAULT_KOMI = 6.5` is now the *only* `6.5` literal in the scoring paths: `extractSgfKomi()`'s fallback and the `scoringState` initial value reference the constant directly. The `board-estimate.js` library still has `komi = 6.5` as its public API default params (`getScore`/`estimate`/`evaluateJapaneseTerritory`), which is intentional and inert — every app caller passes komi explicitly, so they never fire in-app.
 
 (Verified: the komi harness now also audits the source — it asserts zero `6.5` literals survive outside `DEFAULT_KOMI`, the YSE panel routes through `extractSgfKomi()`, and the legacy restore falls back to it; all 7 komi cases, the B+31.5→B+38 reproduction, `test_estimate.js`, the v0.1.034 lift harness, and the v0.1.035 badge harness all pass; `node --check` clean.)
 
-### v0.1.036 — Komi 0 in the SGF no longer turns into a default 6.5 (REC 004)
+---
+
+### v0.1.036 — Komi 0 SGF Parsing Fix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Komi 0 SGF Parsing Fix |
+
+##### Details
+Komi 0 in the SGF no longer turns into a default 6.5 (REC 004)
 
 REC 004 ships `KM[0]` — a no-komi game — yet the blue Computational Method panel computed `White Total = 8 + 2 + 6.5 = 16.5` and reported **B+31.5**. The SGF's komi was being read through a `parseFloat(km) || 6.5` default: `parseFloat('0')` is `0`, which is **falsy**, so a legitimate zero-komi game fell through to the 6.5 fallback. The modal's own session init had always parsed komi with an `isNaN()` guard (0 stays 0), so the two surfaces disagreed on a real zero.
 
 1. **One falsy-`0` slip in the blue panel's komi default.** `resolveScoringInputs` initializes the snapshot with `parseFloat(state.sgfMetadata.km) || 6.5`. The `|| 6.5` is only meant to catch an unparsable/missing value, but `0` is falsy too — so `KM[0]` was silently upgraded to 6.5, inflating White by 6.5 and deflating Black's margin by the same amount (B+31.5 instead of the correct B+38). The modal never had this bug, which is why REC 002's parity drive did not catch it: both surfaces agreed on the *sources* (session vs SGF), but the blue panel's default corrupted a real zero.
+
 2. **The fix — one SSOT komi resolver, isNaN-guarded.** A new `extractSgfKomi()` now owns komi extraction from the SGF (`state.sgfMetadata.km`, then `state.gameInfo.km/KM/komi`) with an `isNaN(parseFloat(...))` guard so `0` survives and only missing/garbage falls back to 6.5. Both the blue panel's `resolveScoringInputs` and the modal's session init call the same function — the modal's inline extraction is gone, so the two surfaces structurally cannot drift on komi again (SSOT-and-Synced).
 
 (Verified: a harness extracts the real `extractSgfKomi()` source from annotation_v4.js and asserts `KM[0]` → 0, `KM[0.0]` → 0, `KM[6.5]` → 6.5, `KM[7.5]` → 7.5, `gameInfo.KM[0]` → 0, no komi → 6.5, garbage → 6.5; it also reproduces the exact report arithmetic — pre-fix `B+31.5`, post-fix `B+38`. `test_estimate.js` passes; terr_gap still reports MSM B10 == JTS B10 MATCH; the v0.1.034 dead-stone lift and v0.1.035 result-badge harnesses still pass; `node --check` clean.)
 
-### v0.1.035 — Scoring Modal result badge now always equals the formula shown (REC 002)
+---
+
+### v0.1.035 — Scoring Modal Result Badge Formula Parity
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Scoring Modal Result Badge Formula Parity |
+
+##### Details
+Scoring Modal result badge now always equals the formula shown (REC 002)
 
 A user reported the modal displaying `Black 51 (territory) + 6 (dead) + 0 (caps) = 57` / `White 57 (territory) + 0 (dead) + 4 (caps) + 0 (komi) = 61` next to a **`W+6`** badge — but 61 − 57 is 4, so the badge should read `W+4`. The two displays were computing from **different** state, and the split only shows up after Replacing / Re-Arranging stones.
 
 1. **The formula is live; the badge was anchored — so they drifted.** The per-color Computing formula (territory + dead + caps + komi) reads the *display* board (`scoringState.board`) and the *editable* captures (`blackCaptures`/`whiteCaptures`), so every Replace/Re-arrange edit is reflected immediately. The result badge (`scoring-result-display`), anchored since v0.1.028, instead read `baseBoard` (untouched position) + `baseCaptures` (captures at session start). In the reported session White had captured 6 black stones in-game; the user Replaced 2 of them back onto the board, dropping live `whiteCaptures` 6 → 4. The formula showed 61 (W+4 arithmetic) while the badge — still on the original `baseCaptures.W = 6` — showed `W+6`. Same story for territory after a Re-arrange moved stones: the badge ignored the corrected position.
+
 2. **The anchor was the wrong tool for the job.** v0.1.028/029 anchored the badge so Replace/Re-arrange "could never move the game's real result", but that produced a modal whose own arithmetic disagreed with its headline — a contradiction the user cannot resolve. Re-arranging/Replacing is the user *correcting* the board; the definitive Japanese score (territory + dead prisoners + captures, per the scoring domain goal) must reflect that correction.
+
 3. **The fix — one live source of truth for the score.** Every reader now computes from the same live session:
-   - The modal's result badge reads `scoringState.board` + live `blackCaptures`/`whiteCaptures` — identical inputs to the formula, so the badge is the formula's arithmetic by construction.
-   - `computeScoringPropsFromSession` derives `DD`/`MA`/`TB`/`TW` from `session.board` (not `baseBoard`), so the blue-panel Run score, the saved markup, and the modal all reflect the last-edited board.
-   - `resolveScoringInputs` feeds the session's live captures (not `baseCaptures`), keeping blue-panel ⇄ modal parity.
-   - `baseBoard`/`baseCaptures` are retained in the snapshot only as the untouched-position seed `seedAutoDeadMarks` reads on first entry; they no longer drive any score.
+
+- The modal's result badge reads `scoringState.board` + live `blackCaptures`/`whiteCaptures` — identical inputs to the formula, so the badge is the formula's arithmetic by construction.
+
+- `computeScoringPropsFromSession` derives `DD`/`MA`/`TB`/`TW` from `session.board` (not `baseBoard`), so the blue-panel Run score, the saved markup, and the modal all reflect the last-edited board.
+
+- `resolveScoringInputs` feeds the session's live captures (not `baseCaptures`), keeping blue-panel ⇄ modal parity.
+
+- `baseBoard`/`baseCaptures` are retained in the snapshot only as the untouched-position seed `seedAutoDeadMarks` reads on first entry; they no longer drive any score.
 
 (Verified: an arithmetic harness reproduces the exact report — formula `W+4`, anchored badge `W+6` — and shows the live badge matching the formula precisely; `test_estimate.js` passes; terr_gap still reports MSM B10 == JTS B10 MATCH; the v0.1.034 dead-stone lift harness still passes; `node --check` clean.)
 
-### v0.1.034 — Auto-detected dead stones now lift off the board exactly like manual marks (REC 002)
+---
+
+### v0.1.034 — Auto-Detected Dead Stones Lift Parity
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Auto-Detected Dead Stones Lift Parity |
+
+##### Details
+Auto-detected dead stones now lift off the board exactly like manual marks (REC 002)
 
 The initial auto-detect (`seedAutoDeadMarks`) and the recorded-markup seed (`applyMark`) marked stones dead **without lifting them**: `markedDead`/`deadStonesInfo`/the buckets said "dead", but `scoringState.board` still held the stone — so the board drew a stone with a red X on top of it, while a manually clicked dead mark lifts the stone to an empty intersection and draws the X there. That inconsistency surfaced in **Replacing Dead Stones / Re-Arranging Stones**: a Replace click popped a `deadWhite` entry to place a prisoner while the "dead" stone itself was still sitting on the board, and a Re-arrange click on such a stone collected it into the rearrange bucket **on top of** its existing dead-bucket entry — the same stone counted in two buckets.
 
 1. **Manual marks lift; the seeds didn't.** `handleScoringBoardClick` sets `board[r][c] = 0` (annotation_v4.js:15659) when a stone is clicked dead. `seedAutoDeadMarks` and the `applyMark` seed only wrote `markedDead` + `deadStonesInfo` + the bucket stacks, leaving the display cell full. The comment at the seed sites claimed "behave EXACTLY like manually clicked marks" — the lift was the missing half.
+
 2. **The fix — every dead-mark seed lifts, and restore self-heals.** All three `markedDead = true` write sites now also zero the display cell (the canonical `baseBoard` snapshot never changes, so the game's final result and saved `DD`/`MA`/`TB`/`TW` stay anchored):
-   - `seedAutoDeadMarks` — the goscorer heuristic auto-detect lifts each detected dead stone.
-   - `applyMark` — the `DD`/`MA`/`TB`/`TW` markup seed lifts each recorded dead stone.
-   - `restoreScoringFromSavedData` — self-heals sessions saved before this fix (same pattern as the v0.1.032 restore rebuild): any stone sitting at a `markedDead` position is lifted on restore.
+
+- `seedAutoDeadMarks` — the goscorer heuristic auto-detect lifts each detected dead stone.
+
+- `applyMark` — the `DD`/`MA`/`TB`/`TW` markup seed lifts each recorded dead stone.
+
+- `restoreScoringFromSavedData` — self-heals sessions saved before this fix (same pattern as the v0.1.032 restore rebuild): any stone sitting at a `markedDead` position is lifted on restore.
+
 3. **Scores are unchanged by design.** GoScorer already reconstructs `stonesWithDead` from `deadStonesInfo` at lifted positions, so the territory/prisoner computation sees the identical board whether the dead stones were lifted or not. The change is purely visual (X on an empty intersection, stone in its bucket) and in Replace/Re-arrange bookkeeping (no more double-sourced stones).
 
 (Verified: a 5×5 ring harness — auto-detect lifts all 9 dead white stones while `baseBoard` stays intact, the lifted mark is display-identical to a manual click, the markup seed lifts + still dedupes to 9, the restore self-heal lifts a legacy persisted board, and the `stonesWithDead` reconstruction is byte-identical lifted vs not-lifted; `test_estimate.js` passes; terr_gap harness still reports MSM B10 == JTS B10 MATCH; `node --check` clean.)
 
-### v0.1.033 — Version-driven script cache-busting (why the YSE fix "didn't take")
+---
+
+### v0.1.033 — Version-Driven Script Cache Busting
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Version-Driven Script Cache Busting |
+
+##### Details
+Version-driven script cache-busting (why the YSE fix "didn't take")
 
 After v0.1.030 isolated the Score Estimate, the yellow panel **still** replayed the recorded `TB`/`TW` on the final move of a saved REC. The source was already correct — the browser was running a **stale copy of the JavaScript**.
 
 1. **The source never feeds territory to YSE anymore.** `runScoreEstimate` passes empty `territoryBlack`/`territoryWhite` into `BoardEstimate.estimate`, which only short-circuits its AI when those arrays are non-empty; `deadstones.guess` is seeded with `Date.now()`, so a fresh YSE genuinely varies per run. The "fixed output matching the recorded markup" symptom is precisely the pre-v0.1.030 behavior.
+
 2. **The browser HTTP cache kept serving the old script.** Every `<script>` tag in `index.html` carried a hard-coded cache-buster (`annotation_v4.js?v=4.3`, `board-estimate.js?v=1.0`, …) set once in the initial commit and **never bumped** across a dozen releases. The service worker is network-first, but the browser's own HTTP cache can answer `annotation_v4.js?v=4.3` with the pre-fix body it stored — so the page ran the old estimator even though the file on disk had changed. This also explains why the ×12 dead-bucket bug stayed visible after v0.1.032.
+
 3. **The fix — tie cache-busting to the release version (SSOT).** `sync-docs.js`'s `syncVersion()` now also rewrites every `<script src="*.js?v=…">` to `?v=<version>` from the `SITEMAP.md` frontmatter. Bumping only the `version:` field forces every browser to fetch fresh JavaScript on that release — no stale body can survive a reload. The service worker's network-first fetch then always reaches the current file.
 
 (Verified: `node sync-docs.js` rewrites all nine script `?v=` params to the frontmatter version; `node --check` clean.)
 
 **User action:** reload the page once after this release — the new `?v=0.1.033` URLs guarantee a fresh fetch, and the YSE on the final move will run its own random AI estimation again.
 
-### v0.1.032 — Scoring Modal buckets no longer double-count dead stones (REC 002)
+---
+
+### v0.1.032 — Scoring Modal Dead Stone Bucket Double-Count Fix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Scoring Modal Dead Stone Bucket Double-Count Fix |
+
+##### Details
+Scoring Modal buckets no longer double-count dead stones (REC 002)
 
 After v0.1.031 closed the blue-panel ⇄ modal score gap, the Scoring Modal's **Stone Buckets** still showed an inflated dead count: 6 White stones marked dead on the board appeared as **Dead: × 12** in Black's bucket. The score itself was already correct — this version fixes the bucket display (and the replace-availability counts) at its source.
 
 1. **The score was never wrong, because it never reads the buckets.** The computing formulas and the Final read `countMarkedDeadStones` over the canonical `markedDead` grid — the game's true Life & Death set — so 6 dead White stones always counted once there (the v0.1.028 "marks, not buckets" principle).
+
 2. **The bucket pills display the stack arrays, which the markup seed double-filled.** `updateScoringUI` renders the Black bucket's *Dead:* pill from `scoringState.deadWhite.length`, and `resetScoringBoardFromState` seeds those stacks by calling `applyMark` four times — `DD`, `MA`, `TB` (marks opponent stones inside declared territory dead), `TW`. That seed had **no duplicate guard**: a dead White stone that appears in both the `DD`/`MA` dead list *and* inside the `TB` Black-territory bounds was pushed into `deadWhite`/`bucketBlack` **twice** → 6 stones became × 12. Manual clicks and the auto-seed (`seedAutoDeadMarks`) already guard with `!markedDead`; the markup seed was the only path that didn't.
+
 3. **Two fixes, both mirroring "the marks are canonical":**
-   - **Seed dedupe** — `applyMark` now skips any point already in `markedDead`, so the four markup passes can never double-push a stone that legitimately belongs to more than one list (dead + enclosed-by-territory).
-   - **Restore self-heal** — `restoreScoringFromSavedData` rebuilds `deadWhite`/`deadBlack` from `markedDead`/`deadStonesInfo` instead of trusting the persisted arrays, so sessions saved before this fix show the true count on reopen (the bucket arrays are pure mirrors of the marks, so this is always exact).
+
+- **Seed dedupe** — `applyMark` now skips any point already in `markedDead`, so the four markup passes can never double-push a stone that legitimately belongs to more than one list (dead + enclosed-by-territory).
+
+- **Restore self-heal** — `restoreScoringFromSavedData` rebuilds `deadWhite`/`deadBlack` from `markedDead`/`deadStonesInfo` instead of trusting the persisted arrays, so sessions saved before this fix show the true count on reopen (the bucket arrays are pure mirrors of the marks, so this is always exact).
 
 (Headless-verified: a 5×5 ring harness where the same stones sit in both the dead list and the territory bounds shows the bucket count matching the marks (was 2× before the guard); the restore-rebuild path turns a persisted 18-entry stack for 9 marks back into 9; `test_estimate.js` passes; `node --check` clean.)
 
-### v0.1.031 — Blue panel ⇄ Scoring Modal: dead-stone points now count as territory (REC 002)
+---
+
+### v0.1.031 — Blue Panel & Scoring Modal Synchronization
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Blue Panel & Scoring Modal Synchronization |
+
+##### Details
+dead-stone points now count as territory (REC 002)
 
 The blue Computational Method (JTS) and the Manual Scoring Modal (MSM) must read the **same** Japanese score for a saved record. On REC 002 they did not: JTS showed Black territory 43 with a W+11 result, while MSM showed Black territory 49 → W+5. The two surfaces agreed on arithmetic (territory + prisoners + komi) but disagreed by exactly **6** on Black territory — and that 6 is precisely the number of White stones marked dead. This version closes the gap at its source.
 
 1. **MSM counts a scrubbed dead stone's point as territory; JTS did not.** MSM's territory tally runs `territoryScoring` (GoScorer) over the board with dead stones lifted — a White stone marked dead becomes a Black prisoner **and** its intersection is counted as Black territory (49 total). JTS's blue panel, by contrast, counts territory from the explicit `TB`/`TW` point lists the session converter (`computeScoringPropsFromSession`) writes. That converter only marks **empty** intersections — `if (row[c] !== 0) continue;` — so a cell still holding a stone was never emitted as a territory point. The 6 dead White stones were therefore missing from `TB` → Black territory 43. Both surfaces then summed the same way, so the 6-point hole surfaced as a 6-point score difference (W+11 vs W+5).
+
 2. **Japanese rules side with MSM.** A stone marked dead is captured; its point is enclosed by the opponent and becomes opponent territory. So the dead-stone cells belong in Black territory, and the blue panel was shortchanging Black by exactly the dead count.
+
 3. **The fix — count freed dead-stone points in the explicit path.** `evaluateJapaneseTerritory` already scrubs dead stones from its working grid before scoring. When it counts an explicit `TB`/`TW` list (which knows nothing about the dead stones' points), it now also flood-fills the scrubbed grid and adds each scrubbed dead stone's freed point as territory for its enclosing color — a freed point in a mixed (dame) region stays uncounted. The flood-fill owner map is computed once and shared, so the markup-less fallback path is unchanged.
 
 (Verified: a 5×5 harness with one dead White stone inside a Black ring previously reported JTS Black territory 8 vs GoScorer's 9 — now 9 == 9 with full totals matching (MSM 10 == JTS 10); `test_estimate.js` passes; `node --check` clean.)
 
 For REC 002 this changes the blue panel from Black 43 / W+11 to Black 49 / W+5, matching the modal.
 
-### v0.1.030 — Score Estimate ⇄ Computational Method: YSE now always runs its own estimation
+---
+
+### v0.1.030 — Score Estimate & Computational Method Integration
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Score Estimate & Computational Method Integration |
+
+##### Details
+YSE now always runs its own estimation
 
 The yellow Score Estimate (YSE) and the blue Computational Method (JTS) must always compute **separately** — JTS scores recorded markup, YSE estimates on its own. They were not: on the last move of a saved study record, YSE silently stopped estimating and replayed JTS's recorded territory as a fixed value. This version breaks that link at the one point where it could form.
 
 1. **YSE varies per run because its AI is seeded randomly.** `deadstones.guess` seeds its Monte Carlo search with `Date.now()` (deadstones.bundle.js), so every Estimate gets a different dead-stone map — that is the "gives a different estimation each time" behavior. `board-estimate.js` has no randomness of its own, so a **fixed** YSE output can only mean the AI never ran.
+
 2. **On the last move, YSE stopped estimating and replayed recorded territory.** `runScoreEstimate` read the last move's `territory` (`TB`/`TW`) from `state.sgfMoves[last]`, and `BoardEstimate.estimate` short-circuits the whole AI whenever `territoryBlack`/`territoryWhite` are non-empty — it builds the map purely from those recorded points. Deterministic. Fixed.
+
 3. **That recorded territory IS the JTS source.** Since v0.1.026, `saveScoringResult` writes the scoring session's `DD`/`MA`/`TB`/`TW` into `rec.workingSgf`; on resume, `loadSGF` parses them back into the last move's `.territory`. The "fixed" last-move value was literally the markup JTS produced — JTS writes, YSE consumes. The recorded-territory read itself is ancient (initial commit) but stayed dormant while saved games carried no `TB`/`TW`; it activated once saves began writing territory into the SGF, which is why the interference only appeared recently.
 
 **Not a culprit:** `DD`/`MA` never reach `estimate()` — only `TB`/`TW` can short-circuit it. So the fix needed to stop feeding recorded territory, and nothing else.
@@ -622,7 +1334,18 @@ The yellow Score Estimate (YSE) and the blue Computational Method (JTS) must alw
 
 (Verified: `node --check` clean; `test_estimate.js` passes; with empty territory `estimate()` runs the AI path.)
 
-### v0.1.029 — Blue-panel ⇄ Modal-final capture parity (REC 002)
+---
+
+### v0.1.029 — Blue Panel & Modal Capture Parity
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Blue Panel & Modal Capture Parity |
+
+##### Details
+Blue-panel ⇄ Modal-final capture parity (REC 002)
 
 Closes the last parity gap between the blue "Computational Method" Run score and the Manual Scoring Modal's FINAL badge. When a saved scoring session exists, the blue panel and the modal's Final now derive from the **same canonical captures**:
 
@@ -630,17 +1353,31 @@ Closes the last parity gap between the blue "Computational Method" Run score and
 
 (Headless-verified: 23 harness scenarios — the new scenario W asserts a saved session carrying both `baseCaptures: {0,0}` and editable `blackCaptures: 3 / whiteCaptures: 4` feeds the scorer `0/0` — plus 10 regression probes; Probe J reverts the resolver to the editable fields and W fails.)
 
-### v0.1.028 — Manual Scoring Modal: goscorer auto-dead seeding + canonical Final anchor
+---
+
+### v0.1.028 — Manual Scoring Modal Workflow
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Scoring Modal Workflow |
+
+##### Details
+goscorer auto-dead seeding + canonical Final anchor
 
 Completes the Manual Scoring Modal's L&D edits with three fixes:
 
 1. **First-entry goscorer dead stones are shown and counted like manual marks.** On the first open of the Manual Scoring Modal per game, when no endgame `DD`/`MA`/`TB`/`TW` markup resolves, `resetScoringBoardFromState` now runs `seedAutoDeadMarks()`: it runs `BoardEstimate.detectDeadStonesHeuristic` (Sabaki) on the **canonical game board** and folds every detected stone into the same `markedDead` / `deadStonesInfo` / dead-bucket structures a manual click writes. The modal shows the marks (X) and their territory immediately, and they count in the Computing formulas, the Final, and the saved props as ONE combined set with the user's own marks.
+
 2. **The Final W+1 is anchored to the untouched game position.** `resetScoringBoardFromState` captures `baseBoard` (deep copy of the game board) and `baseCaptures`; the Final badge (`scoring-result-display`) is recomputed from `baseBoard` + the current mark set + `baseCaptures` (falling back to the display board for legacy sessions). Re-Arranging/Replacing dead stones still mutates `scoringState.board` — which is exactly what the per-color Computing lines (territory + dead + caps + komi) are meant to teach — but they can **never** move the game's real result, nor the saved `DD`/`MA`/`TB`/`TW` (that converter also derives from `baseBoard`). Marking/unmarking a stone dead remains a legitimate edit that moves both.
+
 3. **Dead-stone accounting now comes from the marks, not the buckets.** The formulas' dead term is `countMarkedDeadStones()` over `markedDead`/`deadStonesInfo`, so recorded, auto-seeded and manual marks count identically, and Replacing a dead stone (which pops a bucket for placement) never changes the count.
 
 Also in this version:
 
 4. **Recorded markup dead stones seed the mark set on reset.** The `applyMark` seeding path now also fills `deadStonesInfo` and the dead/bucket stacks, so a resolved `DD` markup is indistinguishable from the user clicking the same stone.
+
 5. **The dead "Auto Dead / Unselect Dead Stones Button" is removed** from the modal sidebar (`index.html` block, the `updateScoringUI` wiring, and the now-unused `autoMarkDeadStones` / `hasAnyDeadStones` helpers are gone) — dead-stone detection is automatic and unified.
 
 (Headless-verified: 22 harness scenarios — auto-seed parity, canonical-Final anchoring across rearrange/replace, snapshot persistence of `baseBoard`/`baseCaptures` with legacy fallback, recorded-mark seeding, button removal — plus 9 regression probes, each confirming a fix has a failing test when reverted.)
@@ -648,22 +1385,38 @@ Also in this version:
 Three-part fix completing the v0.1.026 parity work:
 
 1. **Manually marked territory no longer falls back to auto-derived territory.** `saveScoringResult` previously wrote `rec.scoringData` without `manualTerritory` (and without `frozen`/dirty flags), so reopening the modal or re-running the score silently discarded the user's explicit territory marks and re-derived them automatically. `saveScoringResult` now persists the **exact last-edited board** as the per-REC snapshot.
+
 2. **The Scoring Modal's educational edits are remembered per REC**, stored in localStorage (not SGF): lifted dead stones, manual territory marks, rearrange/replace buckets, captures, komi, rule/interaction mode, and frozen state. Only `DD`/`MA`/`TB`/`TW` go into the SGF (`rec.workingSgf`), regenerated on save.
+
 3. **All consumers derive identical `DD`/`MA`/`TB`/`TW`** from one shared converter, so the REC SGF file, the export, the modal prop-bars, and the main board can never drift.
 
 Also in this version:
 
 4. **Sound restored across browsers.** All SFX (`stone`, `remove`, `annot`, `board flip`, `replay`) are pre-unlocked on the first user interaction — modern browsers (Chrome/Safari/Firefox) block `HTMLAudioElement.play()` until the page receives a user-activation gesture, so after a browser update or a drop in media-engagement status sounds can stop even though the files load fine. The unlock re-arms on every gesture until a real unmuted play succeeds, and the sounds themselves are embedded as base64 data URIs (v0.1.047) — see the v0.1.047 entry for the permanent mechanism. No mute toggle involved.
+
 5. **Version-sync system is now self-maintaining and documented.** `sync-docs.js` derives the version from the `SITEMAP.md` frontmatter and auto-patches the `index.html` header label, `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and the `tech_log-{version}.html` redirect (see *SSOT Sync System* in the Tech Log System chapter).
 
-### v0.1.027 — Manual Scoring snapshot persistence + session ⇄ SGF sync (single source of truth)
+---
+
+### v0.1.027 — Manual Scoring Snapshot Persistence & SGF Sync
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Manual Scoring Snapshot Persistence & SGF Sync |
+
+##### Details
+Manual Scoring snapshot persistence + session ⇄ SGF sync (single source of truth)
 
 #### Shared converter — `computeScoringPropsFromSession(session)`
 
 Module-level SSOT function that turns a session-shaped object (`scoringState` or `rec.scoringData`) into `{ dd, ma, tb, tw, board: stonesWithDead, rawCounts }`:
 
 - `DD`/`MA` from `markedDead`; `stonesWithDead` like before;
+
 - `TB`/`TW` = explicit `manualTerritory` wins (1 = black, 2 = white); else GoScorer auto-derived;
+
 - guards null `markedDead`/board rows; honors `session.ruleMode || 'japanese'`.
 
 Both `computeSgfPropsFromScoringData(data)` (export/viewer/inject/session-fallback — kept its `null` guard, which some consumers depend on) and `computeSgfPropertyBars()` (modal bar widget) now delegate to it, replacing two implementations that could drift.
@@ -690,7 +1443,18 @@ Both injection sites (export ~line 2165 and viewer ~line 2255) now use `hasAllSg
 
 (Headless-verified: 17 harness scenarios — snapshot persistence incl. manual territory + frozen; prop-bar vs converter identity; legacy backfill; reopened-modal restore; plus probes confirming each fix has a failing test when reverted.)
 
-### v0.1.026 — Unified scoring-input resolution (blue panel ⇄ Manual Scoring parity)
+---
+
+### v0.1.026 — Unified Scoring Input Resolution
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Unified Scoring Input Resolution |
+
+##### Details
+Unified scoring-input resolution (blue panel ⇄ Manual Scoring parity)
 
 Fixes the residual mismatch where the blue-panel Run score differed from the Manual Scoring Modal's score for a saved study record. The fix is **not** a per-record patch and **not** a `source` flag branching the scorer — it is a single canonical resolution chain consumed identically by both surfaces.
 
@@ -699,7 +1463,9 @@ Fixes the residual mismatch where the blue-panel Run score differed from the Man
 New module-level helper returns a single `{ board, captures, komi, handicap, deadStones, tbPoints, twPoints, hasMarkup, positionLabel, provenance, markupMove }` snapshot. `runComputationalMethod` no longer extracts markup itself; it consumes this snapshot only. Precedence (strict, game-agnostic — the most recent, user-confirmed resolution wins):
 
 1. **Live session memory** (`_scoringPersistData`) — the first source `openScoringModal` restores;
+
 2. **Persisted study `scoringData`** (`rec.scoringData`) — the second source the modal restores;
+
 3. **SGF endgame markup** (`DD`/`MA`/`TB`/`TW`) resolved anywhere in the record (`findEndgameMarkup`).
 
 A session that carries **no resolution** (no dead marks, no territory) is skipped so the record's own markup can still drive the score; a session that resolves anything is authoritative over markup — because it is the exact board+marks snapshot the modal displays. Because tiers 1–2 mirror `openScoringModal`'s restore order, the Run control always scores what the reopened modal shows.
@@ -718,7 +1484,18 @@ The session fallback previously hand-derived `DD`/`MA` from `markedDead` and `TB
 
 (Headless-verified: 13 harness scenarios; a saved session wins over a stale raw-main-line `DD`/`MA` node with no record-specific logic, and the scorer receives the session's exact dead/captures/komi inputs.)
 
-### v0.1.025 — Algorithmic Endgame Markup Resolution + Fresh Manual Scoring
+---
+
+### v0.1.025 — Algorithmic Endgame Markup Resolution
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **stones** | `fix` | Algorithmic Endgame Markup Resolution |
+
+##### Details
+Algorithmic Endgame Markup Resolution + Fresh Manual Scoring
 
 Fixes for the "No DD/MA/TB/TW Endgame Markup Found" false-negative (REC 002) and the stale-dead-marks bug in Manual Scoring. Both are **algorithmic and game-agnostic** — they resolve markup for any record regardless of where loadSGF placed (or failed to fold) the props, instead of per-game patches.
 
@@ -727,10 +1504,15 @@ Fixes for the "No DD/MA/TB/TW Endgame Markup Found" false-negative (REC 002) and
 New module-level helper that returns the first node carrying `DD`/`MA`/`TB`/`TW`, searching in order:
 
 1. the move currently under the replayer (`state.sgfMoves[state.currentMoveIndex]`),
+
 2. the **last** markup-bearing move in `state.allSgfMoves` (full sequence),
+
 3. the **last** markup-bearing move in the (possibly filtered) `state.sgfMoves`,
+
 4. root-level props (`state.sgfRootProps` / `state.sgfMetadata.tb` / `.tw`),
+
 5. the **last** markup-bearing raw node in `SgfEngine.extractMainLine(state.sgfTree)` — covers terminal annotation-only nodes that loadSGF could not fold onto a move,
+
 6. the study record's **saved scoring session** (`rec.scoringData`) via the shared `computeSgfPropsFromScoringData` converter — for records whose `workingSgf` string never received the props.
 
 `runComputationalMethod` uses this instead of the old "current move, else last `allSgfMoves`" check, so a game whose markup sits on the root, on a non-move terminal node, or anywhere in the main line scores explicitly and never halts with the warning. (Headless-verified: markup node beyond the old 12-node fold window and root-level `TB`/`TW` both resolve.)
@@ -744,6 +1526,7 @@ The loadSGF fold previously scanned only the last 12 main-line nodes (`mainLine.
 Two changes fix the "reopened modal shows outdated dead-stone marks" bug:
 
 - **`openScoringModal(savedData)`** now restores the most recent session when called without explicit data (e.g. from the Estimation panel's **Open Manual Scoring Modal** button): first `_scoringPersistData` (the session closed most recently), then `StudyRecordDB.getRecord(state.activeStudyId).scoringData` — so a fresh page load still shows the latest saved marks.
+
 - **`resetScoringBoardFromState()`** now seeds `scoringState.markedDead` from the game's own `DD`/`MA`/`TB`/`TW` markup (via `findEndgameMarkup`): `DD`/`MA` points are marked dead directly; opponent stones inside `TB`/`TW` territory bounds are dead. A fresh session starts from the game's resolved Life & Death marks instead of an empty board.
 
 #### Resume vs Download markup parity (correction)
@@ -755,8 +1538,11 @@ Earlier docs claimed `resumeStudySession` injects `DD`/`MA`/`TB`/`TW` before `lo
 On `⌘+Shift+E` the yellow Estimation overlay always renders the **"Computational Method (Japanese Territory Rules)"** blue panel (`#computational-estimate-card`). Its Run control is gated on Game End:
 
 - **Before the final move** — the blue panel shows an *"Available Only Upon Game End"* notice (no button); an exact Japanese score only makes sense once the replayer reaches the final move.
+
 - **At the final move** — the panel shows the **"Run / Compute >"** button.
+
 - **Run with markup** → renders the explicit scoring detail (`#computational-method-result`, section *3. Explicit Territory Counting (TB/TW Markup)*).
+
 - **Run without `DD`/`MA`/`TB`/`TW`** → renders an amber warning (*"No DD/MA/TB/TW endgame markup found"*) with an **Open Manual Scoring Modal** button — instead of any automatic flood-fill fallback.
 
 ## Project Purpose
@@ -1337,50 +2123,10 @@ When any set is active, `syncCustomStonesSection()` locks the Custom Stones sect
 
 ### Layout Overview
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Header (title, mode buttons, tech_log-{ver} link)      │
-├──────────┬──────────────────────────────────────────────┤
-│  Left    │  Main Workspace                              │
-│  Panel   │  ┌──────────────────────────────────────┐    │
-│  (tools) │  │  #annotable-workspace                │    │
-│          │  │  ┌────────────────────────────────┐  │    │
-│          │  │  │  #go-board-canvas-initial       │  │    │
-│          │  │  │  (physical board - always live) │  │    │
-│          │  │  └────────────────────────────────┘  │    │
-│          │  └──────────────────────────────────────┘    │
-├──────────┴──────────────────────────────────────────────┤
-│  Right Panel                                            │
-│  ┌────────────────────────────┐                         │
-│  │  SGF re-Player (green)     │ ← expanded after SGF load │
-│  │  ├ Move playback controls  │                         │
-│  │  ├ Game tree               │                         │
-│  │  ├ Comments                │                         │
-│  │  │  ├ ref-Area button      │ ← board block references│
-│  │  │  ├ ref-Point button     │ ← coordinate references │
-│  │  │  └ Edit / Save          │                         │
-│  │  └ "Enter Study Mode" btn  │                         │
-│  ├────────────────────────────┤                         │
-│  │  SGF Importer (yellow)     │ ← collapsed after load   │
-│  │  ├ File drop zone          │                         │
-│  │  ├ Paste SGF textarea      │                         │
-│  │  ├ Kifu-DB explorer        │                         │
-│  │  ├ Move range filter       │                         │
-│  │  └ Export SGF              │                         │
-│  └────────────────────────────┘                         │
-└─────────────────────────────────────────────────────────┘
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/layout-ui-overview.html" width="100%" height="580" style={{ border: 'none', display: 'block' }} title="UI Layout Overview — panel regions and current state" />
+</div>
 
-┌──────────────────────────────┐   (floating, always on top)
-│  Custom Floating Panel       │ ← toggled by FAB button
-│  (Draggable Style Palette)   │
-│  ├ Stones (Black & White)    │
-│  ├ Board & Border            │
-│  ├ Grids & Hoshi             │
-│  ├ Coordinates               │
-│  ├ Next Move Hint            │
-│  └ Reset All                 │
-└──────────────────────────────┘
-```
 
 ### Panel Types
 
@@ -1468,16 +2214,9 @@ Shared across all three boards:
 
 ### Script Load Order
 
-```
-index.html
-  └─ annotation_v4.js     (loaded first — sets up state, board, UI)
-      └─ sgf-parser.js    (SgfEngine — loaded inside annotation_v4.js)
-  └─ game-tree.js         (game tree rendering)
-  └─ move-term-detector.js (move term detection & highlights)
-  └─ board-estimate.js    (score estimation)
-  └─ liberties.js         (liberty analysis)
-  └─ phase-detector.js    (game phase detection)
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/tree-script-load-order.html" width="100%" height="420" style={{ border: 'none', display: 'block' }} title="Script Load Order — dependency tree" />
+</div>
 
 ### move-term-detector.js Structure (IIFE)
 
@@ -1497,49 +2236,9 @@ index.html
 
 ### annotation_v4.js Structure
 
-```text title="annotation_v4.js — module map"
-State initialization (lines 26–331)
-  └─ state object with 3 board style objects, board data, active tool, move display, export settings
-  └─ ref-Area state (refAreaMode, refAreaCells[], refAreaHoverCell, refAreaInsertPos)
-  └─ ref-Point state (refPointMode, refPointCells[], refPointInsertPos)
-
-SGF Engine integration (sgf-parser.js loaded inline)
-  └─ SgfEngine.parseSgf(), parseGoPoint(), parseMarkupProperties(), etc.
-
-Board rendering (lines 2773–4200+)
-  └─ drawBoard() → renderBoardToCtx() → drawCellContent()
-      ├─ Step 1: Board background (color or image)
-      ├─ Step 2: Grid lines + hoshi points
-      ├─ Step 3: Stones + annotations + labels + move-term fills
-      ├─ Step 4: Coordinate labels
-      ├─ Step 5: Crop overlay
-      ├─ Step 6: What-if preview stone
-      ├─ Step 7: Move numbers
-      ├─ Step 8: Current move marker
-      ├─ Step 9: Capture animation
-      ├─ Step 9.5: Capture animation overlay
-      ├─ Step 10: Connection rectangles (drawMoveTermHighlights)
-      └─ Step 11: Ring outlines + atari triangles (drawMoveTermTopHighlights)
-
-Comment parsing (lines 6400–6600+)
-  └─ parseCommentCoords(), comment highlight rendering
-  └─ ref-Area/ref-Point canvas rendering (lines 4083–4213)
-
-UI event listeners (lines 1100–2500+)
-  └─ Mouse, keyboard, wheel, file drop, panel toggles
-  └─ ref-Area toggle handler (lines 2397–2443)
-  └─ ref-Point toggle handler (lines 2445–2473)
-  └─ ref-Area/ref-Point board click handlers (lines 3132–3211)
-
-Floating panel system (lines 8945–9630)
-  └─ initFloatingToolbar(), populateStyleInputs(), bindStyleInputsEvents()
-
-Export system (lines 4800–5900)
-  └─ generateDiagramDataURL(), updateExportPreview()
-
-Study mode (lines 8663–8927)
-  └─ setupStudyMode(), updateStudyCrop()
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/tree-annotation-structure.html" width="100%" height="520" style={{ border: 'none', display: 'block' }} title="annotation_v4.js Structure — module map" />
+</div>
 
 ## Custom Functions Reference
 
@@ -1762,60 +2461,22 @@ All custom functions introduced in baduk-notes, organized by module.
 
 ### Game Loading
 
-```text
-SGF Drop/Paste/File Picker
-  → handleFileSelect(file)
-    → FileReader.readAsText(file)
-      → loadSGF(sgfString)
-        → SgfEngine.parseSgf(sgfString) → tree
-        → state.sgfTree = cloneTree(tree)
-        → Extract main line → state.allSgfMoves[]
-        → applyFilters() → state.sgfMoves[]
-          → goToMove(0)
-            → renderBoardToCtx() × 2 (initial + study)
-            → onMoveChanged() → detectCurrentMoveTerm() → updateBadge()
-            → renderGameTree()
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/flow-game-loading.html" width="100%" height="600" style={{ border: 'none', display: 'block' }} title="Game Loading — SGF input to render pipeline" />
+</div>
 
 ### Move Navigation
 
-```text
-User clicks Next/Prev/Wheel/Keyboard
-  → goToMove(index)
-    → Cancel what-if mode, clear highlights
-    → Rebuild board from baselineBoard + moves[0..index]
-    → renderBoardToCtx() × 2
-    → captureAnimation() if captures occurred
-    → onMoveChanged()
-      → _termHL.clear()
-      → detectCurrentMoveTerm()
-        → findPatternInMove() → blueVertices
-        → evaluateTenuki() → greenVertices
-      → updateBadge(patternMatch, blueVertices, greenVertices)
-        → _termHL.set(blue, green, name, url)
-    → renderGameTree()
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/flow-move-navigation.html" width="100%" height="620" style={{ border: 'none', display: 'block' }} title="Move Navigation — user input to render pipeline" />
+</div>
 
 ### Highlight Hover
 
-```text
-Badge mouseenter
-  → _termHL.show()
-    → _active = true
-    → window._highlightedCells = this.blue
-    → window._responseVertices = this.green
-    → drawBoard()
-      → drawCellContent reads globals → blue + green CIRCLE_F fills
-      → drawBottom reads this.blue/this.green → connection rects (if _active)
-      → drawTop reads this.blue/this.green → ring outlines + atari triangles (if _active)
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/flow-highlight-hover.html" width="100%" height="540" style={{ border: 'none', display: 'block' }} title="Highlight Hover — badge mouseenter/mouseleave event flow" />
+</div>
 
-Badge mouseleave
-  → _termHL.hide()
-    → _active = false
-    → window._highlightedCells = []
-    → window._responseVertices = []
-    → drawBoard() → clean board, no highlights
-```
 
 ## Comment Highlight Syntax
 
@@ -1950,31 +2611,9 @@ The project includes a **tech_log** — a standalone Next.js (Fumadocs) document
 
 Every user-facing surface that shows a version or content keeps in sync automatically from a single source: **the `SITEMAP.md` frontmatter `version:` field** and the **`SITEMAP.md` headings** themselves. `sync-docs.js` is the one sync engine; nothing is hand-edited downstream.
 
-```
-                           ┌──────────────────────────────────────────┐
-                           │        SITEMAP.md  (source of truth)     │
-                             │  frontmatter: version: 0.1.046           │
-                           │  H2/H3 headings + body text              │
-                           └───────────────────┬──────────────────────┘
-                                               │  node sync-docs.js
-                                               ▼
-                                     ┌────────────────────┐
-                                     │     sync-docs.js    │
-                                     │  (single sync point)│
-                                     └──────┬──────┬───────┘
-              version sync                  │      │  content sync
-              (syncVersion)                 │      │  (H2 → MDX pages)
-   ┌──────────────────────────────┐         │      │        ┌──────────────────────────────────┐
-   │  index.html: label + script │◄────────┘      └───────►│  tech-log/content/docs/*.mdx       │
-   │  "tech_log-0.1.046"?v=0.1.046│                        │  index.mdx + meta.json            │
-   ├──────────────────────────────┤                        └───────────────┬──────────────────┘
-   │  tech-log/src/lib/version.ts │                                        │  npx next build --webpack
-   │  TECH_LOG_VERSION='0.1.046'  │                                        ▼
-   ├──────────────────────────────┤                        ┌──────────────────────────────────┐
-   │  tech_log-0.1.046.html       │                        │  tech-log/out/  →  tech-log-dist/ │
-   │  (redirect, auto-created)    │                        │  served at /tech-log-dist/docs/   │
-   └──────────────────────────────┘                        └──────────────────────────────────┘
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/arch-ssot-sync.html" width="100%" height="400" style={{ border: 'none', display: 'block' }} title="SSOT Sync System — one source of truth, zero drift" />
+</div>
 
 **Rules for "always in sync":**
 
@@ -1995,42 +2634,10 @@ One command does all of it: `npm run build-docs` (defined in the root `package.j
 
 ### How It Works
 
-```
-baduk-notes/
-  ├── tech-log/                    ← Next.js source project
-  │   ├── source.config.ts         ← Fumadocs: defineDocs({ dir: 'content/docs' })
-  │   ├── content/docs/            ← MDX content files (GENERATED by sync-docs.js from SITEMAP.md)
-  │   │   ├── index.mdx            ← Landing page
-  │   │   ├── meta.json            ← Page ordering for sidebar
-  │   │   ├── overview/            ← Overview section
-  │   │   │   ├── meta.json
-  │   │   │   ├── project-purpose.mdx
-  │   │   │   └── application-files.mdx
-  │   │   ├── system-design/       ← System design section
-  │   │   │   ├── meta.json
-  │   │   │   ├── board-canvas-system.mdx
-  │   │   │   ├── ui-architecture.mdx
-  │   │   │   └── highlight-color-system.mdx
-  │   │   ├── internals/           ← Internals section
-  │   │   │   ├── meta.json
-  │   │   │   ├── architecture.mdx
-  │   │   │   ├── data-flow.mdx
-  │   │   │   └── comment-highlight-syntax.mdx
-  │   │   └── reference/           ← Reference section
-  │   │       ├── meta.json
-  │   │       ├── assets.mdx
-  │   │       ├── reference-data.mdx
-  │   │       ├── agents-skills.mdx
-  │   │       └── reference-tables.mdx
-  │   ├── src/lib/
-  │   │   ├── source.ts            ← Fumadocs loader: loader({ baseUrl: '/docs', source: docs.toFumadocsSource() })
-  │   │   └── version.ts           ← TECH_LOG_VERSION (auto-synced to SITEMAP.md frontmatter by sync-docs.js)
-  │   └── src/app/docs/
-  │       ├── layout.tsx           ← DocsLayout with nav title + version badge
-  │       └── [[...slug]]/page.tsx ← Catch-all route: resolves slug → MDX page
-  └── tech-log-dist/               ← Built static output (served by main app)
-      └── docs/                    ← All pages rendered as static HTML
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/tree-project-structure.html" width="100%" height="460" style={{ border: 'none', display: 'block' }} title="Project File Structure — baduk-notes directory overview" />
+</div>
+
 
 ### Content Loading Pipeline
 
