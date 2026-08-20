@@ -23,20 +23,29 @@ const SFX_BASE64 = {
 
 };
 
-function createSfx(dataUri, volume) {
-    const a = new Audio(dataUri);
-    a.preload = 'auto';
-    a.load();
-    if (typeof volume === 'number') a.volume = volume;
-    return a;
+// Lazy SFX — Audio objects are created on first play, not at script load,
+// so the browser never decodes base64 audio during the critical startup path.
+const _sfxCache = {};
+function _getOrCreateSfx(key) {
+    if (!_sfxCache[key]) {
+        const a = new Audio(SFX_BASE64[key]);
+        a.preload = 'auto';
+        a.load();
+        _sfxCache[key] = a;
+    }
+    return _sfxCache[key];
 }
-
-const stoneSound = createSfx(SFX_BASE64.stone);
-const stoneStudySound = createSfx(SFX_BASE64.stoneStudy);
-const removeSound = createSfx(SFX_BASE64.remove);
-const fwd5Sound = createSfx(SFX_BASE64.branch);
-const flipSound = createSfx(SFX_BASE64.flip);
-const captureSound = createSfx(SFX_BASE64.capture);
+// Map human-readable keys to SFX_BASE64 property names
+const _sfxKeyMap = {
+    stoneSound: 'stone',
+    stoneStudySound: 'stoneStudy',
+    removeSound: 'remove',
+    fwd5Sound: 'branch',
+    flipSound: 'flip',
+    captureSound: 'capture',
+    sfxAnnot: 'annot',
+    sfxAnnotUndo: 'annotUndo'
+};
 
 const fontStyle = document.createElement('style');
 fontStyle.innerHTML = `
@@ -385,9 +394,7 @@ const state = {
 };
 window.state = state;
 
-// Sound Effects
-const sfxAnnot = createSfx(SFX_BASE64.annot);
-const sfxAnnotUndo = createSfx(SFX_BASE64.annotUndo);
+// Sound Effects — lazy (see _getOrCreateSfx above)
 
 // ---------------------------------------------------------------------------
 // Audio unlock — modern browsers (Chrome, Safari, Firefox) block
@@ -404,12 +411,17 @@ const sfxAnnotUndo = createSfx(SFX_BASE64.annotUndo);
 // annotation, branch, board flip, and the fast-forward pool — lives in
 // sfxGlobalPool so nothing can bypass the unlock.
 // ---------------------------------------------------------------------------
-const sfxGlobalPool = [stoneSound, stoneStudySound, removeSound, fwd5Sound, sfxAnnot, sfxAnnotUndo, flipSound, captureSound];
+// Lazily resolve the pool so Audio objects are only created when the user
+// first gestures (or plays a sound) — never during startup.
+function _getSfxPool() {
+    return ['stone','stoneStudy','remove','branch','annot','annotUndo','flip','capture']
+        .map(k => _getOrCreateSfx(k));
+}
 let sfxUnlocked = false;
 
 function unlockSfxOnGesture() {
     if (sfxUnlocked) return;
-    for (const audio of sfxGlobalPool) {
+    for (const audio of _getSfxPool()) {
         if (!audio) continue;
         try {
             audio.muted = true;
@@ -429,10 +441,12 @@ window.addEventListener('pointerdown', unlockSfxOnGesture, true);
 window.addEventListener('keydown', unlockSfxOnGesture, true);
 window.addEventListener('touchstart', unlockSfxOnGesture, true);
 
-// Play a sound effect: unmute, restart, play. The first play() that succeeds
-// flips sfxUnlocked so the muted pre-play dance stops running on later
-// gestures. This is the ONLY path that should play SFX.
-function playSfx(audio) {
+// Play a sound effect: unmute, restart, play. Accepts a string key
+// (looked up lazily) or an Audio object directly. The first play() that
+// succeeds flips sfxUnlocked so the muted pre-play dance stops running on
+// later gestures. This is the ONLY path that should play SFX.
+function playSfx(audioOrKey) {
+    const audio = typeof audioOrKey === 'string' ? _getOrCreateSfx(audioOrKey) : audioOrKey;
     if (!audio) return;
     try {
         audio.muted = false;
@@ -591,7 +605,7 @@ function undo() {
         previousState.action !== 'stone-w' && 
         previousState.action !== 'crop' && 
         previousState.action !== 'clear') {
-        playSfx(sfxAnnotUndo);
+        playSfx('annotUndo');
     }
 }
 
@@ -1204,9 +1218,9 @@ function recordMoveAt(r, c, color, toolName) {
     // plain placement sound — the captured stones are removed when goToMove
     // rebuilds the board below.
     if (captureCheck.count > 0) {
-        playSfx(captureSound);
+        playSfx('capture');
     } else {
-        playSfx(document.body.classList.contains('study-mode-active') ? stoneStudySound : stoneSound);
+        playSfx(document.body.classList.contains('study-mode-active') ? 'stoneStudy' : 'stone');
     }
 
     if (toolName === 'play-b' || toolName === 'play-w') {
@@ -1241,7 +1255,7 @@ function removeLastMove() {
     state.currentMoveIndex = state.sgfMoves.length - 1;
     state.isSgfDirty = true;
     state.popupShownForCurrentChange = false;
-    playSfx(removeSound);
+    playSfx('remove');
 
     state.isSgfDirty = false;
     goToMove(state.currentMoveIndex);
@@ -1281,28 +1295,94 @@ function updateReplayerKpiDisplay() {
     }
 }
 
+function _loadSavedBoardStyles() {
+    try {
+        const savedInitialStyle = localStorage.getItem('baduk_initial_board_style');
+        if (savedInitialStyle) {
+            state.initialBoardStyle = JSON.parse(savedInitialStyle);
+        }
+        const savedStudyStyle = localStorage.getItem('baduk_study_board_style');
+        if (savedStudyStyle) {
+            state.studyBoardStyle = JSON.parse(savedStudyStyle);
+        }
+        const savedExportStyle = localStorage.getItem('baduk_export_board_style');
+        if (savedExportStyle) {
+            state.exportBoardStyle = JSON.parse(savedExportStyle);
+        }
+        const savedScoringStyle = localStorage.getItem('baduk_scoring_board_style');
+        if (savedScoringStyle) {
+            state.scoringBoardStyle = JSON.parse(savedScoringStyle);
+        } else if (state.initialBoardStyle) {
+            state.scoringBoardStyle = JSON.parse(JSON.stringify(state.initialBoardStyle));
+        }
+    } catch (e) {
+        console.error('Failed to parse board styles', e);
+    }
+
+    const migrateLegacyWhiteRim = (style) => {
+        if (style && style.whiteStone && style.whiteStone.brSize === 1 && style.whiteStone.br === '#111827') {
+            style.whiteStone.brSize = 0;
+        }
+        return style;
+    };
+    window.migrateLegacyWhiteRim = migrateLegacyWhiteRim;
+    state.initialBoardStyle = migrateLegacyWhiteRim(state.initialBoardStyle);
+    state.studyBoardStyle = migrateLegacyWhiteRim(state.studyBoardStyle);
+    state.exportBoardStyle = migrateLegacyWhiteRim(state.exportBoardStyle);
+    state.scoringBoardStyle = migrateLegacyWhiteRim(state.scoringBoardStyle);
+
+    if (state.exportBoardStyle && !state.exportBoardStyle.bg) {
+        state.exportBoardStyle.bg = { color: '#ffffff' };
+    }
+}
+
+function _applySavedBoardSizes() {
+    if (state.initialBoardStyle && state.initialBoardStyle.board) {
+        updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
+    }
+    if (state.studyBoardStyle && state.studyBoardStyle.board) {
+        updateBoardWrapperSize('#go-board-canvas-study', state.studyBoardStyle.board.size);
+    }
+    if (state.scoringBoardStyle && state.scoringBoardStyle.board) {
+        updateBoardWrapperSize('#go-board-canvas-scoring', state.scoringBoardStyle.board.size);
+    }
+}
+
 function init() {
     if (!elements.canvasInitial) elements.canvasInitial = document.getElementById('go-board-canvas-initial');
     if (!elements.canvasStudy) elements.canvasStudy = document.getElementById('go-board-canvas-study');
     if (!elements.canvasScoring) elements.canvasScoring = document.getElementById('go-board-canvas-scoring');
 
-    // High DPI / Retina display support
-    const dpr = window.devicePixelRatio || 1;
-    [elements.canvasInitial, elements.canvasStudy, elements.canvasScoring].forEach(c => {
-        if (c) {
-            c.width = CANVAS_SIZE * dpr;
-            c.height = CANVAS_SIZE * dpr;
-            const ctx = c.getContext('2d');
-            ctx.scale(dpr, dpr);
-        }
-    });
-    setupEventListeners();
-    setupGameInfoEdit();
+    // Load saved board styles and set canvas wrapper sizes BEFORE drawing,
+    // so the first drawBoard() uses the correct style and canvas dimensions.
+    // (updateBoardWrapperSize sets canvas.width which clears the canvas and applies DPR scale,
+    //  so sizes must be final before the first draw.)
+    _loadSavedBoardStyles();
+    _applySavedBoardSizes();
+
+    // Draw the board immediately so the user sees it before any listeners
+    // or secondary initialisers run.
     initBlankGame();
     drawBoard();
     updateCropBadge();
     updateReplicationCode();
-    
+
+    // Defer heavy listener setup and secondary inits until after the first
+    // paint — the board is already visible and interactive for the canvas
+    // pointer handlers that get attached via inline listeners on the canvas
+    // element itself.  requestIdleCallback gives the browser a chance to
+    // paint and handle the first frame of user interaction.
+    const _deferredInit = () => {
+        setupEventListeners();
+        setupGameInfoEdit();
+        initFloatingToolbar();
+    };
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(_deferredInit, { timeout: 150 });
+    } else {
+        setTimeout(_deferredInit, 0);
+    }
+
     if (document.fonts) {
         Promise.all([
             document.fonts.load("12px 'iGoRodinPro'"),
@@ -1313,10 +1393,86 @@ function init() {
             drawBoard();
         });
     }
-    
-    // Initialize floating tool palette
-    initFloatingToolbar();
 }
+
+// ==========================================================================
+// Study Record Local Persistence Database Engine
+// (Module scope — available before deferred init for tests / early use)
+// ==========================================================================
+const STUDY_STORAGE_KEY = 'baduk_notes_study_sessions_v1';
+
+function formatStudyAccessTime(date = new Date()) {
+    const pad = (n) => String(n).padStart(2, '0');
+    const day = pad(date.getDate());
+    const month = pad(date.getMonth() + 1);
+    const year = date.getFullYear();
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
+}
+
+window.StudyRecordDB = {
+    getAllRecords() {
+        try {
+            const raw = localStorage.getItem(STUDY_STORAGE_KEY);
+            if (!raw) return [];
+            const list = JSON.parse(raw);
+            return Array.isArray(list) ? list : [];
+        } catch (e) {
+            console.error('Failed to load study records:', e);
+            return [];
+        }
+    },
+
+    saveRecord(record) {
+        try {
+            const records = this.getAllRecords();
+            const idx = records.findIndex(r => r.id === record.id);
+            if (idx >= 0) {
+                records[idx] = { ...records[idx], ...record };
+            } else {
+                records.unshift(record);
+            }
+            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            console.log(`[StudyRecordDB] saveRecord -> ID: ${record.id}, recNo: ${record.recNo}, currentMoveIndex: ${record.currentMoveIndex}`);
+            return true;
+        } catch (e) {
+            console.error('Failed to save study record:', e);
+            return false;
+        }
+    },
+
+    getRecord(id) {
+        const records = this.getAllRecords();
+        return records.find(r => r.id === id) || null;
+    },
+
+    deleteRecord(id) {
+        try {
+            let records = this.getAllRecords();
+            records = records.filter(r => r.id !== id);
+            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            return true;
+        } catch (e) {
+            console.error('Failed to delete study record:', e);
+            return false;
+        }
+    },
+
+    generateNextRecNo() {
+        const records = this.getAllRecords();
+        let maxNum = 0;
+        records.forEach(r => {
+            if (r.recNo) {
+                const num = parseInt(r.recNo, 10);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+            }
+        });
+        const nextNum = maxNum + 1;
+        return String(nextNum).padStart(3, '0');
+    }
+};
 
 // Event Listeners Setup
 function setupEventListeners() {
@@ -1791,18 +1947,6 @@ function setupEventListeners() {
     // ==========================================================================
     // Study Record Local Persistence Database Engine
     // ==========================================================================
-    const STUDY_STORAGE_KEY = 'baduk_notes_study_sessions_v1';
-
-    function formatStudyAccessTime(date = new Date()) {
-        const pad = (n) => String(n).padStart(2, '0');
-        const day = pad(date.getDate());
-        const month = pad(date.getMonth() + 1);
-        const year = date.getFullYear();
-        const hours = pad(date.getHours());
-        const minutes = pad(date.getMinutes());
-        const seconds = pad(date.getSeconds());
-        return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
-    }
 
     function showWorkingStudyToast(message) {
         let toast = document.getElementById('working-study-toast');
@@ -2041,69 +2185,6 @@ function setupEventListeners() {
             drawBoard();
         }
     }
-
-    const StudyRecordDB = {
-        getAllRecords() {
-            try {
-                const raw = localStorage.getItem(STUDY_STORAGE_KEY);
-                if (!raw) return [];
-                const list = JSON.parse(raw);
-                return Array.isArray(list) ? list : [];
-            } catch (e) {
-                console.error('Failed to load study records:', e);
-                return [];
-            }
-        },
-
-        saveRecord(record) {
-            try {
-                const records = this.getAllRecords();
-                const idx = records.findIndex(r => r.id === record.id);
-                if (idx >= 0) {
-                    records[idx] = { ...records[idx], ...record };
-                } else {
-                    records.unshift(record);
-                }
-                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
-                console.log(`[StudyRecordDB] saveRecord -> ID: ${record.id}, recNo: ${record.recNo}, currentMoveIndex: ${record.currentMoveIndex}`);
-                return true;
-            } catch (e) {
-                console.error('Failed to save study record:', e);
-                return false;
-            }
-        },
-
-        getRecord(id) {
-            const records = this.getAllRecords();
-            return records.find(r => r.id === id) || null;
-        },
-
-        deleteRecord(id) {
-            try {
-                let records = this.getAllRecords();
-                records = records.filter(r => r.id !== id);
-                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
-                return true;
-            } catch (e) {
-                console.error('Failed to delete study record:', e);
-                return false;
-            }
-        },
-
-        generateNextRecNo() {
-            const records = this.getAllRecords();
-            let maxNum = 0;
-            records.forEach(r => {
-                if (r.recNo) {
-                    const num = parseInt(r.recNo, 10);
-                    if (!isNaN(num) && num > maxNum) maxNum = num;
-                }
-            });
-            const nextNum = maxNum + 1;
-            return String(nextNum).padStart(3, '0');
-        }
-    };
-    window.StudyRecordDB = StudyRecordDB;
     window.formatStudyAccessTime = formatStudyAccessTime;
     function renderResumeStudyTable(query = '') {
         query = query.toLowerCase().trim();
@@ -3365,7 +3446,7 @@ function setupEventListeners() {
         }
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            playSfx(flipSound);
+            playSfx('flip');
             flipBoard180();
             if (flipBtn) {
                 flipBtn.style.background = state.isPovFlipped ? 'rgb(139, 26, 26)' : 'rgba(139, 26, 26, 0.1)';
@@ -3531,7 +3612,7 @@ function setupEventListeners() {
     if (elements.btnReplayBack5) elements.btnReplayBack5.addEventListener('click', () => goToMove(state.currentMoveIndex - 5));
     if (elements.btnReplayPrev) elements.btnReplayPrev.addEventListener('click', () => goToMove(state.currentMoveIndex - 1));
     if (elements.btnReplayNext) elements.btnReplayNext.addEventListener('click', () => goToMove(state.currentMoveIndex + 1));
-    if (elements.btnReplayFwd5) elements.btnReplayFwd5.addEventListener('click', () => { goToMove(state.currentMoveIndex + 5); playSfx(fwd5Sound); });
+    if (elements.btnReplayFwd5) elements.btnReplayFwd5.addEventListener('click', () => { goToMove(state.currentMoveIndex + 5); playSfx('branch'); });
     if (elements.btnReplayLast) elements.btnReplayLast.addEventListener('click', () => goToMove(state.sgfMoves.length - 1));
     
     if (elements.btnAutoplay) elements.btnAutoplay.addEventListener('click', toggleAutoPlay);
@@ -4237,7 +4318,7 @@ function setupEventListeners() {
         } else if (e.key === 'ArrowUp') {
             e.preventDefault();
             goToMove(state.currentMoveIndex + 5);
-            playSfx(fwd5Sound);
+            playSfx('branch');
         } else if (e.key === 'ArrowDown') {
             e.preventDefault();
             goToMove(state.currentMoveIndex - 5);
@@ -4832,7 +4913,7 @@ function applyToolToCell(r, c) {
     drawBoard();
 
     if (changed && tool !== 'stone-b' && tool !== 'stone-w' && tool !== 'crop' && tool !== 'clear') {
-        playSfx(sfxAnnot);
+        playSfx('annot');
     }
 
     if (changed) {
@@ -5058,7 +5139,6 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                         audio = new Audio(SFX_BASE64.stone);
                         audio.volume = 0.4;
                         state.fastForwardAnim.audioPool.push(audio);
-                        if (sfxGlobalPool.indexOf(audio) === -1) sfxGlobalPool.push(audio);
                     }
                     if (audio) {
                         playSfx(audio);
@@ -11654,9 +11734,7 @@ function goToMove(index) {
     if (index >= state.sgfMoves.length) index = state.sgfMoves.length - 1;
     
     if (isSingleStepBackward && state.currentMoveIndex > -1) {
-        if (typeof removeSound !== 'undefined') {
-            playSfx(removeSound);
-        }
+        playSfx('remove');
     }
     
     state.currentMoveIndex = index;
@@ -11700,9 +11778,9 @@ function goToMove(index) {
     // off the board at this point (the loop above removed them).
     if (isSingleStepForward && index <= state.sgfMoves.length - 1 && index > -1) {
         if (capturedThisMove > 0) {
-            if (typeof captureSound !== 'undefined') playSfx(captureSound);
-        } else if (typeof stoneSound !== 'undefined') {
-            playSfx(document.body.classList.contains('study-mode-active') ? stoneStudySound : stoneSound);
+            playSfx('capture');
+        } else {
+            playSfx(document.body.classList.contains('study-mode-active') ? 'stoneStudy' : 'stone');
         }
     }
     
@@ -13466,7 +13544,12 @@ function updateStudyCrop() {
     boardViewport.style.transformOrigin = 'center center';
 }
 
-document.addEventListener('DOMContentLoaded', setupStudyMode);
+// Deferred — study mode is not needed for first paint
+if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(setupStudyMode, { timeout: 200 });
+} else {
+    setTimeout(setupStudyMode, 0);
+}
 
 // ==========================================================================
 // FLOATING TOOL PALETTE LOGIC
@@ -13477,61 +13560,10 @@ document.addEventListener('DOMContentLoaded', setupStudyMode);
 // ==========================================================================
 
 function initFloatingToolbar() {
-    // Load style settings for all four views
-    try {
-        const savedInitialStyle = localStorage.getItem('baduk_initial_board_style');
-        if (savedInitialStyle) {
-            state.initialBoardStyle = JSON.parse(savedInitialStyle);
-        }
-        const savedStudyStyle = localStorage.getItem('baduk_study_board_style');
-        if (savedStudyStyle) {
-            state.studyBoardStyle = JSON.parse(savedStudyStyle);
-        }
-        const savedExportStyle = localStorage.getItem('baduk_export_board_style');
-        if (savedExportStyle) {
-            state.exportBoardStyle = JSON.parse(savedExportStyle);
-        }
-        const savedScoringStyle = localStorage.getItem('baduk_scoring_board_style');
-        if (savedScoringStyle) {
-            state.scoringBoardStyle = JSON.parse(savedScoringStyle);
-        } else if (state.initialBoardStyle) {
-            state.scoringBoardStyle = JSON.parse(JSON.stringify(state.initialBoardStyle));
-        }
-    } catch (e) {
-        console.error('Failed to parse board styles', e);
-    }
-
-    // Migrate legacy white-stone border default: the old brSize:1 rim renders as a
-    // thin dark/grey ring around the stone edge (esp. visible on image-background
-    // boards). It is removed so the stone edge meets the board cleanly; brSize is
-    // still honoured whenever a user explicitly sets a larger value.
-    const migrateLegacyWhiteRim = (style) => {
-        if (style && style.whiteStone && style.whiteStone.brSize === 1 && style.whiteStone.br === '#111827') {
-            style.whiteStone.brSize = 0;
-        }
-        return style;
-    };
-    window.migrateLegacyWhiteRim = migrateLegacyWhiteRim;
-    state.initialBoardStyle = migrateLegacyWhiteRim(state.initialBoardStyle);
-    state.studyBoardStyle = migrateLegacyWhiteRim(state.studyBoardStyle);
-    state.exportBoardStyle = migrateLegacyWhiteRim(state.exportBoardStyle);
-    state.scoringBoardStyle = migrateLegacyWhiteRim(state.scoringBoardStyle);
-
-    // Ensure exportBoardStyle has a bg property (migrate older saved styles that lack it)
-    if (state.exportBoardStyle && !state.exportBoardStyle.bg) {
-        state.exportBoardStyle.bg = { color: '#ffffff' };
-    }
-
-    // Apply saved board sizes immediately on load
-    if (state.initialBoardStyle && state.initialBoardStyle.board) {
-        updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
-    }
-    if (state.studyBoardStyle && state.studyBoardStyle.board) {
-        updateBoardWrapperSize('#go-board-canvas-study', state.studyBoardStyle.board.size);
-    }
-    if (state.scoringBoardStyle && state.scoringBoardStyle.board) {
-        updateBoardWrapperSize('#go-board-canvas-scoring', state.scoringBoardStyle.board.size);
-    }
+    // Style loading and canvas wrapper sizing are now done in init() via
+    // _loadSavedBoardStyles() + _applySavedBoardSizes() so the first drawBoard()
+    // renders with the correct style and canvas dimensions (setting canvas.width
+    // clears the canvas, so sizes must be final before the first draw).
 
     // 1. Force panel hidden on initial page load, but load positioning metadata
     customPanelState.visible = false;
@@ -14982,21 +15014,27 @@ function checkSgfChangeAndShowPopup() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// Deferred — secondary popup/WASM init, not needed for first paint
+const _initSecondary = () => {
     if (typeof deadstones !== 'undefined') {
         deadstones.useFetch('./deadstones_bg.wasm');
     }
     initSgfChangePopup();
     initRecUnsavedPopup();
     initGameEndPopup();
-});
+};
 if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    initSgfChangePopup();
-    initRecUnsavedPopup();
-    initGameEndPopup();
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(_initSecondary, { timeout: 200 });
+    } else {
+        setTimeout(_initSecondary, 0);
+    }
+} else {
+    document.addEventListener('DOMContentLoaded', _initSecondary);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// Deferred — liberties, phase bar, strategic evaluation (not needed for first paint)
+const _initLibertiesAndPhases = () => {
     state.showLiberties = false;
     
     let outsideLibertiesClickListener = null;
@@ -15180,301 +15218,322 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+};
+if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(_initLibertiesAndPhases, { timeout: 300 });
+} else {
+    setTimeout(_initLibertiesAndPhases, 0);
+}
 
-    // Split game moves into Fuseki, Chuban, and Yose by replaying the board
-    // state and delegating each move to phase-detector's detectGamePhaseDynamic.
-    window.calculateGamePhases = function() {
-        state.gamePhases = { chubanStart: -1, yoseStart: -1 };
-        if (!state.allSgfMoves || state.allSgfMoves.length < 20) {
-            updateFilterPresets();
-            return;
-        }
+// --- Phase / strategic functions (module scope — available immediately) ------
 
-        if (typeof window.detectGamePhaseDynamic !== 'function') {
-            updateFilterPresets();
-            return;
-        }
-
-        // Replay on a temp board so we feed real board state to the detector
-        const tempBoard = state.setupBoard
-            ? JSON.parse(JSON.stringify(state.setupBoard))
-            : Array.from({length: 19}, () =>
-                Array.from({length: 19}, () => ({player: null, annotation: null, label: null})));
-
-        let chubanStart = -1;
-        let yoseStart = -1;
-
-        for (let i = 0; i < state.allSgfMoves.length; i++) {
-            const m = state.allSgfMoves[i];
-            if (!m.isPass && m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
-                playStoneWithCaptures(tempBoard, m.r, m.c, m.player);
-            }
-
-            const phase = window.detectGamePhaseDynamic(tempBoard, i, [], { skipCombatGuard: true, moveHistory: state.allSgfMoves });
-
-            if (phase === 'chuban' && chubanStart === -1) chubanStart = i;
-            if (phase === 'yose' && yoseStart === -1) yoseStart = i;
-        }
-
-        state.gamePhases = { chubanStart, yoseStart };
+// Split game moves into Fuseki, Chuban, and Yose by replaying the board
+// state and delegating each move to phase-detector's detectGamePhaseDynamic.
+window.calculateGamePhases = function() {
+    state.gamePhases = { chubanStart: -1, yoseStart: -1 };
+    if (!state.allSgfMoves || state.allSgfMoves.length < 20) {
         updateFilterPresets();
-    };
+        return;
+    }
 
-    window.updateFilterPresets = function() {
-        if (!elements.btnRangeOpening || !elements.btnRangeMidgame || !elements.btnRangeEndgame) return;
-        
-        const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
-        
-        if (totalAll === 0 || !state.gamePhases) {
-            elements.btnRangeOpening.textContent = "1–50 (Opening)";
-            elements.btnRangeOpening.setAttribute('data-range', "1-50");
-            elements.btnRangeMidgame.textContent = "51–150 (Midgame)";
-            elements.btnRangeMidgame.setAttribute('data-range', "51-150");
-            elements.btnRangeEndgame.textContent = "151–250 (Endgame)";
-            elements.btnRangeEndgame.setAttribute('data-range', "151-250");
-            elements.btnRangeMidgame.style.display = 'block';
-            elements.btnRangeEndgame.style.display = 'block';
-            return;
+    if (typeof window.detectGamePhaseDynamic !== 'function') {
+        updateFilterPresets();
+        return;
+    }
+
+    // Replay on a temp board so we feed real board state to the detector
+    const tempBoard = state.setupBoard
+        ? JSON.parse(JSON.stringify(state.setupBoard))
+        : Array.from({length: 19}, () =>
+            Array.from({length: 19}, () => ({player: null, annotation: null, label: null})));
+
+    let chubanStart = -1;
+    let yoseStart = -1;
+
+    for (let i = 0; i < state.allSgfMoves.length; i++) {
+        const m = state.allSgfMoves[i];
+        if (!m.isPass && m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
+            playStoneWithCaptures(tempBoard, m.r, m.c, m.player);
         }
-        
-        const chubanStart = state.gamePhases.chubanStart;
-        const yoseStart = state.gamePhases.yoseStart;
-        
-        const openingEnd = chubanStart !== -1 ? chubanStart : totalAll;
-        elements.btnRangeOpening.textContent = `1–${openingEnd} (Opening)`;
-        elements.btnRangeOpening.setAttribute('data-range', `1-${openingEnd}`);
-        
-        if (chubanStart !== -1) {
-            const midgameStart = openingEnd + 1;
-            const midgameEnd = yoseStart !== -1 ? yoseStart : totalAll;
-            if (midgameStart <= midgameEnd) {
-                elements.btnRangeMidgame.textContent = `${midgameStart}–${midgameEnd} (Midgame)`;
-                elements.btnRangeMidgame.setAttribute('data-range', `${midgameStart}-${midgameEnd}`);
-                elements.btnRangeMidgame.style.display = 'block';
-            } else {
-                elements.btnRangeMidgame.style.display = 'none';
-            }
+
+        const phase = window.detectGamePhaseDynamic(tempBoard, i, [], { skipCombatGuard: true, moveHistory: state.allSgfMoves });
+
+        if (phase === 'chuban' && chubanStart === -1) chubanStart = i;
+        if (phase === 'yose' && yoseStart === -1) yoseStart = i;
+    }
+
+    state.gamePhases = { chubanStart, yoseStart };
+    updateFilterPresets();
+};
+
+window.updateFilterPresets = function() {
+    if (!elements.btnRangeOpening || !elements.btnRangeMidgame || !elements.btnRangeEndgame) return;
+    
+    const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    
+    if (totalAll === 0 || !state.gamePhases) {
+        elements.btnRangeOpening.textContent = "1\u201350 (Opening)";
+        elements.btnRangeOpening.setAttribute('data-range', "1-50");
+        elements.btnRangeMidgame.textContent = "51\u2013150 (Midgame)";
+        elements.btnRangeMidgame.setAttribute('data-range', "51-150");
+        elements.btnRangeEndgame.textContent = "151\u2013250 (Endgame)";
+        elements.btnRangeEndgame.setAttribute('data-range', "151-250");
+        elements.btnRangeMidgame.style.display = 'block';
+        elements.btnRangeEndgame.style.display = 'block';
+        return;
+    }
+    
+    const chubanStart = state.gamePhases.chubanStart;
+    const yoseStart = state.gamePhases.yoseStart;
+    
+    const openingEnd = chubanStart !== -1 ? chubanStart : totalAll;
+    elements.btnRangeOpening.textContent = `1\u2013${openingEnd} (Opening)`;
+    elements.btnRangeOpening.setAttribute('data-range', `1-${openingEnd}`);
+    
+    if (chubanStart !== -1) {
+        const midgameStart = openingEnd + 1;
+        const midgameEnd = yoseStart !== -1 ? yoseStart : totalAll;
+        if (midgameStart <= midgameEnd) {
+            elements.btnRangeMidgame.textContent = `${midgameStart}\u2013${midgameEnd} (Midgame)`;
+            elements.btnRangeMidgame.setAttribute('data-range', `${midgameStart}-${midgameEnd}`);
+            elements.btnRangeMidgame.style.display = 'block';
         } else {
             elements.btnRangeMidgame.style.display = 'none';
         }
-        
-        if (yoseStart !== -1) {
-            const endgameStart = yoseStart + 1;
-            elements.btnRangeEndgame.textContent = `${endgameStart}–${totalAll} (Endgame)`;
-            elements.btnRangeEndgame.setAttribute('data-range', `${endgameStart}-${totalAll}`);
-            elements.btnRangeEndgame.style.display = 'block';
-        } else {
-            elements.btnRangeEndgame.style.display = 'none';
+    } else {
+        elements.btnRangeMidgame.style.display = 'none';
+    }
+    
+    if (yoseStart !== -1) {
+        const endgameStart = yoseStart + 1;
+        elements.btnRangeEndgame.textContent = `${endgameStart}\u2013${totalAll} (Endgame)`;
+        elements.btnRangeEndgame.setAttribute('data-range', `${endgameStart}-${totalAll}`);
+        elements.btnRangeEndgame.style.display = 'block';
+    } else {
+        elements.btnRangeEndgame.style.display = 'none';
+    }
+};
+
+// Update active highlight classes on SGF Phase Bar
+window.updatePhaseBar = function() {
+    if (!elements.btnPhaseFuseki || !elements.btnPhaseChuban || !elements.btnPhaseYose) return;
+    
+    const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    const absIdx = (state.filterStart || 1) - 1 + state.currentMoveIndex;
+    
+    // Reset node classes to default
+    elements.btnPhaseFuseki.className = 'phase-step-node';
+    elements.btnPhaseChuban.className = 'phase-step-node';
+    elements.btnPhaseYose.className = 'phase-step-node';
+    
+    const circleFuseki = elements.btnPhaseFuseki.querySelector('.step-circle');
+    const circleChuban = elements.btnPhaseChuban.querySelector('.step-circle');
+    const circleYose = elements.btnPhaseYose.querySelector('.step-circle');
+    
+    const lineFusekiChuban = document.getElementById('line-fuseki-chuban');
+    const lineChubanYose = document.getElementById('line-chuban-yose');
+    
+    const lockFuseki = document.getElementById('lock-fuseki');
+    const lockChuban = document.getElementById('lock-chuban');
+    const lockYose = document.getElementById('lock-yose');
+    
+    // Reset line classes
+    if (lineFusekiChuban) lineFusekiChuban.className = 'step-line';
+    if (lineChubanYose) lineChubanYose.className = 'step-line';
+    
+    // Helper to update lock visibility
+    const updateLock = (lockEl, rangeBtnEl) => {
+        if (lockEl) {
+            if (rangeBtnEl && rangeBtnEl.classList.contains('active')) {
+                lockEl.classList.add('visible');
+            } else {
+                lockEl.classList.remove('visible');
+            }
         }
     };
-
-    // Update active highlight classes on SGF Phase Bar
-    window.updatePhaseBar = function() {
-        if (!elements.btnPhaseFuseki || !elements.btnPhaseChuban || !elements.btnPhaseYose) return;
+    
+    updateLock(lockFuseki, elements.btnRangeOpening);
+    updateLock(lockChuban, elements.btnRangeMidgame);
+    updateLock(lockYose, elements.btnRangeEndgame);
+    
+    // Reset circle texts to default numbers
+    if (circleFuseki) circleFuseki.textContent = '1';
+    if (circleChuban) circleChuban.textContent = '2';
+    if (circleYose) circleYose.textContent = '3';
+    
+    if (totalAll === 0 || !state.gamePhases) {
+        elements.btnPhaseFuseki.classList.add('active');
+        elements.btnPhaseFuseki.style.cursor = 'pointer';
         
-        const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
-        const absIdx = (state.filterStart || 1) - 1 + state.currentMoveIndex;
+        elements.btnPhaseChuban.style.opacity = '0.4';
+        elements.btnPhaseChuban.style.pointerEvents = 'none';
+        if (lineFusekiChuban) lineFusekiChuban.style.opacity = '0.4';
         
-        // Reset node classes to default
-        elements.btnPhaseFuseki.className = 'phase-step-node';
-        elements.btnPhaseChuban.className = 'phase-step-node';
-        elements.btnPhaseYose.className = 'phase-step-node';
+        elements.btnPhaseYose.style.opacity = '0.4';
+        elements.btnPhaseYose.style.pointerEvents = 'none';
+        if (lineChubanYose) lineChubanYose.style.opacity = '0.4';
         
-        const circleFuseki = elements.btnPhaseFuseki.querySelector('.step-circle');
-        const circleChuban = elements.btnPhaseChuban.querySelector('.step-circle');
-        const circleYose = elements.btnPhaseYose.querySelector('.step-circle');
-        
-        const lineFusekiChuban = document.getElementById('line-fuseki-chuban');
-        const lineChubanYose = document.getElementById('line-chuban-yose');
-        
-        const lockFuseki = document.getElementById('lock-fuseki');
-        const lockChuban = document.getElementById('lock-chuban');
-        const lockYose = document.getElementById('lock-yose');
-        
-        // Reset line classes
-        if (lineFusekiChuban) lineFusekiChuban.className = 'step-line';
-        if (lineChubanYose) lineChubanYose.className = 'step-line';
-        
-        // Helper to update lock visibility
-        const updateLock = (lockEl, rangeBtnEl) => {
-            if (lockEl) {
-                if (rangeBtnEl && rangeBtnEl.classList.contains('active')) {
-                    lockEl.classList.add('visible');
-                } else {
-                    lockEl.classList.remove('visible');
-                }
-            }
-        };
-        
-        updateLock(lockFuseki, elements.btnRangeOpening);
-        updateLock(lockChuban, elements.btnRangeMidgame);
-        updateLock(lockYose, elements.btnRangeEndgame);
-        
-        // Reset circle texts to default numbers
-        if (circleFuseki) circleFuseki.textContent = '1';
-        if (circleChuban) circleChuban.textContent = '2';
-        if (circleYose) circleYose.textContent = '3';
-        
-        if (totalAll === 0 || !state.gamePhases) {
-            elements.btnPhaseFuseki.classList.add('active');
-            elements.btnPhaseFuseki.style.cursor = 'pointer';
-            
-            elements.btnPhaseChuban.style.opacity = '0.4';
-            elements.btnPhaseChuban.style.pointerEvents = 'none';
-            if (lineFusekiChuban) lineFusekiChuban.style.opacity = '0.4';
-            
-            elements.btnPhaseYose.style.opacity = '0.4';
-            elements.btnPhaseYose.style.pointerEvents = 'none';
-            if (lineChubanYose) lineChubanYose.style.opacity = '0.4';
-            
-            // Progress bar
-            const fillBar = document.getElementById('phase-progress-bar');
-            const fillTextBg = document.getElementById('phase-progress-text-bg');
-            const fillTextFg = document.getElementById('phase-progress-text-fg');
-            if (fillBar) { fillBar.style.width = '0%'; fillBar.style.backgroundSize = '100% 100%'; }
-            if (fillTextBg) fillTextBg.textContent = '0%';
-            if (fillTextFg) fillTextFg.textContent = '0%';
-            return;
-        }
-        
-        const chubanStart = state.gamePhases.chubanStart;
-        const yoseStart = state.gamePhases.yoseStart;
-        
-        // Show/hide phase availability based on whether they were detected in the SGF
-        const hasChuban = chubanStart !== -1;
-        const hasYose = yoseStart !== -1;
-        
-        elements.btnPhaseFuseki.style.opacity = '1';
-        elements.btnPhaseFuseki.style.pointerEvents = 'auto';
-        
-        elements.btnPhaseChuban.style.opacity = hasChuban ? '1' : '0.4';
-        elements.btnPhaseChuban.style.pointerEvents = hasChuban ? 'auto' : 'none';
-        if (lineFusekiChuban) lineFusekiChuban.style.opacity = hasChuban ? '1' : '0.4';
-        
-        elements.btnPhaseYose.style.opacity = hasYose ? '1' : '0.4';
-        elements.btnPhaseYose.style.pointerEvents = hasYose ? 'auto' : 'none';
-        if (lineChubanYose) lineChubanYose.style.opacity = hasYose ? '1' : '0.4';
-        
-        // Determine active phase
-        let activePhase = 'fuseki';
-        if (hasYose && absIdx >= yoseStart) {
-            activePhase = 'yose';
-        } else if (hasChuban && absIdx >= chubanStart) {
-            activePhase = 'chuban';
-        }
-        
-        const isGameEnd = totalAll > 0 && absIdx === totalAll - 1;
-        
-        // Set node states and circle texts based on active phase
-        if (activePhase === 'yose') {
-            elements.btnPhaseFuseki.classList.add('completed');
-            if (circleFuseki) circleFuseki.textContent = '✓';
-            
-            elements.btnPhaseChuban.classList.add('completed');
-            if (circleChuban) circleChuban.textContent = '✓';
-            
-            if (isGameEnd) {
-                elements.btnPhaseYose.classList.add('completed');
-                if (circleYose) circleYose.textContent = '✓';
-            } else {
-                elements.btnPhaseYose.classList.add('active');
-            }
-            
-            if (lineFusekiChuban) lineFusekiChuban.classList.add('complete');
-            if (lineChubanYose) lineChubanYose.classList.add('complete');
-        } else if (activePhase === 'chuban') {
-            elements.btnPhaseFuseki.classList.add('completed');
-            if (circleFuseki) circleFuseki.textContent = '✓';
-            
-            if (isGameEnd) {
-                elements.btnPhaseChuban.classList.add('completed');
-                if (circleChuban) circleChuban.textContent = '✓';
-            } else {
-                elements.btnPhaseChuban.classList.add('active');
-            }
-            
-            elements.btnPhaseYose.className = 'phase-step-node'; // default
-            
-            if (lineFusekiChuban) lineFusekiChuban.classList.add('complete');
-        } else {
-            if (isGameEnd) {
-                elements.btnPhaseFuseki.classList.add('completed');
-                if (circleFuseki) circleFuseki.textContent = '✓';
-            } else {
-                elements.btnPhaseFuseki.classList.add('active');
-            }
-            
-            elements.btnPhaseChuban.className = 'phase-step-node'; // default
-            elements.btnPhaseYose.className = 'phase-step-node'; // default
-        }
-        
-        // Calculate & update progress percentage
-        // absIdx represents 0-based index of current move.
-        // 0% at index -1, 100% when reaching the absolute last move index of totalAll.
-        let pct = 0;
-        if (totalAll > 0) {
-            if (absIdx >= 0) {
-                pct = Math.max(1, Math.min(100, Math.round(((absIdx + 1) / totalAll) * 100)));
-            }
-        }
+        // Progress bar
         const fillBar = document.getElementById('phase-progress-bar');
         const fillTextBg = document.getElementById('phase-progress-text-bg');
         const fillTextFg = document.getElementById('phase-progress-text-fg');
-        if (fillBar) { fillBar.style.width = `${pct}%`; fillBar.style.backgroundSize = pct > 0 ? `${10000 / pct}% 100%` : '100% 100%'; }
-        if (fillTextBg) fillTextBg.textContent = `${pct}%`;
-        if (fillTextFg) fillTextFg.textContent = `${pct}%`;
-    };
-
-    window.evaluateStrategicMove = function(r, c, player) {
-        if (!state.allSgfMoves || r < 0 || r >= 19 || c < 0 || c >= 19) return 0.0;
+        if (fillBar) { fillBar.style.width = '0%'; fillBar.style.backgroundSize = '100% 100%'; }
+        if (fillTextBg) fillTextBg.textContent = '0%';
+        if (fillTextFg) fillTextFg.textContent = '0%';
+        return;
+    }
+    
+    const chubanStart = state.gamePhases.chubanStart;
+    const yoseStart = state.gamePhases.yoseStart;
+    
+    // Show/hide phase availability based on whether they were detected in the SGF
+    const hasChuban = chubanStart !== -1;
+    const hasYose = yoseStart !== -1;
+    
+    elements.btnPhaseFuseki.style.opacity = '1';
+    elements.btnPhaseFuseki.style.pointerEvents = 'auto';
+    
+    elements.btnPhaseChuban.style.opacity = hasChuban ? '1' : '0.4';
+    elements.btnPhaseChuban.style.pointerEvents = hasChuban ? 'auto' : 'none';
+    if (lineFusekiChuban) lineFusekiChuban.style.opacity = hasChuban ? '1' : '0.4';
+    
+    elements.btnPhaseYose.style.opacity = hasYose ? '1' : '0.4';
+    elements.btnPhaseYose.style.pointerEvents = hasYose ? 'auto' : 'none';
+    if (lineChubanYose) lineChubanYose.style.opacity = hasYose ? '1' : '0.4';
+    
+    // Determine active phase
+    let activePhase = 'fuseki';
+    if (hasYose && absIdx >= yoseStart) {
+        activePhase = 'yose';
+    } else if (hasChuban && absIdx >= chubanStart) {
+        activePhase = 'chuban';
+    }
+    
+    const isGameEnd = totalAll > 0 && absIdx === totalAll - 1;
+    
+    // Set node states and circle texts based on active phase
+    if (activePhase === 'yose') {
+        elements.btnPhaseFuseki.classList.add('completed');
+        if (circleFuseki) circleFuseki.textContent = '\u2713';
         
-        // 1. Gather recent move terms to feed tactical volatility metrics
-        const recentTerms = [];
-        if (state.allSgfMoves && typeof window.detectHypotheticalTerm === 'function') {
-            const startIdx = Math.max(0, state.currentMoveIndex - 4);
-            for (let i = startIdx; i <= state.currentMoveIndex; i++) {
-                const m = state.allSgfMoves[i];
-                if (m && !m.isPass) {
-                    const termResult = window.detectHypotheticalTerm(m.r, m.c, m.player, i);
-                    const term = termResult ? termResult.patternMatch : null;
-                    if (term) recentTerms.push(term);
-                }
+        elements.btnPhaseChuban.classList.add('completed');
+        if (circleChuban) circleChuban.textContent = '\u2713';
+        
+        if (isGameEnd) {
+            elements.btnPhaseYose.classList.add('completed');
+            if (circleYose) circleYose.textContent = '\u2713';
+        } else {
+            elements.btnPhaseYose.classList.add('active');
+        }
+        
+        if (lineFusekiChuban) lineFusekiChuban.classList.add('complete');
+        if (lineChubanYose) lineChubanYose.classList.add('complete');
+    } else if (activePhase === 'chuban') {
+        elements.btnPhaseFuseki.classList.add('completed');
+        if (circleFuseki) circleFuseki.textContent = '\u2713';
+        
+        if (isGameEnd) {
+            elements.btnPhaseChuban.classList.add('completed');
+            if (circleChuban) circleChuban.textContent = '\u2713';
+        } else {
+            elements.btnPhaseChuban.classList.add('active');
+        }
+        
+        elements.btnPhaseYose.className = 'phase-step-node'; // default
+        
+        if (lineFusekiChuban) lineFusekiChuban.classList.add('complete');
+    } else {
+        if (isGameEnd) {
+            elements.btnPhaseFuseki.classList.add('completed');
+            if (circleFuseki) circleFuseki.textContent = '\u2713';
+        } else {
+            elements.btnPhaseFuseki.classList.add('active');
+        }
+        
+        elements.btnPhaseChuban.className = 'phase-step-node'; // default
+        elements.btnPhaseYose.className = 'phase-step-node'; // default
+    }
+    
+    // Calculate & update progress percentage
+    // absIdx represents 0-based index of current move.
+    // 0% at index -1, 100% when reaching the absolute last move index of totalAll.
+    let pct = 0;
+    if (totalAll > 0) {
+        if (absIdx >= 0) {
+            pct = Math.max(1, Math.min(100, Math.round(((absIdx + 1) / totalAll) * 100)));
+        }
+    }
+    const fillBar = document.getElementById('phase-progress-bar');
+    const fillTextBg = document.getElementById('phase-progress-text-bg');
+    const fillTextFg = document.getElementById('phase-progress-text-fg');
+    if (fillBar) { fillBar.style.width = `${pct}%`; fillBar.style.backgroundSize = pct > 0 ? `${10000 / pct}% 100%` : '100% 100%'; }
+    if (fillTextBg) fillTextBg.textContent = `${pct}%`;
+    if (fillTextFg) fillTextFg.textContent = `${pct}%`;
+};
+
+window.evaluateStrategicMove = function(r, c, player) {
+    if (!state.allSgfMoves || r < 0 || r >= 19 || c < 0 || c >= 19) return 0.0;
+    
+    // 1. Gather recent move terms to feed tactical volatility metrics
+    const recentTerms = [];
+    if (state.allSgfMoves && typeof window.detectHypotheticalTerm === 'function') {
+        const startIdx = Math.max(0, state.currentMoveIndex - 4);
+        for (let i = startIdx; i <= state.currentMoveIndex; i++) {
+            const m = state.allSgfMoves[i];
+            if (m && !m.isPass) {
+                const termResult = window.detectHypotheticalTerm(m.r, m.c, m.player, i);
+                const term = termResult ? termResult.patternMatch : null;
+                if (term) recentTerms.push(term);
             }
         }
+    }
 
-        // 2. Determine active game phase dynamically, ignoring static SGF index flaws.
-        let currentPhase = 'fuseki';
-        if (typeof window.detectGamePhaseDynamic === 'function') {
-            currentPhase = window.detectGamePhaseDynamic(state.board, state.currentMoveIndex, recentTerms, { moveHistory: state.allSgfMoves || [] });
-        }
-        
-        const line = Math.min(c, 18 - c, r, 18 - r) + 1;
-        const opponent = player === 'B' ? 'W' : 'B';
-        
-        // 2. Helper check functions
-        const isEmptyCorner = function(row, col) {
-            const isCornerR = row <= 3 || row >= 15;
-            const isCornerC = col <= 3 || col >= 15;
-            if (!isCornerR || !isCornerC) return false;
-            for (let dr = -1; dr <= 1; dr++) {
-                for (let dc = -1; dc <= 1; dc++) {
-                    const nr = row + dr, nc = col + dc;
-                    if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                        if (state.board[nr][nc].player !== null) return false;
-                    }
-                }
-            }
-            return true;
-        };
-        
-        const getAdjacentWallSize = function(row, col, color) {
-            let chainSize = 0;
-            const visited = Array.from({ length: 19 }, () => Array(19).fill(false));
-            const queue = [];
-            const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-            
-            for (let [dr, dc] of dirs) {
+    // 2. Determine active game phase dynamically, ignoring static SGF index flaws.
+    let currentPhase = 'fuseki';
+    if (typeof window.detectGamePhaseDynamic === 'function') {
+        currentPhase = window.detectGamePhaseDynamic(state.board, state.currentMoveIndex, recentTerms, { moveHistory: state.allSgfMoves || [] });
+    }
+    
+    const line = Math.min(c, 18 - c, r, 18 - r) + 1;
+    const opponent = player === 'B' ? 'W' : 'B';
+    
+    // 2. Helper check functions
+    const isEmptyCorner = function(row, col) {
+        const isCornerR = row <= 3 || row >= 15;
+        const isCornerC = col <= 3 || col >= 15;
+        if (!isCornerR || !isCornerC) return false;
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
                 const nr = row + dr, nc = col + dc;
+                if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
+                    if (state.board[nr][nc].player !== null) return false;
+                }
+            }
+        }
+        return true;
+    };
+    
+    const getAdjacentWallSize = function(row, col, color) {
+        let chainSize = 0;
+        const visited = Array.from({ length: 19 }, () => Array(19).fill(false));
+        const queue = [];
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        
+        for (let [dr, dc] of dirs) {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
+                if (state.board[nr][nc].player === color && !visited[nr][nc]) {
+                    visited[nr][nc] = true;
+                    queue.push([nr, nc]);
+                }
+            }
+        }
+        
+        while (queue.length > 0) {
+            const [curR, curC] = queue.shift();
+            chainSize++;
+            for (let [dr, dc] of dirs) {
+                const nr = curR + dr, nc = curC + dc;
                 if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
                     if (state.board[nr][nc].player === color && !visited[nr][nc]) {
                         visited[nr][nc] = true;
@@ -15482,169 +15541,155 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
-            
-            while (queue.length > 0) {
-                const [curR, curC] = queue.shift();
-                chainSize++;
-                for (let [dr, dc] of dirs) {
-                    const nr = curR + dr, nc = curC + dc;
-                    if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                        if (state.board[nr][nc].player === color && !visited[nr][nc]) {
-                            visited[nr][nc] = true;
-                            queue.push([nr, nc]);
-                        }
-                    }
-                }
-            }
-            return chainSize;
-        };
-        
-        const getExtensionDistance = function(row, col) {
-            let minDistance = 999;
-            const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-            for (let [dr, dc] of dirs) {
-                for (let step = 1; step <= 6; step++) {
-                    const nr = row + dr * step, nc = col + dc * step;
-                    if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                        if (state.board[nr][nc].player === player) {
-                            if (step < minDistance) minDistance = step;
-                            break;
-                        }
-                        if (state.board[nr][nc].player === opponent) {
-                            break;
-                        }
-                    }
-                }
-            }
-            return minDistance === 999 ? 0 : minDistance;
-        };
-        
-        const isSideExtension = function(row, col) {
-            const isSide = (row === 2 || row === 3 || row === 15 || row === 16 || col === 2 || col === 3 || col === 15 || col === 16);
-            if (!isSide) return false;
-            return getExtensionDistance(row, col) > 0;
-        };
-        
-        const isContact = function(row, col) {
-            const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-            for (let [dr, dc] of dirs) {
-                const nr = row + dr, nc = col + dc;
+        }
+        return chainSize;
+    };
+    
+    const getExtensionDistance = function(row, col) {
+        let minDistance = 999;
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        for (let [dr, dc] of dirs) {
+            for (let step = 1; step <= 6; step++) {
+                const nr = row + dr * step, nc = col + dc * step;
                 if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                    if (state.board[nr][nc].player === opponent) return true;
-                }
-            }
-            return false;
-        };
-        
-        const isCut = function(row, col) {
-            const diagDirs = [[-1,-1],[-1,1],[1,-1],[1,1]];
-            for (let [dr, dc] of diagDirs) {
-                const r1 = row + dr, c1 = col;
-                const r2 = row, c2 = col + dc;
-                const rOpp = row + dr, cOpp = col + dc;
-                if (r1 >= 0 && r1 < 19 && c1 >= 0 && c1 < 19 &&
-                    r2 >= 0 && r2 < 19 && c2 >= 0 && c2 < 19 &&
-                    rOpp >= 0 && rOpp < 19 && cOpp >= 0 && cOpp < 19) {
-                    if (state.board[rOpp][cOpp].player === opponent && 
-                        (state.board[r1][c1].player === player || state.board[r2][c2].player === player)) {
-                        return true;
+                    if (state.board[nr][nc].player === player) {
+                        if (step < minDistance) minDistance = step;
+                        break;
                     }
-                }
-            }
-            return false;
-        };
-
-        const isSenteMove = function(row, col) {
-            const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
-            for (let [dr, dc] of dirs) {
-                const nr = row + dr, nc = col + dc;
-                if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
                     if (state.board[nr][nc].player === opponent) {
-                        if (window.Liberties && typeof window.Liberties.computeLibertyMap === 'function') {
-                            const map = window.Liberties.computeLibertyMap(state.board);
-                            const libs = map.get(`${nc},${nr}`);
-                            if (libs && libs.size <= 2) return true;
-                        }
+                        break;
                     }
                 }
             }
-            return false;
-        };
+        }
+        return minDistance === 999 ? 0 : minDistance;
+    };
+    
+    const isSideExtension = function(row, col) {
+        const isSide = (row === 2 || row === 3 || row === 15 || row === 16 || col === 2 || col === 3 || col === 15 || col === 16);
+        if (!isSide) return false;
+        return getExtensionDistance(row, col) > 0;
+    };
+    
+    const isContact = function(row, col) {
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        for (let [dr, dc] of dirs) {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
+                if (state.board[nr][nc].player === opponent) return true;
+            }
+        }
+        return false;
+    };
+    
+    const isCut = function(row, col) {
+        const diagDirs = [[-1,-1],[-1,1],[1,-1],[1,1]];
+        for (let [dr, dc] of diagDirs) {
+            const r1 = row + dr, c1 = col;
+            const r2 = row, c2 = col + dc;
+            const rOpp = row + dr, cOpp = col + dc;
+            if (r1 >= 0 && r1 < 19 && c1 >= 0 && c1 < 19 &&
+                r2 >= 0 && r2 < 19 && c2 >= 0 && c2 < 19 &&
+                rOpp >= 0 && rOpp < 19 && cOpp >= 0 && cOpp < 19) {
+                if (state.board[rOpp][cOpp].player === opponent && 
+                    (state.board[r1][c1].player === player || state.board[r2][c2].player === player)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
 
-        // 3. Evaluate by current phase
-        if (currentPhase === 'fuseki') {
-            let score = 0.0;
-            
-            // Corners have highest priority in the opening
-            if (isEmptyCorner(r, c)) {
-                if (line === 3 || line === 4) {
-                    score += 100.0; 
+    const isSenteMove = function(row, col) {
+        const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        for (let [dr, dc] of dirs) {
+            const nr = row + dr, nc = col + dc;
+            if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
+                if (state.board[nr][nc].player === opponent) {
+                    if (window.Liberties && typeof window.Liberties.computeLibertyMap === 'function') {
+                        const map = window.Liberties.computeLibertyMap(state.board);
+                        const libs = map.get(`${nc},${nr}`);
+                        if (libs && libs.size <= 2) return true;
+                    }
                 }
             }
-            
-            // Base Extension Logic dictates length based on existing wall strength
-            if (isSideExtension(r, c)) {
-                const wallSize = getAdjacentWallSize(r, c, player);
-                const optimalDistance = wallSize + 1; 
-                const actualDistance = getExtensionDistance(r, c);
-                
-                if (actualDistance === optimalDistance) {
-                    score += 50.0;
-                } else if (actualDistance > optimalDistance) {
-                    score -= 20.0; // Over-extension leaves room for invasion
-                }
-            }
-            return score;
-        } 
+        }
+        return false;
+    };
+
+    // 3. Evaluate by current phase
+    if (currentPhase === 'fuseki') {
+        let score = 0.0;
         
-        else if (currentPhase === 'chuban') {
-            let score = 0.0;
-            let territoryLead = 0.0;
-            
-            if (state.baselineTerritory) {
-                const bCount = state.baselineTerritory.black?.length || 0;
-                const wCount = state.baselineTerritory.white?.length || 0;
-                territoryLead = player === 'B' ? (bCount - wCount) : (wCount - bCount);
+        // Corners have highest priority in the opening
+        if (isEmptyCorner(r, c)) {
+            if (line === 3 || line === 4) {
+                score += 100.0; 
             }
-            
-            const contact = isContact(r, c);
-            const cut = isCut(r, c);
-            
-            // Strategy based on power vs territory balance
-            if (territoryLead > 10.0) {
-                if (cut) score -= 50.0; // Play safe when ahead
-            } else if (territoryLead < -10.0) {
-                if (cut) score += 60.0; // Create complications when behind
-            }
-            
-            // "Don't touch what you are attacking" principle
-            if (contact) {
-                score -= 30.0;
-            } else {
-                score += 40.0;
-            }
-            return score;
-        } 
-        
-        else if (currentPhase === 'yose') {
-            const basePoints = 5.0; 
-            const sente = isSenteMove(r, c);
-            const opponentCanSente = isContact(r, c); // Approximate proxy for opponent's follow-up
-            
-            // Initiative dominates endgame evaluation
-            if (sente && opponentCanSente) {
-                return Infinity; // Double Sente
-            }
-            if (sente || opponentCanSente) {
-                return basePoints * 2.0; // Sente or Reverse Sente
-            }
-            
-            return basePoints; // Gote
         }
         
-        return 0.0;
-    };
-});
+        // Base Extension Logic dictates length based on existing wall strength
+        if (isSideExtension(r, c)) {
+            const wallSize = getAdjacentWallSize(r, c, player);
+            const optimalDistance = wallSize + 1; 
+            const actualDistance = getExtensionDistance(r, c);
+            
+            if (actualDistance === optimalDistance) {
+                score += 50.0;
+            } else if (actualDistance > optimalDistance) {
+                score -= 20.0; // Over-extension leaves room for invasion
+            }
+        }
+        return score;
+    } 
+    
+    else if (currentPhase === 'chuban') {
+        let score = 0.0;
+        let territoryLead = 0.0;
+        
+        if (state.baselineTerritory) {
+            const bCount = state.baselineTerritory.black?.length || 0;
+            const wCount = state.baselineTerritory.white?.length || 0;
+            territoryLead = player === 'B' ? (bCount - wCount) : (wCount - bCount);
+        }
+        
+        const contact = isContact(r, c);
+        const cut = isCut(r, c);
+        
+        // Strategy based on power vs territory balance
+        if (territoryLead > 10.0) {
+            if (cut) score -= 50.0; // Play safe when ahead
+        } else if (territoryLead < -10.0) {
+            if (cut) score += 60.0; // Create complications when behind
+        }
+        
+        // "Don't touch what you are attacking" principle
+        if (contact) {
+            score -= 30.0;
+        } else {
+            score += 40.0;
+        }
+        return score;
+    } 
+    
+    else if (currentPhase === 'yose') {
+        const basePoints = 5.0; 
+        const sente = isSenteMove(r, c);
+        const opponentCanSente = isContact(r, c); // Approximate proxy for opponent's follow-up
+        
+        // Initiative dominates endgame evaluation
+        if (sente && opponentCanSente) {
+            return Infinity; // Double Sente
+        }
+        if (sente || opponentCanSente) {
+            return basePoints * 2.0; // Sente or Reverse Sente
+        }
+        
+        return basePoints; // Gote
+    }
+    
+    return 0.0;
+};
 
 /* ==========================================================================
    MANUAL SCORING MODAL ENGINE (#scoring) - GOSCORER & RE-ARRANGE BUCKETS
@@ -18329,10 +18374,21 @@ function renderScoringBoardToCtx(ctx) {
     ctx.restore();
 }
 
-// Auto-initialize when DOM is loaded
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initScoringModal);
-} else {
+// Auto-initialize scoring modal (deferred — not needed for first paint)
+const _deferredScoringInit = () => {
     initScoringModal();
+};
+if (document.readyState === 'loading') {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(_deferredScoringInit, { timeout: 300 });
+    } else {
+        document.addEventListener('DOMContentLoaded', _deferredScoringInit);
+    }
+} else {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(_deferredScoringInit, { timeout: 300 });
+    } else {
+        setTimeout(_deferredScoringInit, 0);
+    }
 }
 
