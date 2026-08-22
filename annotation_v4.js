@@ -3595,7 +3595,14 @@ function setupEventListeners() {
             row.addEventListener('click', () => {
                 ov.remove();
                 _gamePickerOverlay = null;
+                console.log('[picker] row clicked → handing game', idx + 1, 'of', blocks.length, 'to openStudyPrompt');
                 openStudyPrompt(block, `${fileName || 'game.sgf'} [game ${idx + 1}/${blocks.length}]`, fileHandle);
+                setTimeout(() => {
+                    const rp = document.getElementById('study-record-prompt-overlay');
+                    console.log('[picker] after openStudyPrompt → record-prompt display=', rp ? rp.style.display : '?',
+                        '| pendingSgf set=', !!state.pendingStudySgf,
+                        '| topTrees in picked block=', splitTopLevelGametrees(block).length);
+                }, 100);
             });
             list.appendChild(row);
         });
@@ -3624,9 +3631,15 @@ function setupEventListeners() {
         state.pendingStudySgf = { sgfString, fileName, fileHandle };
         const promptFileName = document.getElementById('prompt-file-name');
         if (promptFileName) promptFileName.textContent = fileName;
+        console.log('[osp] showing record prompt | name=', fileName, '| len=', sgfString && sgfString.length);
         if (promptOverlay) {
             promptOverlay.style.display = 'flex';
             promptOverlay.classList.remove('hidden');
+            console.log('[osp] overlay now display=', promptOverlay.style.display,
+                '| size=', promptOverlay.offsetWidth + 'x' + promptOverlay.offsetHeight,
+                '| z=', getComputedStyle(promptOverlay).zIndex);
+        } else {
+            console.warn('[osp] promptOverlay element NOT FOUND');
         }
     }
 
