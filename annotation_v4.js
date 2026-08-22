@@ -381,6 +381,10 @@ const state = {
     whatIfMode: false,
     whatIfStone: null,
 
+    // Variation Add mode (Sabaki-style branch creation)
+    variationEditMode: false,
+    variationHover: null,
+
     // Ref-Area selection mode (block-based, 18×18 grid)
     refAreaMode: false,
     refAreaCells: [],
@@ -461,6 +465,9 @@ function playSfx(audioOrKey) {
 // History management state
 let undoStack = [];
 let redoStack = [];
+// True while addVariationAt rebuilds replayer state in place after mutating
+// the tree — goToMove must not exit Variation Add mode during that refresh.
+let _addingVariation = false;
 
 function saveHistoryState(actionName = null) {
     const snapshot = {
@@ -477,6 +484,8 @@ function saveHistoryState(actionName = null) {
         playTurn: state.playTurn,
         sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
         allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        sgfTree: state.sgfTree ? JSON.parse(JSON.stringify(state.sgfTree)) : null,
+        variationData: state.variationData ? JSON.parse(JSON.stringify(state.variationData)) : null,
         currentMoveIndex: state.currentMoveIndex,
         isSgfDirty: state.isSgfDirty,
         baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
@@ -513,6 +522,14 @@ function restoreState(snapshot) {
         state.currentMoveIndex = snapshot.currentMoveIndex != null ? snapshot.currentMoveIndex : -1;
         state.isSgfDirty = !!snapshot.isSgfDirty;
         state.baselineAnnotations = JSON.parse(JSON.stringify(snapshot.baselineAnnotations || []));
+        if (snapshot.sgfTree) {
+            state.sgfTree = JSON.parse(JSON.stringify(snapshot.sgfTree));
+            state.variationData = snapshot.variationData
+                ? JSON.parse(JSON.stringify(snapshot.variationData))
+                : { branchPoints: [], currentBranchPath: [0] };
+        }
+        updateVariationUI();
+        if (window.refreshGameTree) window.refreshGameTree();
         updateReplayerKpiDisplay();
         if (window.updateSaveRecGameButton) window.updateSaveRecGameButton();
     }
@@ -593,6 +610,8 @@ function undo() {
         playTurn: state.playTurn,
         sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
         allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        sgfTree: state.sgfTree ? JSON.parse(JSON.stringify(state.sgfTree)) : null,
+        variationData: state.variationData ? JSON.parse(JSON.stringify(state.variationData)) : null,
         currentMoveIndex: state.currentMoveIndex,
         isSgfDirty: state.isSgfDirty,
         baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
@@ -626,6 +645,8 @@ function redo() {
         playTurn: state.playTurn,
         sgfMoves: JSON.parse(JSON.stringify(state.sgfMoves || [])),
         allSgfMoves: JSON.parse(JSON.stringify(state.allSgfMoves || [])),
+        sgfTree: state.sgfTree ? JSON.parse(JSON.stringify(state.sgfTree)) : null,
+        variationData: state.variationData ? JSON.parse(JSON.stringify(state.variationData)) : null,
         currentMoveIndex: state.currentMoveIndex,
         isSgfDirty: state.isSgfDirty,
         baselineAnnotations: JSON.parse(JSON.stringify(state.baselineAnnotations || []))
@@ -779,6 +800,7 @@ const elements = {
     // Variation Elements
     btnVarPrev: document.getElementById('btn-var-prev'),
     btnVarNext: document.getElementById('btn-var-next'),
+    btnVarAdd: document.getElementById('btn-var-add'),
     variationLabel: document.getElementById('variation-label'),
     
     // Annotation Editor Elements
@@ -1099,6 +1121,10 @@ function createEmptyBoardGrid() {
 }
 
 function initBlankGame() {
+    // A blank game is not a study session either — detach so navigation or
+    // settings autosaves can never write into the last-opened record.
+    state.activeStudyId = null;
+    state.gameBoardStyle = null;
     state.board = createEmptyBoardGrid();
     state.baselineBoard = createEmptyBoardGrid();
     state.setupBoard = null;
@@ -1115,6 +1141,8 @@ function initBlankGame() {
     state.sgfTree = null;
     state.rawSgf = null;
     state.plColor = null;
+    exitVariationEditMode();
+    state.gameEndPopupShown = false;
     state.variationData = { branchPoints: [], currentBranchPath: [0] };
     state.annotLastStone = null;
     if (elements.sgfExportContainer) elements.sgfExportContainer.style.display = 'none';
@@ -1262,6 +1290,201 @@ function removeLastMove() {
     state.isSgfDirty = true;
 
     if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
+    return true;
+}
+
+// ── Variation creation (Sabaki-style branch, SGF FF[4] GM[1] compliant) ────
+// A variation is a sibling GameTree under the tree segment containing the
+// current position (red-bean FF[4]: "(;parent…(;varB)(;varC))", every subtree
+// ≥1 node). The existing continuation always remains child [0]; new branches
+// are appended last. The new subtree root carries N["Var X"] following the
+// red-bean labeling convention (main line = implicit "A", first branch "B").
+
+// Locate the tree node that anchors a branch at flat move index absIdx
+// (-1 = before the first move). Returns { tree, nodeIdx, depth } where depth
+// is the number of branch-path segments consumed to reach `tree`, or null.
+function locateBranchAnchor(absIdx) {
+    const tree0 = state.sgfTree;
+    if (!tree0 || !tree0.nodes.length) return null;
+    const path = (state.variationData && state.variationData.currentBranchPath) || [];
+
+    if (absIdx < 0) {
+        // Anchor = the node just before the first upcoming move in the walked line.
+        let tree = tree0;
+        for (let d = 0; ; d++) {
+            let firstMoveIdx = -1;
+            for (let i = 0; i < tree.nodes.length; i++) {
+                if (tree.nodes[i].properties.B || tree.nodes[i].properties.W) { firstMoveIdx = i; break; }
+            }
+            if (firstMoveIdx > 0) {
+                return { tree, nodeIdx: firstMoveIdx - 1, depth: d };
+            }
+            if (firstMoveIdx === -1) {
+                // No moves in this segment — descend the recorded path, else anchor at its last node.
+                if (d < path.length && tree.children && tree.children[path[d]]) {
+                    tree = tree.children[path[d]];
+                    continue;
+                }
+                return { tree, nodeIdx: tree.nodes.length - 1, depth: d };
+            }
+            // firstMoveIdx === 0: segment starts with a move and has no anchor node of
+            // its own — treat the parent side as unreachable here (defensive).
+            return null;
+        }
+    }
+
+    let cum = -1;
+    let tree = tree0;
+    for (let d = 0; ; d++) {
+        for (let i = 0; i < tree.nodes.length; i++) {
+            if (tree.nodes[i].properties.B || tree.nodes[i].properties.W) {
+                cum++;
+                if (cum === absIdx) {
+                    return { tree, nodeIdx: i, depth: d };
+                }
+            }
+        }
+        if (d < path.length && tree.children && tree.children[path[d]]) {
+            tree = tree.children[path[d]];
+        } else {
+            return null; // absIdx beyond the active line
+        }
+    }
+}
+
+// Walks state.sgfTree following hintPath (child 0 beyond its length) and
+// returns the { path, nodeIndex } that positions switchBranchAndGoToNode on
+// the move with flat index targetAbs — used to keep the replayer parked on
+// the user's move after the tree has been mutated. Null when unreachable.
+function locateFlatMoveOnTree(targetAbs, hintPath) {
+    const hint = Array.isArray(hintPath) ? hintPath : [];
+    let cum = -1;
+    let tree = state.sgfTree;
+    const path = [];
+    for (let d = 0; tree; d++) {
+        for (let i = 0; i < tree.nodes.length; i++) {
+            const nd = tree.nodes[i];
+            if (nd.properties && (nd.properties.B || nd.properties.W)) {
+                cum++;
+                if (cum === targetAbs) return { path, nodeIndex: i };
+            }
+        }
+        const nxt = (d < hint.length && Number.isInteger(hint[d])) ? hint[d] : 0;
+        if (!tree.children || !tree.children[nxt]) return null;
+        path.push(nxt);
+        tree = tree.children[nxt];
+    }
+    return null;
+}
+
+function exitVariationEditMode() {
+    state.variationEditMode = false;
+    state.variationHover = null;
+    if (elements.btnVarAdd) {
+        elements.btnVarAdd.style.backgroundColor = '';
+        elements.btnVarAdd.style.borderColor = '';
+        elements.btnVarAdd.style.color = '';
+    }
+}
+
+// Create a variation branch at (r,c). Two modes:
+//  • ALTERNATIVE (mid-line): standing on move X, the new stone replaces that
+//    TURN — it branches from X-1 with the SAME color as X, as a sibling of X.
+//  • CONTINUATION (at line end / empty board): the new stone extends the
+//    line as the next move (opposite color).
+// Tree-first: mutates state.sgfTree, then rebuilds the replayer via
+// switchBranchAndGoToNode so Rec-Game autosave and SGF export serialize the
+// branch. Returns true on success.
+function addVariationAt(r, c) {
+    if (!state.sgfTree || !state.sgfTree.nodes.length) return false;
+
+    const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
+    // CONTINUATION only when standing exactly on the active line's tip;
+    // everywhere else the click ALTERNATES the current move's turn.
+    const totalMoves = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    const atLineEnd = absIdx === totalMoves - 1;
+
+    let color = 'B';
+    if (absIdx >= 0 && state.allSgfMoves[absIdx]) {
+        color = atLineEnd
+            ? (state.allSgfMoves[absIdx].player === 'B' ? 'W' : 'B')
+            : state.allSgfMoves[absIdx].player;
+    } else if (state.plColor) {
+        color = state.plColor === 'W' ? 'W' : 'B';
+    }
+
+    // Go legality per FF[4] move execution rules: occupancy → capture → suicide → ko,
+    // evaluated from the position the new stone actually plays in.
+    const bw = Math.min(state.boardWidth, 19);
+    const bh = Math.min(state.boardHeight, 19);
+    if (c < 0 || c >= bw || r < 0 || r >= bh) return false;
+    const posIdx = atLineEnd ? state.currentMoveIndex : state.currentMoveIndex - 1;
+    const positionBefore = buildPositionUpTo(posIdx);
+    if (positionBefore[r][c].player) return false;
+    const tempBoard = JSON.parse(JSON.stringify(positionBefore));
+    playStoneWithCaptures(tempBoard, r, c, color);
+    if (tempBoard[r][c].player !== color) return false; // suicide
+    if (posIdx >= 1) {
+        const positionTwoAgo = buildPositionUpTo(posIdx - 1);
+        if (boardsEqual(tempBoard, positionTwoAgo)) return false; // simple ko
+    }
+
+    const anchor = locateBranchAnchor(atLineEnd ? absIdx : absIdx - 1);
+    if (!anchor) return false;
+    const { tree: segTree, nodeIdx, depth } = anchor;
+
+    saveHistoryState('add-variation');
+
+    // FF[4] point value: two lowercase letters.
+    const coordStr = SgfEngine.formatGoPoint(c, r);
+    if (!coordStr) return false;
+
+    if (!segTree.children) segTree.children = [];
+
+    // Split mid-segment: remainder keeps the original continuation as child [0]
+    // so the existing line stays the main line (red-bean convention).
+    if (nodeIdx < segTree.nodes.length - 1) {
+        const rest = { nodes: segTree.nodes.slice(nodeIdx + 1), children: segTree.children };
+        segTree.nodes = segTree.nodes.slice(0, nodeIdx + 1);
+        segTree.children = [rest];
+    }
+
+    const childIndex = segTree.children.length; // append-last position
+    const label = 'Var ' + String.fromCharCode(65 + childIndex); // B, C, D… (A = main line)
+    const newSub = {
+        nodes: [{ properties: { [color]: [coordStr], N: [label] }, children: [] }],
+        children: []
+    };
+    segTree.children.push(newSub);
+
+    state.isSgfDirty = true;
+    state.popupShownForCurrentChange = false;
+
+    _addingVariation = true;
+    try {
+        const curPath = ((state.variationData && state.variationData.currentBranchPath) || []).slice();
+        // Land ON the freshly placed stone in BOTH modes so the user sees
+        // their move immediately (Sabaki-style).
+        const landPath = curPath.slice(0, depth);
+        landPath.push(childIndex);
+        // A continuation appended at a pure linear tip produces an all-zero
+        // branch path; suppress the once-per-record Game-Ended popup for
+        // exactly this internal placement navigation.
+        if (!childIndex) state._suppressGameEndOnce = true;
+        switchBranchAndGoToNode(landPath, 0);
+    } finally {
+        _addingVariation = false;
+    }
+
+    playSfx(document.body.classList.contains('study-mode-active') ? 'stoneStudy' : 'stone');
+    if (elements.variationLabel) {
+        elements.variationLabel.textContent = atLineEnd
+            ? `${label} played after move ${absIdx + 1} — Var ◀ returns to main line`
+            : `${label} replaces move ${absIdx + 1} — Var ◀ restores original`;
+    }
+    if (window.refreshGameTree) window.refreshGameTree();
+    if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
+    updateExtractedMoves();
     return true;
 }
 
@@ -3279,7 +3502,123 @@ function setupEventListeners() {
         });
     }
 
+    // --- Multi-game SGF collections (Sabaki-style picker) ---------------------
+    // Splits an SGF string into its TOP-LEVEL gametrees. The scanner tracks
+    // bracketed values and backslash escapes so parens inside comments or
+    // composed point lists can never desync the depth counter.
+    function splitTopLevelGametrees(sgfString) {
+        if (!sgfString || typeof sgfString !== 'string') return [];
+        const trees = [];
+        let depth = 0, start = -1, inValue = false, escaped = false;
+        for (let i = 0; i < sgfString.length; i++) {
+            const ch = sgfString[i];
+            if (inValue) {
+                if (escaped) { escaped = false; }
+                else if (ch === '\\') { escaped = true; }
+                else if (ch === ']') { inValue = false; }
+                continue;
+            }
+            if (ch === '[') { inValue = true; continue; }
+            if (ch === '(') {
+                if (depth === 0) start = i;
+                depth++;
+            } else if (ch === ')') {
+                depth--;
+                if (depth === 0 && start !== -1) {
+                    const block = sgfString.slice(start, i + 1);
+                    if (/[A-Z]{1,2}\s*\[/.test(block)) trees.push(block.trim());
+                    start = -1;
+                }
+            }
+        }
+        return trees;
+    }
+
+    function _pickerProp(props, key) {
+        return (props[key] && props[key][0]) ? String(props[key][0]).replace(/\s+/g, ' ').trim() : '';
+    }
+
+    function _pickerMoveCount(tree) {
+        let m = 0;
+        (function w(t) {
+            (t.nodes || []).forEach(n => { if (n.properties.B || n.properties.W) m++; });
+            (t.children || []).forEach(w);
+        })(tree);
+        return m;
+    }
+
+    function showGamePicker(blocks, fileName, fileHandle) {
+        if (_gamePickerOverlay) _gamePickerOverlay.remove();
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(20,18,15,0.55);display:flex;align-items:center;justify-content:center;z-index:10050;';
+        const panel = document.createElement('div');
+        panel.style.cssText = 'background:#faf9f7;border:1px solid #e8e5e0;border-radius:14px;padding:22px 24px;width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 18px 48px rgba(0,0,0,0.28);font-family:inherit;';
+        const h = document.createElement('div');
+        h.style.cssText = 'font-weight:600;font-size:15px;color:#2d2a26;margin-bottom:4px;';
+        h.textContent = `This file contains ${blocks.length} games`;
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:12px;color:#8b8580;margin-bottom:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        sub.textContent = fileName || '';
+        panel.appendChild(h);
+        panel.appendChild(sub);
+
+        const list = document.createElement('div');
+        list.style.cssText = 'overflow-y:auto;display:flex;flex-direction:column;gap:8px;';
+        blocks.forEach((block, idx) => {
+            let meta = { pb: '', pw: '', ev: '', dt: '', re: '', moves: '?' };
+            try {
+                const tree = SgfEngine.parseSgf(block);
+                const rootProps = tree && tree.nodes && tree.nodes[0] ? tree.nodes[0].properties : {};
+                meta.pb = _pickerProp(rootProps, 'PB') || 'Black';
+                meta.pw = _pickerProp(rootProps, 'PW') || 'White';
+                meta.ev = _pickerProp(rootProps, 'EV');
+                meta.dt = _pickerProp(rootProps, 'DT');
+                meta.re = _pickerProp(rootProps, 'RE');
+                meta.moves = tree ? _pickerMoveCount(tree) : '?';
+            } catch (err) { /* fall back to raw display */ }
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.style.cssText = 'text-align:left;background:#ffffff;border:1px solid #e8e5e0;border-radius:10px;padding:10px 14px;cursor:pointer;font-size:13px;color:#3d3a35;transition:all .12s;font-family:inherit;';
+            row.onmouseenter = () => { row.style.borderColor = '#c2410c'; row.style.background = '#fff7ed'; };
+            row.onmouseleave = () => { row.style.borderColor = '#e8e5e0'; row.style.background = '#ffffff'; };
+            const line1 = document.createElement('div');
+            line1.style.cssText = 'font-weight:600;color:#1f1d1a;';
+            line1.textContent = `Game ${idx + 1}: ${meta.pb} vs ${meta.pw}`;
+            const line2Bits = [meta.ev, meta.dt, meta.re, `${meta.moves} moves`].filter(Boolean);
+            const line2 = document.createElement('div');
+            line2.style.cssText = 'font-size:11.5px;color:#8b8580;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            line2.textContent = line2Bits.join('  ·  ');
+            row.appendChild(line1);
+            row.appendChild(line2);
+            row.addEventListener('click', () => {
+                ov.remove();
+                _gamePickerOverlay = null;
+                openStudyPrompt(block, `${fileName || 'game.sgf'} [game ${idx + 1}/${blocks.length}]`, fileHandle);
+            });
+            list.appendChild(row);
+        });
+        panel.appendChild(list);
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = 'Cancel';
+        cancel.style.cssText = 'margin-top:14px;align-self:flex-end;background:none;border:1px solid #e8e5e0;border-radius:8px;padding:6px 16px;font-size:12.5px;color:#6b665f;cursor:pointer;font-family:inherit;';
+        cancel.addEventListener('click', () => { ov.remove(); _gamePickerOverlay = null; });
+        panel.appendChild(cancel);
+        ov.appendChild(panel);
+        ov.addEventListener('click', (e) => { if (e.target === ov) { ov.remove(); _gamePickerOverlay = null; } });
+        document.body.appendChild(ov);
+        _gamePickerOverlay = ov;
+    }
+
     function openStudyPrompt(sgfString, fileName, fileHandle = null) {
+        // A collection file (multiple top-level gametrees) gets Sabaki-style
+        // treatment: ask WHICH game before doing anything with it.
+        const topLevelTrees = splitTopLevelGametrees(sgfString);
+        if (topLevelTrees.length > 1) {
+            showGamePicker(topLevelTrees, fileName, fileHandle);
+            return;
+        }
         state.pendingStudySgf = { sgfString, fileName, fileHandle };
         const promptFileName = document.getElementById('prompt-file-name');
         if (promptFileName) promptFileName.textContent = fileName;
@@ -3345,7 +3684,11 @@ function setupEventListeners() {
                 elements.selectedFileName.title = newRec.fileNm;
             }
 
+            // Wrap like resumeStudySession does: keeps the freshly-attached
+            // record through loadSGF's study-detach guard.
+            state.isSgfLoading = true;
             loadSGF(pending.sgfString);
+            state.isSgfLoading = false;
 
             // Newly recorded session uses its own captured style for the game board, exactly
             // like a resumed session, so in-session customizations never touch the page-load
@@ -3620,8 +3963,48 @@ function setupEventListeners() {
     // Variation buttons
     if (elements.btnVarPrev) elements.btnVarPrev.addEventListener('click', () => navigateVariation(-1));
     if (elements.btnVarNext) elements.btnVarNext.addEventListener('click', () => navigateVariation(1));
+    if (elements.btnVarAdd) elements.btnVarAdd.addEventListener('click', toggleVariationEditMode);
     
     if (elements.btnWhatIf) elements.btnWhatIf.addEventListener('click', toggleWhatIfMode);
+
+    function toggleVariationEditMode(e) {
+        if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+        }
+        if (!state.sgfTree || !state.allSgfMoves.length) return;
+        // Range filters slice sgfMoves; branch creation needs the full line.
+        const rangeText = elements.rangeInput ? elements.rangeInput.value : 'all';
+        const [rangeStart] = parseRange(rangeText);
+        if ((state.filterStart || 1) !== 1 || (rangeStart && rangeStart > 1)) {
+            if (elements.variationLabel) elements.variationLabel.textContent = 'Set range to "all" to add variations';
+            return;
+        }
+        state.variationEditMode = !state.variationEditMode;
+        state.variationHover = null;
+        if (state.variationEditMode) {
+            // Mutually exclusive with What-If preview.
+            state.whatIfMode = false;
+            state.whatIfStone = null;
+            if (elements.btnWhatIf) {
+                elements.btnWhatIf.style.backgroundColor = 'rgba(139, 26, 26, 0.1)';
+                elements.btnWhatIf.style.borderColor = 'rgb(139, 26, 26)';
+                elements.btnWhatIf.style.color = 'rgb(139, 26, 26)';
+            }
+        }
+        if (elements.btnVarAdd) {
+            if (state.variationEditMode) {
+                elements.btnVarAdd.style.backgroundColor = 'rgb(180, 83, 9)';
+                elements.btnVarAdd.style.borderColor = 'rgb(180, 83, 9)';
+                elements.btnVarAdd.style.color = 'rgb(248, 245, 238)';
+                if (elements.variationLabel) elements.variationLabel.textContent = 'Add Variation: click an empty point';
+            } else {
+                exitVariationEditMode();
+                updateVariationUI();
+            }
+        }
+        drawBoard();
+    }
 
     function toggleWhatIfMode(e) {
         if (e) {
@@ -4443,6 +4826,16 @@ function handleMouseDown(e) {
     }
 
     // 2. If no handles were clicked, evaluate cell action
+    // Variation Add mode: click an empty point to start/extend a branch (stays armed).
+    if (state.variationEditMode) {
+        if (c >= 0 && c <= 18 && r >= 0 && r <= 18 && !state.board[r][c].player) {
+            const ok = addVariationAt(r, c);
+            if (!ok) playSfx('annotUndo');
+        }
+        drawBoard();
+        return;
+    }
+
     if (state.whatIfMode) {
         if (c >= 0 && c <= 18 && r >= 0 && r <= 18 && (!state.board[r][c].player)) {
             let p = 'B';
@@ -4606,6 +4999,26 @@ function handleMouseMove(e) {
     
     // Update cursor style depending on hover state when NOT dragging
     if (!state.drag.mode) {
+        // Variation Add mode: amber ghost stone preview at empty intersections.
+        if (state.variationEditMode) {
+            if (c >= 0 && c <= 18 && r >= 0 && r <= 18 && !state.board[r][c].player) {
+                if (!state.variationHover || state.variationHover.r !== r || state.variationHover.c !== c) {
+                    state.variationHover = { r, c };
+                    drawBoard();
+                }
+            } else if (state.variationHover) {
+                state.variationHover = null;
+                drawBoard();
+            }
+            [elements.canvasInitial, elements.canvasStudy].forEach(canv => {
+                if (canv) canv.style.cursor = 'crosshair';
+            });
+            return;
+        } else if (state.variationHover) {
+            state.variationHover = null;
+            drawBoard();
+        }
+
         if (state.whatIfMode) {
             if (c >= 0 && c <= 18 && r >= 0 && r <= 18 && !state.board[r][c].player) {
                 if (!state.whatIfStone || state.whatIfStone.r !== r || state.whatIfStone.c !== c) {
@@ -5605,7 +6018,20 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             w: boardWidth,
             h: boardWidth
         };
-        
+
+        // Variation-Add mode (mid-line): the new stone ALTERNATES the current
+        // move — fade that move's own stone so the position reads "as if X
+        // were lifted off", while the cursor carries its replacement.
+        let varFadeStone = null;
+        if (state.variationEditMode) {
+            const vTotal = state.allSgfMoves ? state.allSgfMoves.length : 0;
+            const vAbs = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
+            if (vAbs >= 0 && vAbs < vTotal - 1 && state.allSgfMoves[vAbs] && !state.allSgfMoves[vAbs].isPass) {
+                const vmv = state.allSgfMoves[vAbs];
+                if (vmv.r >= 0 && vmv.r < 19 && vmv.c >= 0 && vmv.c < 19) varFadeStone = { r: vmv.r, c: vmv.c };
+            }
+        }
+
         // Pass 1: Draw Board Mask (BM layer) for all cells
         for (let r = 0; r < 19; r++) {
             for (let c = 0; c < 19; c++) {
@@ -5628,7 +6054,10 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                     if (ffAnimating && !drawAnnotations) {
                         cellToDraw = { player: cell.player, annotation: null, label: null };
                     }
+                    const isFadedCell = varFadeStone && varFadeStone.r === r && varFadeStone.c === c;
+                    if (isFadedCell) { ctx.save(); ctx.globalAlpha = 0.35; }
                     drawCellContent(ctx, cellToDraw, cx, cy, CELL_SIZE, false, clipRect, currentBoardBg, null, r, c, 'bm');
+                    if (isFadedCell) ctx.restore();
                 }
             }
         }
@@ -5655,7 +6084,10 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                     if (ffAnimating && !drawAnnotations) {
                         cellToDraw = { player: cell.player, annotation: null, label: null };
                     }
+                    const isFadedCell2 = varFadeStone && varFadeStone.r === r && varFadeStone.c === c;
+                    if (isFadedCell2) { ctx.save(); ctx.globalAlpha = 0.35; }
                     drawCellContent(ctx, cellToDraw, cx, cy, CELL_SIZE, false, clipRect, currentBoardBg, null, r, c, 'stone');
+                    if (isFadedCell2) ctx.restore();
                 }
             }
         }
@@ -5923,6 +6355,37 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 ctx.fillText(termStr, cx, pillY + pillHeight / 2);
                 ctx.restore();
             }
+        }
+
+        // 9.4. Draw Variation-Add ghost stone (amber ring). Mid-line it
+        // previews an ALTERNATIVE to the current move (same color); at the
+        // line's tip it previews a CONTINUATION (next color).
+        if (state.variationEditMode && state.variationHover) {
+            const tgt = state.variationHover;
+            const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
+            const ghTotal = state.allSgfMoves ? state.allSgfMoves.length : 0;
+            let p = 'B';
+            if (absIdx >= 0 && state.allSgfMoves[absIdx]) {
+                p = (absIdx === ghTotal - 1)
+                    ? (state.allSgfMoves[absIdx].player === 'B' ? 'W' : 'B')
+                    : state.allSgfMoves[absIdx].player;
+            } else if (state.plColor) {
+                p = state.plColor === 'W' ? 'W' : 'B';
+            }
+            const { cx, cy } = getAnimatedPos(tgt.r, tgt.c, undefined);
+            ctx.save();
+            ctx.globalAlpha = 0.45;
+            const pCell = { player: p, annotation: null, label: null };
+            const clipR = { x: PADDING - CELL_SIZE / 2, y: PADDING - CELL_SIZE / 2, w: boardWidth, h: boardWidth };
+            drawCellContent(ctx, pCell, cx, cy, CELL_SIZE, false, clipR, currentBoardBg, null, tgt.r, tgt.c, 'all');
+            ctx.restore();
+            ctx.save();
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = Math.max(2, CELL_SIZE * 0.08);
+            ctx.beginPath();
+            ctx.arc(cx, cy, CELL_SIZE * 0.48, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
         }
 
         // 9.5. Draw capture animation (stones shrinking + fading away)
@@ -8577,7 +9040,6 @@ async function generateDiagramDataURL() {
                 }
 
                 // Stones & Annotations
-                // Pass 1: Draw Board Mask (BM layer) for all cells
                 for (let r = boardRowStart; r <= boardRowEnd; r++) {
                     for (let c = boardColStart; c <= boardColEnd; c++) {
                         const cell = state.board[r][c];
@@ -11035,8 +11497,15 @@ function updateVariationUI() {
         return;
     }
 
-    const absIdx = (state.filterStart || 1) - 1 + Math.max(0, state.currentMoveIndex);
-    const bp = state.variationData.branchPoints.find(b => b.moveIndex === absIdx);
+    const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
+    // Nearest branch point at or above the current position — variation controls
+    // stay live anywhere inside/below a fork, not only when standing exactly on it.
+    let bp = null;
+    if (state.variationData && state.variationData.branchPoints) {
+        for (let i = state.variationData.branchPoints.length - 1; i >= 0; i--) {
+            if (state.variationData.branchPoints[i].moveIndex <= absIdx) { bp = state.variationData.branchPoints[i]; break; }
+        }
+    }
 
     if (bp && bp.variants.length > 1) {
         const label = bp.variants[bp.current].label || `Variation ${bp.current + 1}`;
@@ -11051,16 +11520,23 @@ function updateVariationUI() {
 }
 
 function navigateVariation(dir) {
-    const absIdx = (state.filterStart || 1) - 1 + Math.max(0, state.currentMoveIndex);
-    const bpIndex = state.variationData.branchPoints.findIndex(b => b.moveIndex === absIdx);
+    if (!state.variationData || !state.variationData.branchPoints.length) return;
+    const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
+    // Nearest branch point at or above the current position (Sabaki-style).
+    let bpIndex = -1;
+    for (let i = state.variationData.branchPoints.length - 1; i >= 0; i--) {
+        if (state.variationData.branchPoints[i].moveIndex <= absIdx) { bpIndex = i; break; }
+    }
     if (bpIndex === -1) return;
 
     const bp = state.variationData.branchPoints[bpIndex];
     const newCurrent = bp.current + dir;
     if (newCurrent < 0 || newCurrent >= bp.variants.length) return;
 
-    const newPath = state.variationData.currentBranchPath.slice(0, bpIndex + 1);
-    newPath[bpIndex] = newCurrent;
+    const curPath = state.variationData.currentBranchPath.slice();
+    while (curPath.length <= bp.depth) curPath.push(0);
+    const newPath = curPath.slice(0, bp.depth + 1);
+    newPath[bp.depth] = newCurrent;
 
     switchBranchAndGoToNode(newPath, 0);
 }
@@ -11072,7 +11548,12 @@ function switchBranchAndGoToNode(path, nodeIndex) {
     const newAllSgfMovesProps = [];
     let currentTree = tree;
     for (let i = 0; i <= path.length; i++) {
-        const limit = (i === path.length) ? (nodeIndex + 1) : currentTree.nodes.length;
+        // Collect the ENTIRE segment, including the tail beyond nodeIndex —
+        // the landing position is derived separately below from nodeIndex.
+        // (Stopping at nodeIndex+1 here used to TRUNCATE the flat move list
+        // whenever the target sat mid-segment, e.g. after adding an
+        // alternative to a mid-game move.)
+        const limit = currentTree.nodes.length;
         for (let j = 0; j < limit; j++) {
             newAllSgfMovesProps.push(currentTree.nodes[j].properties);
         }
@@ -11147,10 +11628,14 @@ function switchBranchAndGoToNode(path, nodeIndex) {
 
     state.allSgfMoves = newMoves;
 
-    // Recalculate branch points along the chosen path
+    // Recalculate branch points along the chosen path.
+    // NOTE: `path` indexes EVERY child hop (linear chains included), while
+    // branchPoints only exist at real forks — so descend by hop depth, not by
+    // branch-point index, and record each fork's hop depth for navigation.
     const branchPoints = [];
     {
         let moveIdx = 0;
+        let hopDepth = 0;
         let cTree = tree;
         while (cTree) {
             const contributingNodes = cTree.nodes.filter(n => n.properties.B || n.properties.W).length;
@@ -11162,15 +11647,18 @@ function switchBranchAndGoToNode(path, nodeIndex) {
                     }
                     return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
                 });
-                branchPoints.push({ moveIndex: moveIdx + contributingNodes, variants, current: 0 });
+                branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
             }
             moveIdx += contributingNodes;
             if (cTree.children && cTree.children.length > 0) {
-                const bpIdx = branchPoints.length - 1;
-                const chosenChildIndex = (bpIdx < path.length) ? path[bpIdx] : 0;
-                if (branchPoints[bpIdx]) {
-                    branchPoints[bpIdx].current = chosenChildIndex;
+                const chosenChildIndex = (hopDepth < path.length && Number.isInteger(path[hopDepth]))
+                    ? Math.min(Math.max(0, path[hopDepth]), cTree.children.length - 1)
+                    : 0;
+                const bp = branchPoints[branchPoints.length - 1];
+                if (bp && bp.depth === hopDepth) {
+                    bp.current = chosenChildIndex;
                 }
+                hopDepth++;
                 cTree = cTree.children[chosenChildIndex];
             } else {
                 cTree = null;
@@ -11669,6 +12157,12 @@ function goToMove(index) {
             elements.btnWhatIf.style.borderColor = 'rgb(139, 26, 26)';
             elements.btnWhatIf.style.color = 'rgb(139, 26, 26)';
         }
+    }
+    // Variation Add mode survives its own internal repositioning (_addingVariation)
+    // so consecutive clicks can extend the new branch; user-driven navigation exits.
+    state.variationHover = null;
+    if (state.variationEditMode && !_addingVariation) {
+        exitVariationEditMode();
     }
     if (state.refPointMode) {
         state.refPointMode = false;
@@ -12416,6 +12910,8 @@ function goToMove(index) {
     
     if (state._scoringResume) {
         state._scoringResume = false;
+    } else if (state._suppressGameEndOnce) {
+        state._suppressGameEndOnce = false;
     } else if (typeof checkAndShowGameEndPopup === 'function') {
         checkAndShowGameEndPopup();
     }
@@ -12832,6 +13328,13 @@ function loadSGF(sgfString) {
     // A freshly loaded game is not tied to a study session, so drop the active-session
     // game style and reset the main board to the page-load initial style/size.
     state.gameBoardStyle = null;
+    // Detach any previously-active study record: once DIFFERENT content is
+    // loaded, autoSaveActiveStudySettings() would otherwise serialize this
+    // new game INTO the last-opened record and clobber it. (Resume is safe:
+    // it sets activeStudyId then wraps loadSGF in isSgfLoading=true.)
+    if (!state.isSgfLoading) {
+        state.activeStudyId = null;
+    }
     if (state.initialBoardStyle && state.initialBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
         updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
     }
@@ -12858,6 +13361,8 @@ function loadSGF(sgfString) {
     state.plColor = null;
     state.boardWidth = 19;
     state.boardHeight = 19;
+    exitVariationEditMode();
+    state.gameEndPopupShown = false;
     state.variationData = { branchPoints: [], currentBranchPath: [0] };
     state.currentVariation = 0;
     if (elements.sgfExportContainer) elements.sgfExportContainer.style.display = 'none';
@@ -12932,6 +13437,7 @@ function loadSGF(sgfString) {
 
     {
         let moveIdx = 0;
+        let hopDepth = 0;
         let currentTree = state.sgfTree;
         const branchPath = [0];
         while (currentTree) {
@@ -12944,10 +13450,11 @@ function loadSGF(sgfString) {
                     }
                     return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
                 });
-                branchPoints.push({ moveIndex: moveIdx + contributingNodes, variants, current: 0 });
+                branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
             }
             moveIdx += contributingNodes;
             if (currentTree.children && currentTree.children.length > 0) {
+                hopDepth++;
                 currentTree = currentTree.children[0];
             } else {
                 currentTree = null;
@@ -14890,8 +15397,16 @@ function checkAndShowGameEndPopup() {
     const absIdx = (state.filterStart || 1) - 1 + state.currentMoveIndex;
     const absLastIdx = state.allSgfMoves ? state.allSgfMoves.length - 1 : state.sgfMoves.length - 1;
     
+    // Show at most ONCE per loaded record: wandering off the end (or into a
+    // variation and back) never re-announces a result the user dismissed.
     if (absIdx !== absLastIdx) {
-        state.gameEndPopupShown = false; 
+        return;
+    }
+
+    // Variations carry no recorded result — only the loaded main line may
+    // trigger the Game Ended popup (a branch tip is not the game's end).
+    const gePath = (state.variationData && state.variationData.currentBranchPath) || [];
+    if (!gePath.every(idx => idx === 0)) {
         return;
     }
     

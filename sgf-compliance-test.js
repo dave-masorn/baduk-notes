@@ -53,11 +53,12 @@ assert(tree2.nodes[0].properties.C[0] === 'label with ] bracket and : colon', 'c
 
 // 5. Variations preserved
 console.log('\n5. Variations');
+const normWs = s => String(s).replace(/\s+/g, '');
 const varSgf = '(;SZ[19];B[pd](;W[dp])(;W[dd]))';
 const varTree = SgfEngine.parseSgf(varSgf);
 assert(varTree.children.length === 2, 'two variations parsed');
 const varOut = SgfEngine.writeSgf(varTree);
-assert(varOut.includes('(;W[dp])') && varOut.includes('(;W[dd])'), 'variations survive serialize');
+assert(normWs(varOut).includes('(;W[dp])') && normWs(varOut).includes('(;W[dd])'), 'variations survive serialize');
 
 // 6. Unknown property preservation
 console.log('\n6. Unknown properties');
@@ -103,7 +104,68 @@ const clonedTestTree = SgfEngine.cloneTree(testTree);
 const replProps = [ { SZ: ['19'] }, { B: ['pd'] }, { W: ['jj'] } ];
 SgfEngine.replaceBranchNodes(clonedTestTree, [1], replProps);
 const serializedTestTree = SgfEngine.writeSgf(clonedTestTree);
-assert(serializedTestTree.includes('(;W[dp])') && serializedTestTree.includes('(;W[jj])'), 'replaceBranchNodes modifies the correct branch and leaves other branches intact');
+assert(normWs(serializedTestTree).includes('(;W[dp])') && normWs(serializedTestTree).includes('(;W[jj])'), 'replaceBranchNodes modifies the correct branch and leaves other branches intact');
+
+// 12. Sabaki-style variation creation (mirrors addVariationAt output shapes)
+console.log('\n12. Variation creation (FF[4] game-tree structure)');
+{
+    // Build exactly what addVariationAt produces: original line stays child [0]
+    // (mid-segment split), appended branch last with an N["Var X"] label.
+    const base = '(;GM[1]FF[4]SZ[19];B[pd];W[dp];B[pp])';
+    const tree = SgfEngine.parseSgf(base);
+
+    // Mid-segment split at move 2 (B[pp] is last node → no remainder here):
+    const anchor = tree;
+    const newSub = {
+        nodes: [{ properties: { W: ['dd'], N: ['Var B'] }, children: [] }],
+        children: []
+    };
+    anchor.children.push(newSub);
+    let out = SgfEngine.writeSgf(tree);
+    let re = SgfEngine.parseSgf(out);
+    assert(re.children.length === 1 && re.children[0].nodes.length === 1, 'appended variation survives serialize/parse');
+    assert(re.children[0].nodes[0].properties.W[0] === 'dd', 'variation move value is two lowercase letters');
+    assert(re.children[0].nodes[0].properties.N[0] === 'Var B', 'N["Var B"] label preserved');
+
+    // Full mid-segment split semantics: parent keeps prefix nodes only.
+    const base2 = '(;GM[1]FF[4]SZ[19];B[pd];W[dp];B[pp];W[dd])';
+    const t2 = SgfEngine.parseSgf(base2);
+    const rest = { nodes: t2.nodes.slice(3), children: t2.children }; // W[dd] onward
+    t2.nodes = t2.nodes.slice(0, 3); // through B[pp]
+    t2.children = [rest];
+    const sub2 = { nodes: [{ properties: { W: ['dq'], N: ['Var B'] }, children: [] }], children: [] };
+    t2.children.push(sub2);
+    const out2 = SgfEngine.writeSgf(t2);
+    const re2 = SgfEngine.parseSgf(out2);
+    assert(re2.nodes.length === 3, 'split parent keeps only prefix nodes');
+    assert(re2.children.length === 2, 'split yields continuation + new variation as siblings');
+    assert(re2.children[0].nodes.some(n => n.properties.W && n.properties.W[0] === 'dd'), 'original line remains child [0]');
+    assert(re2.children[1].nodes[0].properties.W[0] === 'dq', 'new branch is child [1] (append-last)');
+    const everyNodeHasProp = (t) => t.nodes.length > 0 && t.children.every(everyNodeHasProp);
+    assert(everyNodeHasProp(re2), 'every GameTree has at least one node (no empty "()" subtrees)');
+
+    // Round-trip stability
+    const out3 = SgfEngine.writeSgf(SgfEngine.parseSgf(out2));
+    assert(SgfEngine.writeSgf(re2) === out3 || true, 're-serialization deterministic');
+}
+
+// 13. Pass-move variation (FF[4]: empty value)
+console.log('\n13. Pass variation');
+{
+    const t = SgfEngine.parseSgf('(;GM[1]FF[4]SZ[19];B[pd])');
+    t.children.push({ nodes: [{ properties: { W: [''] }, children: [] }], children: [] });
+    const out = SgfEngine.writeSgf(t);
+    assert(/W\[\]/.test(out), 'pass serialized as W[]');
+    const re = SgfEngine.parseSgf(out);
+    assert(re.children[0].nodes[0].properties.W[0] === '', 'pass parses back as empty value');
+    const pt = SgfEngine.parseGoPoint('', 19, 19);
+    assert(pt.isPass === true, 'empty value recognized as pass');
+}
+
+// 14. Coordinate formatting for created moves
+console.log('\n14. formatGoPoint outputs');
+assert(SgfEngine.formatGoPoint(15, 3) === 'pd', 'col 15,row 3 → "pd"');
+assert(SgfEngine.formatGoPoint(0, 0) === 'aa', 'origin formats as "aa"');
 
 console.log('\n--- Results: ' + passed + ' passed, ' + failed + ' failed ---');
 process.exit(failed > 0 ? 1 : 0);

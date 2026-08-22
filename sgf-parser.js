@@ -554,27 +554,38 @@ const SgfEngine = (function() {
 class SgfSanitizer {
     static sanitize(rawSgf) {
         if (!rawSgf || typeof rawSgf !== 'string') return '';
-        
+
         // Scan permissively to bypass markdown lists, HTML, or raw text pollution.
         const startIdx = rawSgf.indexOf('(;');
         if (startIdx === -1) return rawSgf;
-        
+
         const text = rawSgf.slice(startIdx);
-        
-        // --- 1. FINITE STATE MACHINE TOKENIZER ---
-        const nodes = [];
+
+        // --- 1. TREE-AWARE TOKENIZER ---
+        // FF[4] grammar: GameTree := "(" Sequence GameTree* ")".
+        // Parse into nested containers so sibling variation subtrees survive
+        // reassembly instead of being flattened into the main line.
         let currentNode = null;
         let currentProp = '';
         let currentValues = [];
-        
+
         let inValue = false;
         let valueBuffer = '';
         let escape = false;
-        let parenCount = 0;
-        
+
+        const flushPending = () => {
+            if (currentNode && currentProp && currentValues.length > 0) {
+                currentNode.props.set(currentProp, currentValues);
+                currentProp = ''; currentValues = [];
+            }
+        };
+
+        const stack = [];   // open GameTree containers: { seq: [node], kids: [tree] }
+        let rootTree = null;
+
         for (let i = 0; i < text.length; i++) {
             const c = text[i];
-            
+
             if (inValue) {
                 if (escape) {
                     valueBuffer += c;
@@ -591,25 +602,24 @@ class SgfSanitizer {
                 }
             } else {
                 if (c === '(') {
-                    parenCount++;
+                    flushPending();
+                    stack.push({ seq: [], kids: [] });
+                    currentNode = null;
                 } else if (c === ')') {
-                    if (currentNode && currentProp && currentValues.length > 0) {
-                        currentNode.props.set(currentProp, currentValues);
-                        currentProp = ''; currentValues = [];
-                    }
-                    parenCount--;
-                    if (parenCount === 0) break; // End of primary game sequence
+                    flushPending();
+                    const closed = stack.pop();
+                    currentNode = null;
+                    if (!closed) break; // malformed — stop gracefully
+                    if (stack.length === 0) { rootTree = closed; break; } // End of primary game
+                    stack[stack.length - 1].kids.push(closed);
                 } else if (c === ';') {
-                    if (currentNode && currentProp && currentValues.length > 0) {
-                        currentNode.props.set(currentProp, currentValues);
-                        currentProp = ''; currentValues = [];
-                    }
+                    flushPending();
                     currentNode = { props: new Map() };
-                    nodes.push(currentNode);
+                    if (stack.length > 0) stack[stack.length - 1].seq.push(currentNode);
                 } else if (c === '[') {
                     inValue = true;
                     valueBuffer = '';
-                } else if (/[A-Z]/.test(c)) { // Only uppercase characters define FF[4] properties
+                } else if (currentNode && /[A-Z]/.test(c)) { // Only uppercase characters define FF[4] properties
                     if (currentProp !== '' && currentValues.length > 0) {
                         currentNode.props.set(currentProp, currentValues);
                         currentProp = ''; currentValues = [];
@@ -618,62 +628,36 @@ class SgfSanitizer {
                 }
             }
         }
-        
-        if (nodes.length === 0) return rawSgf;
-        
+
+        // Unbalanced input: fall back to the outermost collected container.
+        if (!rootTree && stack.length > 0) rootTree = stack[0];
+        if (!rootTree || rootTree.seq.length === 0) return rawSgf;
+
         // --- 2. GO-DOMAIN RECTIFICATIONS ---
-        const root = nodes[0].props;
-        
+        const root = rootTree.seq[0].props;
+
         // Enforce structural ingestion requirements
         root.set('FF', ['4']);
         root.set('CA', ['UTF-8']);
         root.set('GM', ['1']);
         if (!root.has('SZ')) root.set('SZ', ['19']);
         root.set('AP', ['SGFC:2.3']); // Strict formatter flag
-        
+
         // Normalize Komi from zi to points if inflated.
         if (root.has('KM')) {
             const kmVal = parseFloat(root.get('KM')[0]);
             if (kmVal > 100) root.set('KM', [((kmVal / 100) * 2).toString()]);
         }
-        
+
         // Strip non-standard registry violators.
         ['TC', 'TT', 'RL'].forEach(p => root.delete(p));
-        
-        // --- 3. SGFC-STRICT REASSEMBLY ---
-        let out = '(\n\n';
-        
-        // Root grouping header
-        const rootHeader = ['FF', 'CA', 'GM', 'SZ', 'AP'];
-        let headerStr = ';';
-        rootHeader.forEach(p => {
-            if (root.has(p)) headerStr += `${p}[${root.get(p).join('][')}]`;
-        });
-        out += headerStr + '\n\n';
-        
-        if (root.has('EV')) out += `EV[${root.get('EV').join('][')}]\n\n`;
-        
-        const playerProps = ['PB', 'BR', 'PW', 'WR', 'KM', 'DT', 'PC', 'RE'];
-        playerProps.forEach(p => {
-            if (root.has(p)) out += `${p}[${root.get(p).join('][')}]\n`;
-        });
-        
-        const handledRootProps = new Set(['FF', 'CA', 'GM', 'SZ', 'AP', 'EV', ...playerProps]);
-        for (const [k, v] of root.entries()) {
-            if (!handledRootProps.has(k)) {
-                out += `${k}[${v.join('][')}]\n`;
-            }
-        }
-        out += '\n';
-        
-        // Node sequence wrapping logic (10-move groups)
-        let moveCount = 0;
-        for (let i = 1; i < nodes.length; i++) {
-            const node = nodes[i].props;
+
+        // --- 3. SGFC-STRICT REASSEMBLY (structure-preserving) ---
+        const formatNodeParts = (node) => {
             let nodeStr = ';';
-            let hasComment = node.has('C');
             let markupStr = '';
-            
+            const hasComment = node.has('C');
+
             for (const [k, v] of node.entries()) {
                 if (['DD', 'MA', 'TB', 'TW'].includes(k)) {
                     const compressed = compressGoPoints(v);
@@ -684,24 +668,75 @@ class SgfSanitizer {
                     nodeStr += `${k}[${v.join('][')}]`;
                 }
             }
-            
-            if (hasComment || markupStr) {
-                if (moveCount > 0) out += '\n';
-                out += nodeStr + markupStr + '\n';
-                moveCount = 0;
-            } else {
-                out += nodeStr;
-                moveCount++;
-                if (moveCount >= 10) {
-                    out += '\n';
-                    moveCount = 0;
-                }
+
+            return { nodeStr, markupStr, hasComment };
+        };
+
+        let out = '(\n\n';
+
+        // Root grouping header
+        const rootHeader = ['FF', 'CA', 'GM', 'SZ', 'AP'];
+        let headerStr = ';';
+        rootHeader.forEach(p => {
+            if (root.has(p)) headerStr += `${p}[${root.get(p).join('][')}]`;
+        });
+        out += headerStr + '\n\n';
+
+        if (root.has('EV')) out += `EV[${root.get('EV').join('][')}]\n\n`;
+
+        const playerProps = ['PB', 'BR', 'PW', 'WR', 'KM', 'DT', 'PC', 'RE'];
+        playerProps.forEach(p => {
+            if (root.has(p)) out += `${p}[${root.get(p).join('][')}]\n`;
+        });
+
+        const handledRootProps = new Set(['FF', 'CA', 'GM', 'SZ', 'AP', 'EV', ...playerProps]);
+        for (const [k, v] of root.entries()) {
+            if (!handledRootProps.has(k)) {
+                out += `${k}[${v.join('][')}]\n`;
             }
         }
-        
-        if (moveCount > 0) out += '\n';
+        out += '\n';
+
+        // Sequence emission with 10-move line wrapping (comments/markup on own line).
+        const emitSequence = (tree, skipFirst) => {
+            let s = '';
+            let moveCount = 0;
+            tree.seq.forEach((wrapper, idx) => {
+                if (skipFirst && idx === 0) return; // root already emitted as header
+                const { nodeStr, markupStr, hasComment } = formatNodeParts(wrapper.props);
+
+                if (hasComment || markupStr) {
+                    if (moveCount > 0) s += '\n';
+                    s += nodeStr + markupStr + '\n';
+                    moveCount = 0;
+                } else {
+                    s += nodeStr;
+                    moveCount++;
+                    if (moveCount >= 10) {
+                        s += '\n';
+                        moveCount = 0;
+                    }
+                }
+            });
+            if (moveCount > 0) s += '\n';
+            return s;
+        };
+
+        // Variation subtrees recurse as sibling GameTrees ("(…)(…)" per FF[4]).
+        const emitSubtree = (tree) => {
+            let s = '(' + emitSequence(tree, false);
+            for (const kid of tree.kids) {
+                s += '\n\n' + emitSubtree(kid);
+            }
+            return s + ')';
+        };
+
+        out += emitSequence(rootTree, true);
+        for (const kid of rootTree.kids) {
+            out += '\n\n' + emitSubtree(kid);
+        }
         out += '\n)\n';
-        
+
         return out;
     }
 }
