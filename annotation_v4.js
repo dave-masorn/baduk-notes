@@ -3595,14 +3595,7 @@ function setupEventListeners() {
             row.addEventListener('click', () => {
                 ov.remove();
                 _gamePickerOverlay = null;
-                console.log('[picker] row clicked → handing game', idx + 1, 'of', blocks.length, 'to openStudyPrompt');
                 openStudyPrompt(block, `${fileName || 'game.sgf'} [game ${idx + 1}/${blocks.length}]`, fileHandle);
-                setTimeout(() => {
-                    const rp = document.getElementById('study-record-prompt-overlay');
-                    console.log('[picker] after openStudyPrompt → record-prompt display=', rp ? rp.style.display : '?',
-                        '| pendingSgf set=', !!state.pendingStudySgf,
-                        '| topTrees in picked block=', splitTopLevelGametrees(block).length);
-                }, 100);
             });
             list.appendChild(row);
         });
@@ -3631,15 +3624,9 @@ function setupEventListeners() {
         state.pendingStudySgf = { sgfString, fileName, fileHandle };
         const promptFileName = document.getElementById('prompt-file-name');
         if (promptFileName) promptFileName.textContent = fileName;
-        console.log('[osp] showing record prompt | name=', fileName, '| len=', sgfString && sgfString.length);
         if (promptOverlay) {
             promptOverlay.style.display = 'flex';
             promptOverlay.classList.remove('hidden');
-            console.log('[osp] overlay now display=', promptOverlay.style.display,
-                '| size=', promptOverlay.offsetWidth + 'x' + promptOverlay.offsetHeight,
-                '| z=', getComputedStyle(promptOverlay).zIndex);
-        } else {
-            console.warn('[osp] promptOverlay element NOT FOUND');
         }
     }
 
@@ -11534,7 +11521,29 @@ function updateVariationUI() {
     }
 }
 
-function navigateVariation(dir) {
+    // True if any node in this subtree carries an actual B/W move. Branch
+    // points must only offer MOVE-bearing alternatives — switching into a
+    // move-less demo/setup branch empties allSgfMoves, which dead-locks
+    // every navigation control (they all early-return on an empty list).
+    function sgfSubtreeHasMoves(t) {
+        if (!t) return false;
+        if (t.nodes && t.nodes.some(n => n.properties.B || n.properties.W)) return true;
+        return (t.children || []).some(sgfSubtreeHasMoves);
+    }
+
+    function buildVariantList(parentTree) {
+        return parentTree.children
+            .map((child, ci) => {
+                let label = '';
+                for (const n of child.nodes) {
+                    if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
+                }
+                return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
+            })
+            .filter(v => sgfSubtreeHasMoves(parentTree.children[v.treeIndex]));
+    }
+
+    function navigateVariation(dir) {
     if (!state.variationData || !state.variationData.branchPoints.length) return;
     const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
     // Nearest branch point at or above the current position (Sabaki-style).
@@ -11551,7 +11560,10 @@ function navigateVariation(dir) {
     const curPath = state.variationData.currentBranchPath.slice();
     while (curPath.length <= bp.depth) curPath.push(0);
     const newPath = curPath.slice(0, bp.depth + 1);
-    newPath[bp.depth] = newCurrent;
+    // bp.variants is FILTERED (move-bearing only) and its entries carry the
+    // ORIGINAL child index — navigation must map through treeIndex, never use
+    // the filtered position as a raw child index.
+    newPath[bp.depth] = bp.variants[newCurrent].treeIndex;
 
     switchBranchAndGoToNode(newPath, 0);
 }
@@ -11655,14 +11667,10 @@ function switchBranchAndGoToNode(path, nodeIndex) {
         while (cTree) {
             const contributingNodes = cTree.nodes.filter(n => n.properties.B || n.properties.W).length;
             if (cTree.children && cTree.children.length > 1) {
-                const variants = cTree.children.map((child, ci) => {
-                    let label = '';
-                    for (const n of child.nodes) {
-                        if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
-                    }
-                    return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
-                });
-                branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
+                const variants = buildVariantList(cTree);
+                if (variants.length > 1) {
+                    branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
+                }
             }
             moveIdx += contributingNodes;
             if (cTree.children && cTree.children.length > 0) {
@@ -11671,7 +11679,8 @@ function switchBranchAndGoToNode(path, nodeIndex) {
                     : 0;
                 const bp = branchPoints[branchPoints.length - 1];
                 if (bp && bp.depth === hopDepth) {
-                    bp.current = chosenChildIndex;
+                    const pos = bp.variants.findIndex(v => v.treeIndex === chosenChildIndex);
+                    if (pos >= 0) bp.current = pos;
                 }
                 hopDepth++;
                 cTree = cTree.children[chosenChildIndex];
@@ -13458,14 +13467,10 @@ function loadSGF(sgfString) {
         while (currentTree) {
             const contributingNodes = currentTree.nodes.filter(n => n.properties.B || n.properties.W).length;
             if (currentTree.children && currentTree.children.length > 1) {
-                const variants = currentTree.children.map((child, ci) => {
-                    let label = '';
-                    for (const n of child.nodes) {
-                        if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
-                    }
-                    return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
-                });
-                branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
+                const variants = buildVariantList(currentTree);
+                if (variants.length > 1) {
+                    branchPoints.push({ moveIndex: moveIdx + contributingNodes, depth: hopDepth, variants, current: 0 });
+                }
             }
             moveIdx += contributingNodes;
             if (currentTree.children && currentTree.children.length > 0) {

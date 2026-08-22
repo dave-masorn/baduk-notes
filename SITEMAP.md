@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.003
+version: 0.2.004
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,33 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.004 — Variation Navigation Lock Fix (Move-less Branches)
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | Var ◀▶ switching into a branch containing **no moves** (e.g. setup/markup demo branches in the official FF[4] spec file) emptied the move list and dead-locked every navigation control |
+
+##### Details
+the official SGF FF[4] complex example uses sibling branches to *demonstrate properties* — several contain only `AB`/`AW`/`AE`/markup nodes with zero `B[]`/`W[]` moves. Selecting such a branch via Var ▶ rebuilt `state.allSgfMoves` as an empty array; every navigation handler (`goToMove` arrows, `navigateVariation`, `toggleVariationEditMode`, board clicks) early-returns on an empty move list, so the app appeared completely frozen with no error. **Fix:** new `sgfSubtreeHasMoves()` helper + shared `buildVariantList()` used by BOTH branch-point builders (`loadSGF` and `switchBranchAndGoToNode`) — branch points now only offer move-bearing alternatives, and fork points whose filtered variant count drops below 2 are not registered at all. `navigateVariation` now maps the filtered position through `variants[i].treeIndex` instead of using it as a raw child index. Also removed the temporary `[picker]`/`[osp]` diagnostics from v0.2.003.
+
+##### Verification
+- `node --check` clean; `node sgf-compliance-test.js` 34/34.
+- ff4_ex Game 1: walking main line then cycling Var ◀▶ no longer locks; move-less Setup/Markup branches are excluded from variation cycling.
+
+---
+
+### v0.2.003 — Picker Diagnostics (temporary)
+
+#### Maintenance
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study** | `chore` | Temporary `[picker]`/`[osp]` console diagnostics in game-picker flow (removed again in v0.2.004) |
+
+---
 
 ### v0.2.002 — Multi-Game Picker Hotfix
 
