@@ -79,7 +79,9 @@ function syncVersion(sitemapContent) {
     // serving a stale body (e.g. annotation_v4.js from before the YSE isolation
     // fix) long after the file changed. A versioned query forces a fresh fetch
     // on every release.
-    const scriptTagRe = /(<script src="[^"]*?\.js)\?v=[^"]*"/g;
+    // NOTE: tags carry attributes (e.g. `defer`) between <script and src,
+    // so the pattern must not assume `src` immediately follows `<script`.
+    const scriptTagRe = /(<script\b[^>]*?\bsrc="[^"]*?\.js)\?v=[^"]*"/g;
     const htmlAfterScripts = html.replace(scriptTagRe, `$1?v=${ver}"`);
     if (htmlAfterScripts !== html) {
       html = htmlAfterScripts;

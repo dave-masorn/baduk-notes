@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.001
+version: 0.2.002
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,48 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.002 — Multi-Game Picker Hotfix
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study** | `fix` | Missing `let _gamePickerOverlay = null;` declaration crashed the game picker on first drop (`ReferenceError`) |
+
+##### Details
+the v0.2.001 multi-game picker referenced its overlay-tracking variable without declaring it, so the very first `showGamePicker()` call threw `_gamePickerOverlay is not defined` inside `openStudyPrompt` and a dropped collection file appeared to do nothing at all. Declaration added in the same closure scope as the other picker helpers.
+
+---
+
+### v0.2.001 — Add Variation Branching & Record Integrity
+
+#### Added
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study** | `feat` | Sabaki-style **Add Variation**: arm via Add button, click empty point to branch; alternative (replaces move X) or continuation (after move N) modes |
+| **study** | `feat` | View jumps **onto the placed stone** after branching (Sabaki parity); second click on same point rejected as occupied |
+| **study** | `feat` | Transparent preview: while armed mid-line, move X's stone renders at 35% alpha (`varFadeStone`) in both board-draw passes |
+| **study** | `feat` | Multi-game SGF collections show a Sabaki-style **game picker** ("This file contains N games") instead of silently merging |
+
+#### Fixed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | `switchBranchAndGoToNode` collected only up to `nodeIndex+1` nodes of the final segment, truncating the flat move list after any variation add; now always collects full segments |
+| **study** | `fix` | Study-record cross-contamination: loading different content while attached overwrote the active record via `autoSaveActiveStudySettings`; `loadSGF`/`initBlankGame` now detach (`activeStudyId = null`) unless wrapped in `isSgfLoading` |
+| **study** | `fix` | Record-create flow attaches the new record *then* calls `loadSGF`; now wraps with `isSgfLoading` like resume does so the Save/Update button survives |
+
+##### Details
+**Add Variation (`addVariationAt`, annotation_v4.js ~1394):** two creation modes — ALTERNATIVE inserts a sibling of move X (same colour, legality checked against position before X); CONTINUATION appends opposite-colour at line end. Split keeps the main line as child[0]; label `'Var ' + letter`. Linear-tip continuations set `_suppressGameEndOnce` so the game-end popup doesn't misfire on landing (consumed in goToMove tail between `_scoringResume` and `checkAndShowGameEndPopup`). Landing uses `landPath.push(childIndex)` + `switchBranchAndGoToNode(landPath, 0)`. **Truncation fix:** collection loop limit is now `currentTree.nodes.length` for every segment. **Contamination fixes:** detach guards in `loadSGF` (~13210) and `initBlankGame`; record-create flow (~3710) wrapped in `isSgfLoading=true/false`. **Game picker:** `splitTopLevelGametrees` is a bracket/escape-aware scanner extracting top-level gametrees; hooked at the top of `openStudyPrompt` so drag-drop, file-picker and file-handle paths all funnel through it; rows parse each block for PB/PW/EV/DT/RE + move count.
+
+##### Verification
+- `node --check` clean; `node sgf-compliance-test.js` 34/34.
+- ff4_ex.sgf splitter test: exactly 2 top-level trees (3784 + 1161 chars), single-game file → 1 block, parens-inside-comments hostile case → 2 blocks.
+- Parser round-trip on the official FF[4] complex example: 54 nodes / 15 branches / 45 moves preserved through `writeSgf→reparse` and `sanitize`.
+
+---
 
 ### v0.2.000 — Perceived Load Speed Overhaul (Parallel Loading & Deferred Init)
 

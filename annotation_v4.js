@@ -3547,6 +3547,8 @@ function setupEventListeners() {
         return m;
     }
 
+    let _gamePickerOverlay = null;
+
     function showGamePicker(blocks, fileName, fileHandle) {
         if (_gamePickerOverlay) _gamePickerOverlay.remove();
         const ov = document.createElement('div');
