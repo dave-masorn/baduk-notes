@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.005
+version: 0.2.006
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.006 — Variation Cycling Dead-Spot & Pass-Move Crash
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | Refused switches didn't advance the variant position, so Var ▶ retried the same move-less branch forever and appeared dead — move-less branches are excluded from the list again (v0.2.005 regression) |
+| **terms** | `fix` | `move-term-detector.js` crashed with `Cannot read properties of undefined (reading '-1')` on **pass moves** (stored as r=c=-1): `interactsLocally` indexed `board[-1][-1]`; pass guards added at all three entry points |
+
+##### Details
+the v0.2.005 "list every sibling" change backfired on forks containing demo branches: a refused switch left `bp.current` untouched, so the next click proposed the same impossible variant in an endless loop. Variant lists are filtered to move-bearing subtrees again (the visible count now matches what can actually be entered), while the exact-at-fork activation, `treeIndex` mapping and pre-mutation refusal guard from v0.2.005 are kept. Move-term detection gained negative-coordinate guards in `interactsLocally`, `evaluateTenuki` (current + previous + next move) so SGF files with passes (e.g. the FF[4] spec file's `W[]`/`B[tt]`) no longer throw on every step.
+
+##### Verification
+- `node --check` clean on both files; `node sgf-compliance-test.js` 34/34.
+- ff4_ex Game 1: Var ▶ cycles Moves → Style → TimeLimits without dead clicks; walking through the pass moves produces no console errors.
+
+---
 
 ### v0.2.005 — Sabaki-True Variation Semantics
 

@@ -450,6 +450,8 @@ var getVirtualComponent = function(board, startC, startR, color) {
 };
 
 var interactsLocally = function(board, currC, currR, targetC, targetR, player) {
+  // Pass moves are stored with r=c=-1; indexing board[-1] would throw.
+  if (currC < 0 || currR < 0 || targetC < 0 || targetR < 0) return false;
   var opponentColor = player === 'B' ? 'W' : 'B';
   var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
   
@@ -559,6 +561,7 @@ var getSkirmishStart = function(currIdx, allMoves, boardBeforeCurr) {
 
 var evaluateTenuki = function(currC, currR, player, prevMove, boardBeforeCurr, allMoves, currIdx) {
   if (!prevMove || prevMove.c == null || prevMove.r == null) return null;
+  if (currC < 0 || currR < 0 || prevMove.c < 0 || prevMove.r < 0) return null; // passes
   
   var currZone = getZone(currC, currR);
   var prevZone = getZone(prevMove.c, prevMove.r);
@@ -624,7 +627,7 @@ var evaluateTenuki = function(currC, currR, player, prevMove, boardBeforeCurr, a
   var hasNextMove = false;
   if (currIdx + 1 < allMoves.length) {
     var nextMove = allMoves[currIdx + 1];
-    if (nextMove && nextMove.c != null && nextMove.r != null) {
+    if (nextMove && nextMove.c != null && nextMove.r != null && nextMove.c >= 0 && nextMove.r >= 0) {
       hasNextMove = true;
       
       var boardBeforeNext = JSON.parse(JSON.stringify(boardBeforeCurr));

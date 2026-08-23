@@ -11524,18 +11524,26 @@ function updateVariationUI() {
     }
 }
 
-    // All children of a fork are listed as variants (Sabaki lists every
-    // sibling regardless of content). Whether a variant may actually be
-    // ENTERED is decided by switchBranchAndGoToNode: move-less branches are
-    // refused there instead of being hidden here.
+    // Only MOVE-bearing branches are listed: with move-less demo branches
+    // (FF[4] spec file) in the list, a refused switch could not advance past
+    // them and Var ▶ appeared dead. The count/labels now match what can
+    // actually be entered. Entry-refusal remains as a safety net.
+    function sgfSubtreeHasMoves(t) {
+        if (!t) return false;
+        if (t.nodes && t.nodes.some(n => n.properties.B || n.properties.W)) return true;
+        return (t.children || []).some(sgfSubtreeHasMoves);
+    }
+
     function buildVariantList(parentTree) {
-        return parentTree.children.map((child, ci) => {
-            let label = '';
-            for (const n of child.nodes) {
-                if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
-            }
-            return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
-        });
+        return parentTree.children
+            .map((child, ci) => {
+                let label = '';
+                for (const n of child.nodes) {
+                    if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
+                }
+                return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
+            })
+            .filter(v => sgfSubtreeHasMoves(parentTree.children[v.treeIndex]));
     }
 
     function navigateVariation(dir) {
