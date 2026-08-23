@@ -11524,26 +11524,18 @@ function updateVariationUI() {
     }
 }
 
-    // Only MOVE-bearing branches are listed: with move-less demo branches
-    // (FF[4] spec file) in the list, a refused switch could not advance past
-    // them and Var ▶ appeared dead. The count/labels now match what can
-    // actually be entered. Entry-refusal remains as a safety net.
-    function sgfSubtreeHasMoves(t) {
-        if (!t) return false;
-        if (t.nodes && t.nodes.some(n => n.properties.B || n.properties.W)) return true;
-        return (t.children || []).some(sgfSubtreeHasMoves);
-    }
-
+    // ALL children are listed (Sabaki parity). Entry is always safe now:
+    // move-bearing branches go through the normal pipeline, move-less ones
+    // land in enterStaticBranch() — nothing can dead-lock the app anymore,
+    // so filtering variants (which hid demo branches from the picker) is wrong.
     function buildVariantList(parentTree) {
-        return parentTree.children
-            .map((child, ci) => {
-                let label = '';
-                for (const n of child.nodes) {
-                    if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
-                }
-                return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
-            })
-            .filter(v => sgfSubtreeHasMoves(parentTree.children[v.treeIndex]));
+        return parentTree.children.map((child, ci) => {
+            let label = '';
+            for (const n of child.nodes) {
+                if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
+            }
+            return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
+        });
     }
 
     // Renders a move-less branch as a static board position (setup stones,

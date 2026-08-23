@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.007
+version: 0.2.008
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,22 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.008 — List All Variants (Filter Removed)
+
+#### Bug Fixes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | v0.2.007 made move-less branches enterable but forgot to remove the variant-list filter, so Setup/Markup demo branches still weren't offered — root fork showed 3 of 5 |
+
+##### Details
+`buildVariantList` now returns ALL children unfiltered. Safe since v0.2.007 guarantees every switch lands somewhere: move-bearing branches via the normal pipeline, move-less ones via `enterStaticBranch` static rendering. `sgfSubtreeHasMoves` helper deleted.
+
+##### Verification
+- ff4_ex Game 1 root fork: variation counter shows 5; cycling reaches Moves → Setup → Markup → Style → TimeLimits.
+
+---
 
 ### v0.2.007 — Enterable Move-less Branches (Static Position Mode)
 
