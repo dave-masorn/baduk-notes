@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.004
+version: 0.2.005
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,25 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.005 — Sabaki-True Variation Semantics
+
+#### Changes
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | Var ◀▶ now lists **all** sibling branches at a fork (v0.2.004 hid move-less ones, undercounting) |
+| **sgf** | `fix` | Variation cycling applies **exactly at the fork node** — past it the buttons disable instead of staying active for the whole branch |
+| **study** | `fix` | Entering a genuinely move-less branch (property-demo subtrees in the FF[4] spec file) is refused cleanly with a console note instead of emptying the move list and freezing navigation |
+
+##### Details
+semantics ported from Sabaki's `goToSiblingVariation` (bundle.js: cycles nodes within the fork's sibling section; `goToMainVariation` returns). Both the Var-button state updater and `navigateVariation` now match the branch point whose `moveIndex` **equals** the current absolute index (previously `<=`, keeping the nearest fork active forever). `buildVariantList` no longer filters by move content; `switchBranchAndGoToNode` bails out *before any state mutation* when a target branch yields zero moves, so the app can never lock.
+
+##### Verification
+- `node --check` clean; `node sgf-compliance-test.js` 34/34.
+- ff4_ex Game 1: root fork shows 5 variants; Setup/Markup selections refuse silently; Style/TimeLimits branches enter normally; past any fork Var buttons render disabled.
+
+---
 
 ### v0.2.004 — Variation Navigation Lock Fix (Move-less Branches)
 

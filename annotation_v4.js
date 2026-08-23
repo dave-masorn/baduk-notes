@@ -11504,8 +11504,11 @@ function updateVariationUI() {
     // stay live anywhere inside/below a fork, not only when standing exactly on it.
     let bp = null;
     if (state.variationData && state.variationData.branchPoints) {
-        for (let i = state.variationData.branchPoints.length - 1; i >= 0; i--) {
-            if (state.variationData.branchPoints[i].moveIndex <= absIdx) { bp = state.variationData.branchPoints[i]; break; }
+        // Sabaki semantics: variation cycling applies EXACTLY at the fork
+        // node. Once you step past it into the chosen branch, the buttons
+        // disable — go back to the fork to switch again.
+        for (let i = 0; i < state.variationData.branchPoints.length; i++) {
+            if (state.variationData.branchPoints[i].moveIndex === absIdx) { bp = state.variationData.branchPoints[i]; break; }
         }
     }
 
@@ -11521,35 +11524,28 @@ function updateVariationUI() {
     }
 }
 
-    // True if any node in this subtree carries an actual B/W move. Branch
-    // points must only offer MOVE-bearing alternatives — switching into a
-    // move-less demo/setup branch empties allSgfMoves, which dead-locks
-    // every navigation control (they all early-return on an empty list).
-    function sgfSubtreeHasMoves(t) {
-        if (!t) return false;
-        if (t.nodes && t.nodes.some(n => n.properties.B || n.properties.W)) return true;
-        return (t.children || []).some(sgfSubtreeHasMoves);
-    }
-
+    // All children of a fork are listed as variants (Sabaki lists every
+    // sibling regardless of content). Whether a variant may actually be
+    // ENTERED is decided by switchBranchAndGoToNode: move-less branches are
+    // refused there instead of being hidden here.
     function buildVariantList(parentTree) {
-        return parentTree.children
-            .map((child, ci) => {
-                let label = '';
-                for (const n of child.nodes) {
-                    if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
-                }
-                return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
-            })
-            .filter(v => sgfSubtreeHasMoves(parentTree.children[v.treeIndex]));
+        return parentTree.children.map((child, ci) => {
+            let label = '';
+            for (const n of child.nodes) {
+                if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
+            }
+            return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
+        });
     }
 
     function navigateVariation(dir) {
     if (!state.variationData || !state.variationData.branchPoints.length) return;
     const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
-    // Nearest branch point at or above the current position (Sabaki-style).
+    // Sabaki semantics: variation cycling applies EXACTLY at the fork node —
+    // not at any position below it. Past the fork the buttons are disabled.
     let bpIndex = -1;
-    for (let i = state.variationData.branchPoints.length - 1; i >= 0; i--) {
-        if (state.variationData.branchPoints[i].moveIndex <= absIdx) { bpIndex = i; break; }
+    for (let i = 0; i < state.variationData.branchPoints.length; i++) {
+        if (state.variationData.branchPoints[i].moveIndex === absIdx) { bpIndex = i; break; }
     }
     if (bpIndex === -1) return;
 
@@ -11560,9 +11556,8 @@ function updateVariationUI() {
     const curPath = state.variationData.currentBranchPath.slice();
     while (curPath.length <= bp.depth) curPath.push(0);
     const newPath = curPath.slice(0, bp.depth + 1);
-    // bp.variants is FILTERED (move-bearing only) and its entries carry the
-    // ORIGINAL child index — navigation must map through treeIndex, never use
-    // the filtered position as a raw child index.
+    // Variant entries carry the ORIGINAL child index (treeIndex); navigation
+    // must map through it, never use the list position as a raw child index.
     newPath[bp.depth] = bp.variants[newCurrent].treeIndex;
 
     switchBranchAndGoToNode(newPath, 0);
@@ -11652,6 +11647,15 @@ function switchBranchAndGoToNode(path, nodeIndex) {
             });
         }
     });
+
+    // Entering a branch that contains NO moves at all (property-demo /
+    // setup-only subtrees, as in the official FF[4] spec file) would empty
+    // allSgfMoves and dead-lock every navigation control. Refuse the switch
+    // cleanly instead of wedging the app — before any state is touched.
+    if (newMoves.length === 0) {
+        console.info('[variations] target branch contains no moves — switch refused');
+        return;
+    }
 
     state.allSgfMoves = newMoves;
 
