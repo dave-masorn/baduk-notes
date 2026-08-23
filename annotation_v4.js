@@ -11546,6 +11546,75 @@ function updateVariationUI() {
             .filter(v => sgfSubtreeHasMoves(parentTree.children[v.treeIndex]));
     }
 
+    // Renders a move-less branch as a static board position (setup stones,
+    // markup, node comments) while pinning a synthetic branch point at
+    // absolute index -1 so Var ◀▶ keep working and can cycle back out.
+    function enterStaticBranch(tree, path) {
+        if (!path || !path.length) return;
+        let forkTree = tree;
+        for (let i = 0; i < path.length - 1; i++) {
+            forkTree = (forkTree.children && forkTree.children[path[i]]) ? forkTree.children[path[i]] : null;
+            if (!forkTree) return;
+        }
+        const chosenIndex = path[path.length - 1];
+        const targetSubtree = forkTree.children && forkTree.children[chosenIndex];
+        if (!targetSubtree) return;
+
+        const bw = Math.min(state.boardWidth || 19, 19);
+        const bh = Math.min(state.boardHeight || 19, 19);
+
+        const base = JSON.parse(JSON.stringify(state.setupBoard || createEmptyBoardGrid()));
+        const anns = [];
+        let commentText = '';
+        const walkLine = (sub) => {
+            (sub.nodes || []).forEach(n => {
+                SgfEngine.applySetupProperties(base, n.properties, bw, bh);
+                try {
+                    const parsed = SgfEngine.parseMarkupProperties(n.properties, bw, bh);
+                    if (parsed && parsed.annotations) anns.push(...parsed.annotations);
+                } catch (err) { /* markup optional */ }
+                if (n.properties.C && n.properties.C[0]) {
+                    commentText += (commentText ? '\n\n' : '') + n.properties.C[0];
+                }
+            });
+            if (sub.children && sub.children[0]) walkLine(sub.children[0]);
+        };
+        walkLine(targetSubtree);
+
+        state.allSgfMoves = [];
+        state.sgfMoves = [];
+        state.currentMoveIndex = -1;
+        state.baselineBoard = base;
+        state.baselineAnnotations = anns;
+        state.board = JSON.parse(JSON.stringify(base));
+        anns.forEach(a => {
+            if (!state.board[a.r] || !state.board[a.r][a.c]) return;
+            if (a.type === 'label') state.board[a.r][a.c].label = a.label;
+            else state.board[a.r][a.c].annotation = a.type;
+        });
+
+        // Synthetic branch point pinned BEFORE any move: navigateVariation's
+        // absIdx is Math.max(-1, currentMoveIndex) = -1 here, so the match
+        // works and cycling back to a move-bearing sibling restores normal
+        // navigation through switchBranchAndGoToNode.
+        const variants = buildVariantList(forkTree);
+        const pos = variants.findIndex(v => v.treeIndex === chosenIndex);
+        state.variationData = {
+            branchPoints: [{ moveIndex: -1, depth: path.length - 1, variants, current: Math.max(0, pos) }],
+            currentBranchPath: path.slice()
+        };
+
+        drawBoard();
+        updateVariationUI();
+        updateExtractedMoves();
+        populateCommentDropdown();
+        const infoEl = document.getElementById('info-comment-display');
+        if (infoEl && commentText) {
+            try { infoEl.innerHTML = renderMarkdown(parseCommentCoords(commentText)); }
+            catch (err) { infoEl.textContent = commentText; }
+        }
+    }
+
     function navigateVariation(dir) {
     if (!state.variationData || !state.variationData.branchPoints.length) return;
     const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
@@ -11656,13 +11725,13 @@ function switchBranchAndGoToNode(path, nodeIndex) {
         }
     });
 
-    // Entering a branch that contains NO moves at all (property-demo /
-    // setup-only subtrees, as in the official FF[4] spec file) would empty
-    // allSgfMoves and dead-lock every navigation control. Refuse the switch
-    // cleanly instead of wedging the app — before any state is touched.
+    // A branch with no moves at all (property-demo / setup-only subtrees, as
+    // in the official FF[4] spec file) can't populate the flat move list —
+    // instead it renders as a STATIC position (setup stones + markup + node
+    // comments) with a synthetic branch point so Var ◀ stays alive to cycle
+    // back to the sibling branches.
     if (newMoves.length === 0) {
-        console.info('[variations] target branch contains no moves — switch refused');
-        return;
+        return enterStaticBranch(tree, path);
     }
 
     state.allSgfMoves = newMoves;

@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.006
+version: 0.2.007
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,23 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.007 — Enterable Move-less Branches (Static Position Mode)
+
+#### Added
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `feat` | Move-less branches (setup/markup demo subtrees) are now **enterable**: they render as a static board position with their setup stones, markup and node comments, and Var ◀ stays alive to cycle back |
+
+##### Details
+replaces the v0.2.006 refusal: `enterStaticBranch()` rebuilds the board from root setup + every node's `AB`/`AW`/`AE` along the branch line, merges each node's markup into the baseline annotations, concatenates `C[]` texts into the info panel, sets `currentMoveIndex = -1` (the renderer's baseline position), and pins a **synthetic branch point at absolute index −1** — exactly where `navigateVariation`'s `absIdx = Math.max(-1, currentMoveIndex)` lands, so cycling out to a move-bearing sibling restores the normal pipeline through `switchBranchAndGoToNode`. All five root branches of the FF[4] spec file are now selectable; arrows/slider are inert inside static branches by design (there is nothing to step through).
+
+##### Verification
+- `node --check` clean; `node sgf-compliance-test.js` 34/34.
+- ff4_ex Game 1 root fork: all 5 variants cycle; Setup/Markup show stones + explanatory comments; Style/TimeLimits behave as before.
+
+---
 
 ### v0.2.006 — Variation Cycling Dead-Spot & Pass-Move Crash
 
