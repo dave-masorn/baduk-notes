@@ -194,7 +194,9 @@ const SgfEngine = (function() {
         }
 
         if (propValues.length === 0) {
-            throw new Error('SGF Parse Error: Property ' + propIdent + ' has no value.');
+            // A property ident with no '[' brackets is malformed; skip it gracefully.
+            console.warn('SGF Parse Warning: Property ' + propIdent + ' has no value brackets; skipping.');
+            return null;
         }
 
         return { key: propIdent, values: propValues };
@@ -236,19 +238,16 @@ const SgfEngine = (function() {
 
         const tree = { nodes: [], children: [] };
 
+        // Unified loop: per FF[4] spec, Sequence (Nodes) precedes GameTree children.
+        // We tolerate interleaving (nodes after sub-trees) for robustness, matching
+        // how tools like Sabaki treat non-spec-compliant but real-world SGF files.
         while (true) {
             lexer.skipWhitespace();
-            if (lexer.peek() === ';') {
+            const ch = lexer.peek();
+            if (ch === ';') {
                 const node = parseNode(lexer);
                 if (node) tree.nodes.push(node);
-            } else {
-                break;
-            }
-        }
-
-        while (true) {
-            lexer.skipWhitespace();
-            if (lexer.peek() === '(') {
+            } else if (ch === '(') {
                 const childTree = parseTree(lexer);
                 if (childTree) tree.children.push(childTree);
             } else {
@@ -268,9 +267,15 @@ const SgfEngine = (function() {
 
     function parseSgfCollection(sgfStr) {
         const lexer = new SgfLexer(sgfStr);
-        lexer.skipWhitespace();
         const trees = [];
-        while (lexer.peek() === '(') {
+        // Skip whitespace before EACH game tree, not just the first.
+        // Without this, a Collection whose game trees are separated by whitespace
+        // (e.g. a blank line between two top-level '(' groups) would only return
+        // the first tree because peek() would see '\n' instead of '(' after the
+        // first parseTree call completes.
+        while (true) {
+            lexer.skipWhitespace();
+            if (lexer.peek() !== '(') break;
             trees.push(parseTree(lexer));
         }
         return trees;
@@ -556,7 +561,17 @@ class SgfSanitizer {
         if (!rawSgf || typeof rawSgf !== 'string') return '';
 
         // Scan permissively to bypass markdown lists, HTML, or raw text pollution.
-        const startIdx = rawSgf.indexOf('(;');
+        let startIdx = -1;
+        for (let i = 0; i < rawSgf.length; i++) {
+            if (rawSgf[i] === '(') {
+                let j = i + 1;
+                while (j < rawSgf.length && /\s/.test(rawSgf[j])) j++;
+                if (j < rawSgf.length && rawSgf[j] === ';') {
+                    startIdx = i;
+                    break;
+                }
+            }
+        }
         if (startIdx === -1) return rawSgf;
 
         const text = rawSgf.slice(startIdx);

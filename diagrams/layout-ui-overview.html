@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI Layout Overview</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #f5f5f5; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 760 560" width="760" height="560" role="img" aria-labelledby="ui-title" xmlns="http://www.w3.org/2000/svg">
+  <title id="ui-title">UI Layout Overview — baduk-notes application panels and regions</title>
+
+  <!-- Background -->
+  <rect width="760" height="560" fill="#f5f5f5"/>
+
+  <!-- Title -->
+  <text x="380" y="28" font-family="'Instrument Serif', serif" font-size="17" fill="#2d3142" text-anchor="middle">UI Layout Overview</text>
+  <text x="380" y="44" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle" letter-spacing="0.12em">CURRENT-STATE · PANEL REGIONS · baduk-notes APP</text>
+
+  <!-- ═══ MAIN APP FRAME ═══ -->
+  <rect x="24" y="60" width="576" height="452" rx="6" fill="rgba(45,49,66,0.03)" stroke="#2d3142" stroke-width="1.2"/>
+  <rect x="32" y="56" width="84" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="74" y="65" font-family="'Geist Mono', monospace" font-size="7" fill="rgba(45,49,66,0.40)" text-anchor="middle" letter-spacing="0.12em">MAIN APP</text>
+
+  <!-- ── HEADER ── -->
+  <rect x="36" y="68" width="552" height="40" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="48" y="82" font-family="'Geist', sans-serif" font-size="9.5" font-weight="600" fill="#2d3142">Header</text>
+  <text x="48" y="95" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">title · mode buttons · tech_log-{ver} link</text>
+
+  <!-- ── LEFT PANEL ── -->
+  <rect x="36" y="116" width="80" height="272" rx="4" fill="rgba(45,49,66,0.04)" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="76" y="210" font-family="'Geist', sans-serif" font-size="9.5" font-weight="600" fill="#2d3142" text-anchor="middle" writing-mode="tb">Left Panel</text>
+  <text x="60" y="264" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">tools</text>
+
+  <!-- ── MAIN WORKSPACE ── -->
+  <rect x="124" y="116" width="300" height="272" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="136" y="132" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">#annotable-workspace</text>
+
+  <!-- Board canvas -->
+  <rect x="136" y="140" width="276" height="236" rx="4" fill="rgba(45,49,66,0.02)" stroke="#bfc0c0" stroke-width="0.8"/>
+  <text x="274" y="184" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">#go-board-canvas-initial</text>
+  <text x="274" y="200" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">physical · always live</text>
+  <!-- Board grid visual hint -->
+  <rect x="180" y="216" width="188" height="148" rx="2" fill="rgba(45,49,66,0.04)" stroke="#bfc0c0" stroke-width="0.6"/>
+  <text x="274" y="296" font-family="'Geist Mono', monospace" font-size="7" fill="#bfc0c0" text-anchor="middle">19×19 canvas</text>
+
+  <!-- ── RIGHT PANEL ── -->
+  <rect x="432" y="116" width="156" height="272" rx="4" fill="rgba(45,49,66,0.02)" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="510" y="132" font-family="'Geist', sans-serif" font-size="9.5" font-weight="600" fill="#2d3142" text-anchor="middle">Right Panel</text>
+
+  <!-- SGF re-player -->
+  <rect x="440" y="140" width="140" height="140" rx="4" fill="rgba(46,167,68,0.06)" stroke="#5aac57" stroke-width="1"/>
+  <text x="510" y="156" font-family="'Geist', sans-serif" font-size="9" font-weight="600" fill="#2d3142" text-anchor="middle">SGF re-Player</text>
+  <text x="510" y="170" font-family="'Geist Mono', monospace" font-size="7" fill="#5aac57" text-anchor="middle">expanded after load</text>
+  <text x="510" y="188" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Move playback controls</text>
+  <text x="510" y="200" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Game tree</text>
+  <text x="510" y="212" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Comments</text>
+  <text x="510" y="224" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">ref-Area / ref-Point buttons</text>
+  <text x="510" y="236" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Edit / Save · Study Mode</text>
+  <text x="510" y="252" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Enter Study Mode btn</text>
+  <text x="510" y="268" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">var(--success) border</text>
+
+  <!-- SGF Importer -->
+  <rect x="440" y="288" width="140" height="88" rx="4" fill="rgba(251,192,45,0.08)" stroke="#fbc02d" stroke-width="1"/>
+  <text x="510" y="304" font-family="'Geist', sans-serif" font-size="9" font-weight="600" fill="#2d3142" text-anchor="middle">SGF Importer</text>
+  <text x="510" y="318" font-family="'Geist Mono', monospace" font-size="7" fill="#f59e0b" text-anchor="middle">collapsed after load</text>
+  <text x="510" y="332" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">File drop · Paste SGF</text>
+  <text x="510" y="344" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Kifu-DB · range filter</text>
+  <text x="510" y="356" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Export SGF</text>
+  <text x="510" y="368" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">#fffde7 bg · #fbc02d border</text>
+
+  <!-- ── BOTTOM AREA: study mode trigger ── -->
+  <rect x="36" y="396" width="388" height="32" rx="4" fill="rgba(45,49,66,0.02)" stroke="#bfc0c0" stroke-width="0.8"/>
+  <text x="230" y="417" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">study-mode-active on &lt;body&gt; → fullscreen study overlay</text>
+
+  <!-- ── FLOATING PANEL (right side, separate) ── -->
+  <rect x="616" y="60" width="140" height="228" rx="6" fill="rgba(235,108,54,0.04)" stroke="#eb6c36" stroke-width="1.2"/>
+  <rect x="624" y="56" width="124" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="686" y="65" font-family="'Geist Mono', monospace" font-size="7" fill="#eb6c36" text-anchor="middle" letter-spacing="0.12em">FLOATING · FIXED POS</text>
+
+  <text x="686" y="84" font-family="'Geist', sans-serif" font-size="9.5" font-weight="600" fill="#2d3142" text-anchor="middle">Custom Floating Panel</text>
+  <text x="686" y="97" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">Draggable Style Palette</text>
+  <text x="686" y="110" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">toggled by FAB button</text>
+
+  <line x1="624" y1="120" x2="748" y2="120" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+  <text x="636" y="136" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Stones (Black &amp; White)</text>
+  <text x="636" y="152" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Board &amp; Border</text>
+  <text x="636" y="168" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Grids &amp; Hoshi</text>
+  <text x="636" y="184" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Coordinates</text>
+  <text x="636" y="200" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Next Move Hint</text>
+  <text x="636" y="216" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">Reset All</text>
+  <text x="636" y="232" font-family="'Geist Mono', monospace" font-size="7.5" fill="#eb6c36">always on top · z: fixed</text>
+  <text x="636" y="248" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">saves pos → localStorage</text>
+  <text x="636" y="264" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">#fab-toggle-floating</text>
+
+  <!-- Modals reference block -->
+  <rect x="616" y="308" width="140" height="204" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.15)" stroke-width="0.8"/>
+  <rect x="624" y="304" width="60" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="654" y="313" font-family="'Geist Mono', monospace" font-size="7" fill="rgba(45,49,66,0.40)" text-anchor="middle" letter-spacing="0.12em">MODALS</text>
+
+  <text x="628" y="332" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">D. Study Modal</text>
+  <text x="628" y="344" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">fullscreen overlay</text>
+  <text x="628" y="356" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">study board viewport</text>
+
+  <line x1="624" y1="364" x2="748" y2="364" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+  <text x="628" y="380" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">E. Export Modal</text>
+  <text x="628" y="392" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">fullscreen overlay</text>
+  <text x="628" y="404" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">PNG export settings</text>
+
+  <line x1="624" y1="412" x2="748" y2="412" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+  <text x="628" y="428" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">F. Kifu-DB Explorer</text>
+  <text x="628" y="440" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">fullscreen overlay</text>
+  <text x="628" y="452" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">browse SGF folder</text>
+  <text x="628" y="468" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">.modal-overlay hidden</text>
+  <text x="628" y="480" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">shown on demand</text>
+
+</svg>
+</body>
+</html>

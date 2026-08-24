@@ -2282,6 +2282,31 @@ input:checked + .slider:before {
     box-shadow: 0 0 0 3px rgba(96,165,250,0.1);
 }
 
+.style-select-wide {
+    width: 100%;
+    min-height: 28px;
+    font-size: 0.72rem;
+    padding: 3px 6px;
+    border: 1px solid rgba(96,165,250,0.18);
+    border-radius: var(--fp-radius-input);
+    background: var(--fp-bg-input);
+    font-family: inherit;
+    color: var(--fp-text-primary);
+    outline: none;
+    cursor: pointer;
+    transition: border-color var(--fp-transition), box-shadow var(--fp-transition);
+}
+
+.style-select-wide:focus {
+    border-color: rgba(96,165,250,0.55);
+    box-shadow: 0 0 0 3px rgba(96,165,250,0.1);
+}
+
+.style-select-wide option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
 /* ── File Upload Button & Thumbnail ─────────────────────────────────── */
 .style-file-btn {
     background: rgba(59,130,246,0.08);

@@ -109,7 +109,10 @@ const state = {
             useColor: true,
             color: '#dcb35c',
             imgSrc: '',
-            imgRepeat: false, imgZoom: 1.0,
+            imgRepeat: false,
+            imgZoom: 1.0,
+            imgOpacity: 1.0,
+            imgBlendMode: 'normal',
             size: 600
         },
         border: {
@@ -870,7 +873,7 @@ function setupGameInfoEdit() {
         });
         
         // Trigger SGF dirty to show export button
-        state.isSgfDirty = true; state.popupShownForCurrentChange = false;
+        state.isSgfDirty = true; state.sgfTreeIsCanonical = false; state.popupShownForCurrentChange = false;
         if (typeof updateSaveRecGameButton === 'function') updateSaveRecGameButton();
         if (elements.sgfExportContainer) {
             elements.sgfExportContainer.style.display = 'flex';
@@ -1275,7 +1278,7 @@ function recordMoveAt(r, c, color, toolName) {
 function removeLastMove() {
     if (state.currentMoveIndex < 0 || !state.sgfMoves.length) return false;
     const m = state.sgfMoves[state.currentMoveIndex];
-    if (m.isPass) return false;
+    if (m.isPass || m.isSetupOnly) return false;
 
     saveHistoryState('remove-move');
     state.sgfMoves.pop();
@@ -1441,6 +1444,36 @@ function addVariationAt(r, c) {
 
     if (!segTree.children) segTree.children = [];
 
+    // If standing at the end of the active segment with no sibling branches,
+    // continue the current sequence directly instead of creating a 1-node fork.
+    if (atLineEnd && segTree.children.length === 0) {
+        const newNode = {
+            properties: { [color]: [coordStr] },
+            children: []
+        };
+        segTree.nodes.push(newNode);
+        state.isSgfDirty = true;
+        state.sgfTreeIsCanonical = true;
+        state.popupShownForCurrentChange = false;
+
+        _addingVariation = true;
+        try {
+            const curPath = ((state.variationData && state.variationData.currentBranchPath) || []).slice();
+            switchBranchAndGoToNode(curPath, segTree.nodes.length - 1);
+        } finally {
+            _addingVariation = false;
+        }
+
+        playSfx(document.body.classList.contains('study-mode-active') ? 'stoneStudy' : 'stone');
+        if (elements.variationLabel) {
+            elements.variationLabel.textContent = `Move played after move ${absIdx + 1} — Var ◀ returns to main line`;
+        }
+        if (window.refreshGameTree) window.refreshGameTree();
+        if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
+        updateExtractedMoves();
+        return true;
+    }
+
     // Split mid-segment: remainder keeps the original continuation as child [0]
     // so the existing line stays the main line (red-bean convention).
     if (nodeIdx < segTree.nodes.length - 1) {
@@ -1458,6 +1491,7 @@ function addVariationAt(r, c) {
     segTree.children.push(newSub);
 
     state.isSgfDirty = true;
+    state.sgfTreeIsCanonical = true;
     state.popupShownForCurrentChange = false;
 
     _addingVariation = true;
@@ -2197,6 +2231,9 @@ function setupEventListeners() {
                 if (state.currentMoveIndex !== undefined && state.currentMoveIndex >= -1) {
                     rec.currentMoveIndex = state.currentMoveIndex;
                 }
+                if (state.variationData && Array.isArray(state.variationData.currentBranchPath)) {
+                    rec.currentBranchPath = state.variationData.currentBranchPath.slice();
+                }
                 rec.settings = captureCurrentAppSettings();
             rec.lastAccess = typeof window.formatStudyAccessTime === 'function' ? window.formatStudyAccessTime() : new Date().toLocaleString();
                 if (typeof SgfEngine !== 'undefined' && typeof SgfEngine.writeSgf === 'function' && state.sgfTree) {
@@ -2498,13 +2535,38 @@ function setupEventListeners() {
 
         let html = '';
         records.forEach(rec => {
-            const maxMoves = rec.totalMoves > 0 ? rec.totalMoves : 1;
-            const currentPos = Math.max(0, (rec.currentMoveIndex !== undefined ? rec.currentMoveIndex : 0));
-            const effectiveTotal = (state.activeStudyId === rec.id && state.allSgfMoves && state.allSgfMoves.length > 0)
-                ? state.allSgfMoves.length
-                : maxMoves;
-            const percent = Math.min(100, Math.round(((currentPos + 1) / effectiveTotal) * 100));
-            const isActive = state.activeStudyId === rec.id;
+            let maxMoves = rec.totalMoves > 0 ? rec.totalMoves : 1;
+            if (state.activeStudyId === rec.id && state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+                const ml = SgfEngine.extractMainLine(state.sgfTree);
+                const mlMoves = ml.filter(p => p.B || p.W).length;
+                if (mlMoves > 0) maxMoves = mlMoves;
+            }
+
+            const isCurrentActive = state.activeStudyId === rec.id;
+            const branchPath = isCurrentActive
+                ? ((state.variationData && state.variationData.currentBranchPath) || [0])
+                : (rec.currentBranchPath || [0]);
+            const isVariation = branchPath && branchPath.some(idx => idx > 0);
+
+            let effectivePos = Math.max(0, (rec.currentMoveIndex !== undefined ? rec.currentMoveIndex : 0));
+            if (isVariation) {
+                // If on a variation, pin progress to the main game tree branch point
+                let prefixMoves = 0;
+                if (isCurrentActive && state.sgfTree) {
+                    prefixMoves = state.sgfTree.nodes.filter(n => n.properties && (n.properties.B || n.properties.W)).length;
+                } else if (rec.workingSgf && typeof SgfEngine !== 'undefined') {
+                    try {
+                        const parsed = SgfEngine.parseSgf(rec.workingSgf);
+                        if (parsed) prefixMoves = parsed.nodes.filter(n => n.properties && (n.properties.B || n.properties.W)).length;
+                    } catch(e) {}
+                }
+                if (prefixMoves > 0) {
+                    effectivePos = prefixMoves - 1;
+                }
+            }
+
+            const percent = Math.min(100, Math.round(((effectivePos + 1) / maxMoves) * 100));
+            const isActive = isCurrentActive;
 
             const statusClass = isActive ? 'kifu-status-active' : 'kifu-status-idle';
             const statusLabel = isActive ? 'Active' : 'Idle';
@@ -3363,11 +3425,7 @@ function setupEventListeners() {
         }
 
         let tree;
-        if (state.sgfTree && state.isSgfDirty) {
-            tree = SgfEngine.cloneTree(state.sgfTree);
-            const branchPath = state.variationData?.currentBranchPath || [0];
-            SgfEngine.replaceBranchNodes(tree, branchPath, mainLineProps);
-        } else if (state.sgfTree && !state.isSgfDirty) {
+        if (state.sgfTree) {
             tree = state.sgfTree;
         } else {
             tree = { nodes: mainLineProps.map(p => ({ properties: JSON.parse(JSON.stringify(p)), children: [] })), children: [] };
@@ -3393,8 +3451,9 @@ function setupEventListeners() {
         }
 
         const savedTargetIndex = rec.currentMoveIndex !== undefined ? rec.currentMoveIndex : 0;
+        const savedBranchPath = (rec.currentBranchPath && Array.isArray(rec.currentBranchPath)) ? rec.currentBranchPath.slice() : [0];
         const savedSettings = rec.settings;
-        console.log(`[StudyRecordDB] resumeStudySession(${id}) -> Loaded savedTargetIndex: ${savedTargetIndex} (Move ${savedTargetIndex >= 0 ? savedTargetIndex + 1 : 0})`);
+        console.log(`[StudyRecordDB] resumeStudySession(${id}) -> Loaded savedTargetIndex: ${savedTargetIndex}, branchPath: ${JSON.stringify(savedBranchPath)}`);
 
         state.activeStudyId = rec.id;
         rec.lastAccess = formatStudyAccessTime();
@@ -3419,13 +3478,24 @@ function setupEventListeners() {
             updateBoardWrapperSize('#go-board-canvas-initial', state.gameBoardStyle.board.size);
         }
 
-        // Update totalMoves with actual parsed move count after loadSGF
-        if (state.allSgfMoves && state.allSgfMoves.length > 0) {
+        // Switch to the saved variation branch if it was a non-main-line branch
+        const isNonDefaultBranch = savedBranchPath.some(idx => idx > 0);
+        if (isNonDefaultBranch && typeof switchBranchAndGoToNode === 'function') {
+            switchBranchAndGoToNode(savedBranchPath, 0);
+        }
+
+        // Update totalMoves with actual parsed main line move count after loadSGF
+        if (state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+            const ml = SgfEngine.extractMainLine(state.sgfTree);
+            const mlCount = ml.filter(p => p.B || p.W).length;
+            if (mlCount > 0) rec.totalMoves = mlCount;
+        } else if (state.allSgfMoves && state.allSgfMoves.length > 0) {
             rec.totalMoves = state.allSgfMoves.length;
         }
 
-        // Ensure saved move index is preserved after initial loadSGF
+        // Ensure saved move index and branch path are preserved after initial loadSGF
         rec.currentMoveIndex = savedTargetIndex;
+        rec.currentBranchPath = savedBranchPath.slice();
         StudyRecordDB.saveRecord(rec);
 
         // Suppress "Game Ended" popup when resuming for scoring
@@ -3702,10 +3772,16 @@ function setupEventListeners() {
                 updateBoardWrapperSize('#go-board-canvas-initial', state.gameBoardStyle.board.size);
             }
 
-            // Update totalMoves with actual parsed move count after loadSGF
+            // Update totalMoves with actual parsed main line move count after loadSGF
             const updatedRec = StudyRecordDB.getRecord(newRec.id);
-            if (updatedRec && state.allSgfMoves && state.allSgfMoves.length > 0) {
-                updatedRec.totalMoves = state.allSgfMoves.length;
+            if (updatedRec) {
+                if (state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+                    const ml = SgfEngine.extractMainLine(state.sgfTree);
+                    const mlCount = ml.filter(p => p.B || p.W).length;
+                    if (mlCount > 0) updatedRec.totalMoves = mlCount;
+                } else if (state.allSgfMoves && state.allSgfMoves.length > 0) {
+                    updatedRec.totalMoves = state.allSgfMoves.length;
+                }
                 StudyRecordDB.saveRecord(updatedRec);
             }
 
@@ -3962,9 +4038,9 @@ function setupEventListeners() {
     
     if (elements.btnAutoplay) elements.btnAutoplay.addEventListener('click', toggleAutoPlay);
 
-    // Variation buttons
-    if (elements.btnVarPrev) elements.btnVarPrev.addEventListener('click', () => navigateVariation(-1));
-    if (elements.btnVarNext) elements.btnVarNext.addEventListener('click', () => navigateVariation(1));
+    // Variation buttons (Up = Next variation +1, Down = Prev variation -1)
+    if (elements.btnVarPrev) elements.btnVarPrev.addEventListener('click', () => navigateVariation(1));
+    if (elements.btnVarNext) elements.btnVarNext.addEventListener('click', () => navigateVariation(-1));
     if (elements.btnVarAdd) elements.btnVarAdd.addEventListener('click', toggleVariationEditMode);
     
     if (elements.btnWhatIf) elements.btnWhatIf.addEventListener('click', toggleWhatIfMode);
@@ -4268,7 +4344,7 @@ function setupEventListeners() {
                     }
                 }
                 
-                state.isSgfDirty = true; state.popupShownForCurrentChange = false;
+                state.isSgfDirty = true; state.sgfTreeIsCanonical = false; state.popupShownForCurrentChange = false;
                 updateSaveRecGameButton();
                 if (elements.sgfExportContainer) elements.sgfExportContainer.style.display = 'flex';
                 if (elements.btnExportSgf) elements.btnExportSgf.style.display = 'flex';
@@ -4683,14 +4759,26 @@ function setupEventListeners() {
             return;
         }
         
-        // Only trigger if we have an imported SGF
-        if (!state.sgfMoves || state.sgfMoves.length === 0) {
+        // Allow keyboard if we have moves OR are in a static branch with navigable variation siblings.
+        const hasStaticVariation = !!(
+            state.variationData &&
+            state.variationData.branchPoints &&
+            state.variationData.branchPoints.length > 0
+        );
+        if ((!state.sgfMoves || state.sgfMoves.length === 0) && !hasStaticVariation) {
             return;
         }
 
         if (e.shiftKey && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
             e.preventDefault();
             if (typeof window.runScoreEstimate === 'function') window.runScoreEstimate();
+            return;
+        }
+
+        // In a static branch (no moves) arrow keys cycle sibling variations instead.
+        if (!state.sgfMoves || state.sgfMoves.length === 0) {
+            if (e.key === 'ArrowLeft') { e.preventDefault(); navigateVariation(-1); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); navigateVariation(1); }
             return;
         }
 
@@ -5192,7 +5280,7 @@ function handleMouseUp() {
             undoStack.pop();
             updateUndoRedoButtons();
         } else if (cropChanged) {
-            state.isSgfDirty = true; state.popupShownForCurrentChange = false;
+            state.isSgfDirty = true; state.sgfTreeIsCanonical = false; state.popupShownForCurrentChange = false;
             updateSaveRecGameButton();
             if (elements.sgfExportContainer) {
                 elements.sgfExportContainer.style.display = 'flex';
@@ -5351,7 +5439,7 @@ function syncAnnotationsToState() {
         state.sgfMoves[state.currentMoveIndex].annotations = anns;
     }
     
-    state.isSgfDirty = true; state.popupShownForCurrentChange = false;
+    state.isSgfDirty = true; state.sgfTreeIsCanonical = false; state.popupShownForCurrentChange = false;
     updateSaveRecGameButton();
     if (elements.sgfExportContainer) {
         elements.sgfExportContainer.style.display = 'flex';
@@ -5611,7 +5699,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         let boardImage = null;
         
         if (style) {
-            currentBoardBg = (style.board && style.board.useColor) ? style.board.color : '#dcb35c';
+            currentBoardBg = (style.board && style.board.color) ? style.board.color : '#dcb35c';
             currentBorderMarginColor = style.border ? style.border.color : '#dcb35c';
             borderScale = (style.border && style.border.size !== undefined) ? Math.min(1, parseFloat(style.border.size) / 100) : 1;
             borderOverrideOn = !style.border || style.border.override !== false;
@@ -5646,22 +5734,32 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         ctx.fillStyle = borderOverrideOn ? currentBorderMarginColor : currentBoardBg;
         ctx.fillRect(woodX, woodY, woodW, woodH);
 
-        // Then fill the inner grid area with the Board Color or Image.
+        // Always fill the inner grid area with the Board Color first so transparent image/texture sits on top of it, and color acts as fallback if image isn't loaded!
+        if (borderOverrideOn) {
+            ctx.fillStyle = currentBoardBg;
+            ctx.fillRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
+        }
+
+        // Then draw the Board Image on top if present.
         // With Override ON the board image must never spill over the border margin,
         // so it is clipped to the 19x19 grid area; with Override OFF it fills the whole wood.
         if (boardImage) {
             let imgZoom = 1.0;
             let imgOffsetX = 0;
             let imgOffsetY = 0;
-            if (style && style.board && style.board.imgZoom !== undefined) {
-                imgZoom = parseFloat(style.board.imgZoom);
+            let imgOpacity = 1.0;
+            let imgBlendMode = 'normal';
+            if (style && style.board) {
+                if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
+                if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
+                if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+                if (style.board.imgOpacity !== undefined) {
+                    const parsedOp = parseFloat(style.board.imgOpacity);
+                    if (!isNaN(parsedOp)) imgOpacity = Math.max(0, Math.min(1, parsedOp));
+                }
+                if (style.board.imgBlendMode) imgBlendMode = style.board.imgBlendMode;
             }
-            if (style && style.board && style.board.imgOffsetX !== undefined) {
-                imgOffsetX = parseFloat(style.board.imgOffsetX);
-            }
-            if (style && style.board && style.board.imgOffsetY !== undefined) {
-                imgOffsetY = parseFloat(style.board.imgOffsetY);
-            }
+            const compositeOp = (imgBlendMode && imgBlendMode !== 'normal') ? imgBlendMode : 'source-over';
 
             const imgRectX = borderOverrideOn ? PADDING : woodX;
             const imgRectY = borderOverrideOn ? PADDING : woodY;
@@ -5670,6 +5768,8 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
 
             if (style && style.board && style.board.imgRepeat) {
                 ctx.save();
+                ctx.globalAlpha = imgOpacity;
+                ctx.globalCompositeOperation = compositeOp;
                 ctx.translate(woodX, woodY);
                 try {
                     const pattern = ctx.createPattern(boardImage, 'repeat');
@@ -5686,6 +5786,8 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 ctx.restore();
             } else {
                 ctx.save();
+                ctx.globalAlpha = imgOpacity;
+                ctx.globalCompositeOperation = compositeOp;
                 ctx.beginPath();
                 ctx.rect(imgRectX, imgRectY, imgRectW, imgRectH);
                 ctx.clip();
@@ -5698,9 +5800,6 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 
                 ctx.restore();
             }
-        } else if (borderOverrideOn) {
-            ctx.fillStyle = currentBoardBg;
-            ctx.fillRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
         }
 
         // 1.2 Draw outline around wood board
@@ -7189,6 +7288,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         if (style && !style.board.useColor && cachedBoardImg && cachedBoardImg.complete && cachedBoardImg.naturalWidth > 0) {
             boardImage = cachedBoardImg;
         }
+        const effectiveBgColor = (style && style.board && style.board.color) ? style.board.color : bgColor;
 
         if (boardImage) {
             let woodX, woodY, woodW, woodH;
@@ -7219,7 +7319,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     if (pattern && pattern.setTransform) {
                         pattern.setTransform(new DOMMatrix().translate(woodX + imgOffsetX, woodY + imgOffsetY).scale(imgZoom, imgZoom));
                     }
-                    return pattern || bgColor;
+                    return pattern || effectiveBgColor;
                 } else {
                     const pattern = targetCtx.createPattern(boardImage, 'no-repeat');
                     if (pattern && pattern.setTransform) {
@@ -7229,13 +7329,13 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                         const dy = woodY + (woodH - scaledH) / 2 + imgOffsetY;
                         pattern.setTransform(new DOMMatrix().translate(dx, dy).scale(scaledW / boardImage.naturalWidth, scaledH / boardImage.naturalHeight));
                     }
-                    return pattern || bgColor;
+                    return pattern || effectiveBgColor;
                 }
             } catch (e) {
-                return bgColor;
+                return effectiveBgColor;
             }
         }
-        return bgColor;
+        return effectiveBgColor;
     };
 
     let currentStoneRadius = stoneRadius;
@@ -7382,8 +7482,13 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         // overlay), so a locally-scoped name is used here to avoid a TDZ reference.
         const isScoringBoardCtx = !!(targetCtx.canvas && targetCtx.canvas.id === 'go-board-canvas-scoring');
 
+        const effectiveBoardBg = (style && style.board && style.board.color) ? style.board.color : bgColor;
+
         if (isScoringBoardCtx) {
             // MSM keeps the legacy single-fill board mask (wood texture or bg over the whole circle).
+            targetCtx.fillStyle = effectiveBoardBg;
+            targetCtx.fill();
+
             if (boardImage) {
                 targetCtx.clip();
                 const borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
@@ -7405,12 +7510,25 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                 let imgZoom = 1.0;
                 let imgOffsetX = 0;
                 let imgOffsetY = 0;
-                if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
-                if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
-                if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+                let imgOpacity = 1.0;
+                let imgBlendMode = 'normal';
+                if (style && style.board) {
+                    if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
+                    if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
+                    if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+                    if (style.board.imgOpacity !== undefined) {
+                        const parsedOp = parseFloat(style.board.imgOpacity);
+                        if (!isNaN(parsedOp)) imgOpacity = Math.max(0, Math.min(1, parsedOp));
+                    }
+                    if (style.board.imgBlendMode) imgBlendMode = style.board.imgBlendMode;
+                }
+                const compositeOp = (imgBlendMode && imgBlendMode !== 'normal') ? imgBlendMode : 'source-over';
 
                 if (style.board.imgRepeat) {
                     try {
+                        targetCtx.save();
+                        targetCtx.globalAlpha = imgOpacity;
+                        targetCtx.globalCompositeOperation = compositeOp;
                         targetCtx.translate(woodX, woodY);
                         const pattern = targetCtx.createPattern(boardImage, 'repeat');
                         if (pattern.setTransform) {
@@ -7420,8 +7538,9 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                         targetCtx.fillStyle = pattern;
                         targetCtx.translate(-woodX, -woodY);
                         targetCtx.fill();
+                        targetCtx.restore();
                     } catch (e) {
-                        targetCtx.fillStyle = bgColor;
+                        targetCtx.fillStyle = effectiveBoardBg;
                         targetCtx.fill();
                     }
                 } else {
@@ -7435,11 +7554,12 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     const srcW = (currentBoardMaskRadius * 2) / scaledW * boardImage.naturalWidth;
                     const srcH = (currentBoardMaskRadius * 2) / scaledH * boardImage.naturalHeight;
                     
+                    targetCtx.save();
+                    targetCtx.globalAlpha = imgOpacity;
+                    targetCtx.globalCompositeOperation = compositeOp;
                     targetCtx.drawImage(boardImage, srcX, srcY, srcW, srcH, cx - currentBoardMaskRadius, cy - currentBoardMaskRadius, currentBoardMaskRadius * 2, currentBoardMaskRadius * 2);
+                    targetCtx.restore();
                 }
-            } else {
-                targetCtx.fillStyle = bgColor;
-                targetCtx.fill();
             }
         } else {
             // Composite board mask (LAYER 3): mirror the real draw order so an edge stone
@@ -7464,7 +7584,7 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             }
 
             const borderOverrideOn = !style.border || style.border.override !== false;
-            const marginColor = borderOverrideOn ? (style.border ? style.border.color : '#dcb35c') : bgColor;
+            const marginColor = borderOverrideOn ? (style.border ? style.border.color : '#dcb35c') : effectiveBoardBg;
 
             // Board surface area: the 19x19 grid when the border override is ON (the board image
             // is clipped to the grid so it never spills onto the margin), the whole wood rect when OFF.
@@ -7479,16 +7599,33 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
             targetCtx.rect(boardAreaX, boardAreaY, boardAreaW, boardAreaH);
             targetCtx.clip();
 
+            // Always fill with the effective board background color first so transparent image/texture sits on top of it, and color acts as fallback if image isn't loaded!
+            targetCtx.fillStyle = effectiveBoardBg;
+            targetCtx.fillRect(woodX, woodY, woodW, woodH);
+
             if (boardImage) {
                 let imgZoom = 1.0;
                 let imgOffsetX = 0;
                 let imgOffsetY = 0;
-                if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
-                if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
-                if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+                let imgOpacity = 1.0;
+                let imgBlendMode = 'normal';
+                if (style && style.board) {
+                    if (style.board.imgZoom !== undefined) imgZoom = parseFloat(style.board.imgZoom);
+                    if (style.board.imgOffsetX !== undefined) imgOffsetX = parseFloat(style.board.imgOffsetX);
+                    if (style.board.imgOffsetY !== undefined) imgOffsetY = parseFloat(style.board.imgOffsetY);
+                    if (style.board.imgOpacity !== undefined) {
+                        const parsedOp = parseFloat(style.board.imgOpacity);
+                        if (!isNaN(parsedOp)) imgOpacity = Math.max(0, Math.min(1, parsedOp));
+                    }
+                    if (style.board.imgBlendMode) imgBlendMode = style.board.imgBlendMode;
+                }
+                const compositeOp = (imgBlendMode && imgBlendMode !== 'normal') ? imgBlendMode : 'source-over';
 
                 if (style.board.imgRepeat) {
                     try {
+                        targetCtx.save();
+                        targetCtx.globalAlpha = imgOpacity;
+                        targetCtx.globalCompositeOperation = compositeOp;
                         targetCtx.translate(woodX, woodY);
                         const pattern = targetCtx.createPattern(boardImage, 'repeat');
                         if (pattern.setTransform) {
@@ -7498,8 +7635,9 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                         targetCtx.fillStyle = pattern;
                         targetCtx.translate(-woodX, -woodY);
                         targetCtx.fill();
+                        targetCtx.restore();
                     } catch (e) {
-                        targetCtx.fillStyle = bgColor;
+                        targetCtx.fillStyle = effectiveBoardBg;
                         targetCtx.fill();
                     }
                 } else {
@@ -7513,11 +7651,12 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
                     const srcW = (currentBoardMaskRadius * 2) / scaledW * boardImage.naturalWidth;
                     const srcH = (currentBoardMaskRadius * 2) / scaledH * boardImage.naturalHeight;
 
+                    targetCtx.save();
+                    targetCtx.globalAlpha = imgOpacity;
+                    targetCtx.globalCompositeOperation = compositeOp;
                     targetCtx.drawImage(boardImage, srcX, srcY, srcW, srcH, cx - currentBoardMaskRadius, cy - currentBoardMaskRadius, currentBoardMaskRadius * 2, currentBoardMaskRadius * 2);
+                    targetCtx.restore();
                 }
-            } else {
-                targetCtx.fillStyle = bgColor;
-                targetCtx.fillRect(woodX, woodY, woodW, woodH);
             }
             targetCtx.restore();
 
@@ -8846,8 +8985,8 @@ async function generateDiagramDataURL() {
                 
                 if (state.exportBoardStyle) {
                     const style = state.exportBoardStyle;
-                    currentBoardColor = style.board.useColor ? style.board.color : '#DCB35C';
-                    currentBgColor = style.border.color;
+                    currentBoardColor = (style.board && style.board.color) ? style.board.color : '#DCB35C';
+                    currentBgColor = style.border ? style.border.color : '#DCB35C';
                     borderScale = Math.min(1, parseFloat(style.border.size) / 100 || 1);
                     borderOverrideOn = !style.border || style.border.override !== false;
                     
@@ -8869,7 +9008,13 @@ async function generateDiagramDataURL() {
                 exportCtx.fillStyle = borderOverrideOn ? currentBgColor : currentBoardColor;
                 exportCtx.fillRect(woodLeft, woodTop, woodRight - woodLeft, woodBottom - woodTop);
                 
-                // Then paint the inner board area with the regular board color or image.
+                // Always fill the inner grid area with the Board Color first so transparent image/texture sits on top of it, and color acts as fallback if image isn't loaded!
+                if (borderOverrideOn) {
+                    exportCtx.fillStyle = currentBoardColor;
+                    exportCtx.fillRect(gridLeft, gridTop, gridRight - gridLeft, gridBottom - gridTop);
+                }
+
+                // Then paint the board image on top if present.
                 // With Override ON the image is clipped to the grid so it never covers the
                 // border margin; with Override OFF it fills the whole wood area instead.
                 if (boardImage) {
@@ -8877,15 +9022,21 @@ async function generateDiagramDataURL() {
                     let imgZoom = 1.0;
                     let imgOffsetX = 0;
                     let imgOffsetY = 0;
-                    if (state.exportBoardStyle.board.imgZoom !== undefined) {
-                        imgZoom = parseFloat(state.exportBoardStyle.board.imgZoom);
+                    let imgOpacity = 1.0;
+                    let imgBlendMode = 'normal';
+                    if (state.exportBoardStyle && state.exportBoardStyle.board) {
+                        const b = state.exportBoardStyle.board;
+                        if (b.imgZoom !== undefined) imgZoom = parseFloat(b.imgZoom);
+                        if (b.imgOffsetX !== undefined) imgOffsetX = parseFloat(b.imgOffsetX);
+                        if (b.imgOffsetY !== undefined) imgOffsetY = parseFloat(b.imgOffsetY);
+                        if (b.imgOpacity !== undefined) {
+                            const parsedOp = parseFloat(b.imgOpacity);
+                            if (!isNaN(parsedOp)) imgOpacity = Math.max(0, Math.min(1, parsedOp));
+                        }
+                        if (b.imgBlendMode) imgBlendMode = b.imgBlendMode;
                     }
-                    if (state.exportBoardStyle.board.imgOffsetX !== undefined) {
-                        imgOffsetX = parseFloat(state.exportBoardStyle.board.imgOffsetX);
-                    }
-                    if (state.exportBoardStyle.board.imgOffsetY !== undefined) {
-                        imgOffsetY = parseFloat(state.exportBoardStyle.board.imgOffsetY);
-                    }
+                    exportCtx.globalAlpha = imgOpacity;
+                    exportCtx.globalCompositeOperation = (imgBlendMode && imgBlendMode !== 'normal') ? imgBlendMode : 'source-over';
                     
                     const imgLeft = borderOverrideOn ? gridLeft : woodLeft;
                     const imgTop = borderOverrideOn ? gridTop : woodTop;
@@ -8916,9 +9067,6 @@ async function generateDiagramDataURL() {
                         exportCtx.drawImage(boardImage, dx, dy, scaledW, scaledH);
                     }
                     exportCtx.restore();
-                } else if (borderOverrideOn) {
-                    exportCtx.fillStyle = currentBoardColor;
-                    exportCtx.fillRect(gridLeft, gridTop, gridRight - gridLeft, gridBottom - gridTop);
                 }
 
 
@@ -11351,11 +11499,7 @@ async function exportEditedSgf(customFilename) {
     });
 
     let tree;
-    if (state.sgfTree && state.isSgfDirty) {
-        tree = SgfEngine.cloneTree(state.sgfTree);
-        const branchPath = state.variationData?.currentBranchPath || [0];
-        SgfEngine.replaceBranchNodes(tree, branchPath, mainLineProps);
-    } else if (state.sgfTree && !state.isSgfDirty) {
+    if (state.sgfTree) {
         tree = state.sgfTree;
     } else {
         tree = { nodes: mainLineProps.map(p => ({ properties: JSON.parse(JSON.stringify(p)), children: [] })), children: [] };
@@ -11492,11 +11636,21 @@ function updateExtractedMoves() {
 }
 
 function updateVariationUI() {
+    // In a static branch (enterStaticBranch), sgfMoves is intentionally [] but
+    // variationData still has valid siblings — do NOT early-return in that case.
+    const hasStaticBranch = !!(
+        state.variationData &&
+        state.variationData.branchPoints &&
+        state.variationData.branchPoints.length > 0
+    );
     if (!state.sgfMoves || state.sgfMoves.length === 0) {
-        if (elements.variationLabel) elements.variationLabel.textContent = 'Variation 1/1';
-        if (elements.btnVarPrev) { elements.btnVarPrev.disabled = true; elements.btnVarPrev.style.opacity = '0.6'; elements.btnVarPrev.style.cursor = 'not-allowed'; }
-        if (elements.btnVarNext) { elements.btnVarNext.disabled = true; elements.btnVarNext.style.opacity = '0.6'; elements.btnVarNext.style.cursor = 'not-allowed'; }
-        return;
+        if (!hasStaticBranch) {
+            if (elements.variationLabel) elements.variationLabel.textContent = 'Variation 1/1';
+            if (elements.btnVarPrev) { elements.btnVarPrev.disabled = true; elements.btnVarPrev.style.opacity = '0.6'; elements.btnVarPrev.style.cursor = 'not-allowed'; }
+            if (elements.btnVarNext) { elements.btnVarNext.disabled = true; elements.btnVarNext.style.opacity = '0.6'; elements.btnVarNext.style.cursor = 'not-allowed'; }
+            return;
+        }
+        // Fall through to the normal branch-point rendering below.
     }
 
     const absIdx = (state.filterStart || 1) - 1 + Math.max(-1, state.currentMoveIndex);
@@ -11515,8 +11669,8 @@ function updateVariationUI() {
     if (bp && bp.variants.length > 1) {
         const label = bp.variants[bp.current].label || `Variation ${bp.current + 1}`;
         if (elements.variationLabel) elements.variationLabel.textContent = `${label} (${bp.current + 1}/${bp.variants.length})`;
-        if (elements.btnVarPrev) { elements.btnVarPrev.disabled = bp.current <= 0; elements.btnVarPrev.style.opacity = bp.current <= 0 ? '0.6' : '1'; elements.btnVarPrev.style.cursor = bp.current <= 0 ? 'not-allowed' : 'pointer'; }
-        if (elements.btnVarNext) { elements.btnVarNext.disabled = bp.current >= bp.variants.length - 1; elements.btnVarNext.style.opacity = bp.current >= bp.variants.length - 1 ? '0.6' : '1'; elements.btnVarNext.style.cursor = bp.current >= bp.variants.length - 1 ? 'not-allowed' : 'pointer'; }
+        if (elements.btnVarPrev) { elements.btnVarPrev.disabled = bp.current >= bp.variants.length - 1; elements.btnVarPrev.style.opacity = bp.current >= bp.variants.length - 1 ? '0.6' : '1'; elements.btnVarPrev.style.cursor = bp.current >= bp.variants.length - 1 ? 'not-allowed' : 'pointer'; }
+        if (elements.btnVarNext) { elements.btnVarNext.disabled = bp.current <= 0; elements.btnVarNext.style.opacity = bp.current <= 0 ? '0.6' : '1'; elements.btnVarNext.style.cursor = bp.current <= 0 ? 'not-allowed' : 'pointer'; }
     } else {
         if (elements.variationLabel) elements.variationLabel.textContent = 'Variation 1/1';
         if (elements.btnVarPrev) { elements.btnVarPrev.disabled = true; elements.btnVarPrev.style.opacity = '0.6'; elements.btnVarPrev.style.cursor = 'not-allowed'; }
@@ -11671,7 +11825,7 @@ function switchBranchAndGoToNode(path, nodeIndex) {
 
     const newMoves = [];
     newAllSgfMovesProps.forEach((props, idx) => {
-        const isRootOnly = idx === 0 && state.sgfTree.nodes[0] === newAllSgfMovesProps[0] && !props.B && !props.W;
+        const isRootOnly = idx === 0 && state.sgfTree.nodes[0].properties === newAllSgfMovesProps[0] && !props.B && !props.W;
         if (isRootOnly) return;
 
         if (props.B || props.W) {
@@ -11714,6 +11868,42 @@ function switchBranchAndGoToNode(path, nodeIndex) {
                 moveNumber,
                 sgfNode: props
             });
+        } else {
+            // Setup-only / property-demo node (no B/W move).
+            // Per SGF FF[4] spec a node is a navigable step regardless of whether it
+            // contains a move. We represent it as an isSetupOnly step so the replay
+            // loop can apply AB/AW/AE and display its markup/comment while keeping the
+            // ← → controls fully alive — exactly what Sabaki does for these nodes.
+            const comment = props.C ? props.C[0] : '';
+            let annotations = [], territory = { black: [], white: [] };
+            try {
+                const parsed = SgfEngine.parseMarkupProperties(props, bw, bh);
+                if (parsed) { annotations = parsed.annotations || []; territory = parsed.territory || territory; }
+            } catch(e) { /* markup optional */ }
+            const unknownProps = SgfEngine.extractUnknownProperties(props);
+            let nodeAnnotation = null;
+            if (props.GB) nodeAnnotation = { type: 'GB', value: props.GB[0] || '1' };
+            else if (props.GW) nodeAnnotation = { type: 'GW', value: props.GW[0] || '1' };
+            else if (props.DM) nodeAnnotation = { type: 'DM', value: props.DM[0] || '1' };
+            else if (props.UC) nodeAnnotation = { type: 'UC', value: props.UC[0] || '1' };
+            const nodeName = props.N ? props.N[0] : '';
+            newMoves.push({
+                player: null,
+                c: -1,
+                r: -1,
+                isPass: false,
+                isSetupOnly: true,
+                setupProps: props,   // raw SGF props for AB/AW/AE/PL application
+                comment,
+                annotations,
+                territory,
+                unknownProps,
+                moveAnnotation: null,
+                nodeAnnotation,
+                nodeName,
+                moveNumber: null,
+                sgfNode: props
+            });
         }
     });
 
@@ -11732,13 +11922,25 @@ function switchBranchAndGoToNode(path, nodeIndex) {
     // NOTE: `path` indexes EVERY child hop (linear chains included), while
     // branchPoints only exist at real forks — so descend by hop depth, not by
     // branch-point index, and record each fork's hop depth for navigation.
+    //
+    // contributingNodes must count ALL navigable SGF nodes in the segment, not
+    // just B/W moves — setup-only nodes are now real steps in newMoves, so the
+    // moveIndex stored in each branchPoint must match the flat newMoves index.
     const branchPoints = [];
     {
         let moveIdx = 0;
         let hopDepth = 0;
         let cTree = tree;
+        // isRootSegment: skip the very first node of the very first tree segment
+        // (that's the root node which was excluded from newMoves by the isRootOnly guard).
+        let isRootSegment = true;
         while (cTree) {
-            const contributingNodes = cTree.nodes.filter(n => n.properties.B || n.properties.W).length;
+            let contributingNodes = 0;
+            cTree.nodes.forEach((n, ni) => {
+                if (isRootSegment && ni === 0) return; // root node skipped in newMoves
+                contributingNodes++;
+            });
+            isRootSegment = false;
             if (cTree.children && cTree.children.length > 1) {
                 const variants = buildVariantList(cTree);
                 if (variants.length > 1) {
@@ -11773,16 +11975,18 @@ function switchBranchAndGoToNode(path, nodeIndex) {
 
     state.sgfMoves = state.allSgfMoves.slice(Math.max(0, start - 1));
 
-    // Calculate moveCount up to nodeIndex in path
+    // Calculate step count up to nodeIndex in path.
+    // Count all navigable nodes (moves + setup-only), skipping the root node.
     let moveCount = 0;
     let tempTree = tree;
+    let isRootSeg = true;
     for (let i = 0; i <= path.length; i++) {
         const limit = (i === path.length) ? (nodeIndex + 1) : tempTree.nodes.length;
         for (let j = 0; j < limit; j++) {
-            if (tempTree.nodes[j].properties.B || tempTree.nodes[j].properties.W) {
-                moveCount++;
-            }
+            if (isRootSeg && j === 0) continue; // skip root node
+            moveCount++;
         }
+        isRootSeg = false;
         if (i < path.length) {
             if (tempTree.children && tempTree.children[path[i]]) {
                 tempTree = tempTree.children[path[i]];
@@ -11800,6 +12004,12 @@ function switchBranchAndGoToNode(path, nodeIndex) {
     const limitIdx = Math.max(0, start - 1);
     for (let i = 0; i < limitIdx && i < state.allSgfMoves.length; i++) {
         const m = state.allSgfMoves[i];
+        if (m.isSetupOnly) {
+            // Apply setup deltas to baseline without counting captures
+            SgfEngine.applySetupProperties(state.baselineBoard, m.setupProps,
+                Math.min(state.boardWidth || 19, 19), Math.min(state.boardHeight || 19, 19));
+            continue;
+        }
         if (!m.isPass && m.r >= 0 && m.r < 19 && m.c >= 0 && m.c < 19) {
             const captured = playStoneWithCaptures(state.baselineBoard, m.r, m.c, m.player);
             if (m.player === 'B') pB += captured.count; else pW += captured.count;
@@ -11809,6 +12019,14 @@ function switchBranchAndGoToNode(path, nodeIndex) {
 
     calculateGamePhases();
     goToMove(targetMoveIndexInSgfMoves);
+    if (state.activeStudyId && !state.isSgfLoading && typeof StudyRecordDB !== 'undefined') {
+        const rec = StudyRecordDB.getRecord(state.activeStudyId);
+        if (rec) {
+            rec.currentBranchPath = path.slice();
+            rec.currentMoveIndex = targetMoveIndexInSgfMoves;
+            StudyRecordDB.saveRecord(rec);
+        }
+    }
     updateVariationUI();
     updateExtractedMoves();
     populateCommentDropdown();
@@ -12333,11 +12551,14 @@ function goToMove(index) {
         const rec = StudyRecordDB.getRecord(state.activeStudyId);
         if (rec) {
             rec.currentMoveIndex = index;
+            if (state.variationData && Array.isArray(state.variationData.currentBranchPath)) {
+                rec.currentBranchPath = state.variationData.currentBranchPath.slice();
+            }
             rec.lastAccess = typeof window.formatStudyAccessTime === 'function' ? window.formatStudyAccessTime() : new Date().toLocaleString();
             if (typeof captureCurrentAppSettings === 'function') {
                 rec.settings = captureCurrentAppSettings();
             }
-            console.log(`[StudyRecordDB] goToMove(${index}) -> updated rec.currentMoveIndex = ${index} for activeStudyId: ${state.activeStudyId}`);
+            console.log(`[StudyRecordDB] goToMove(${index}) -> updated rec.currentMoveIndex = ${index}, branchPath = ${JSON.stringify(rec.currentBranchPath)} for activeStudyId: ${state.activeStudyId}`);
             StudyRecordDB.saveRecord(rec);
             if (typeof window.updateSaveRecGameButton === 'function') window.updateSaveRecGameButton();
         }
@@ -12351,6 +12572,14 @@ function goToMove(index) {
     
     for (let i = 0; i <= index; i++) {
         const m = state.sgfMoves[i];
+        if (m.isSetupOnly) {
+            // Setup-only node: apply AB/AW/AE/PL to the current board state.
+            // No stone is "played" so captures remain unchanged.
+            const bw2 = Math.min(state.boardWidth || 19, 19);
+            const bh2 = Math.min(state.boardHeight || 19, 19);
+            SgfEngine.applySetupProperties(state.board, m.setupProps, bw2, bh2);
+            continue;
+        }
         if (m.isPass) continue;
         const result = playStoneWithCaptures(state.board, m.r, m.c, m.player);
         if (m.player === 'B') {
@@ -12367,7 +12596,9 @@ function goToMove(index) {
     // Stepping forward one move: a capturing move ("take") plays the capture
     // SFX once instead of the plain placement sound — the stones are already
     // off the board at this point (the loop above removed them).
-    if (isSingleStepForward && index <= state.sgfMoves.length - 1 && index > -1) {
+    // Setup-only nodes do not place a stone, so no sound is played for them.
+    if (isSingleStepForward && index <= state.sgfMoves.length - 1 && index > -1 &&
+            !state.sgfMoves[index].isSetupOnly) {
         if (capturedThisMove > 0) {
             playSfx('capture');
         } else {
@@ -13557,13 +13788,8 @@ function loadSGF(sgfString) {
     state.variationData = { branchPoints, currentBranchPath: [0] };
 
     mainLine.forEach((props, index) => {
-        const isRootOnly = index === 0 && state.sgfTree.nodes[0] === mainLine[0] && !props.B && !props.W;
+        const isRootOnly = index === 0 && state.sgfTree.nodes[0].properties === mainLine[0] && !props.B && !props.W;
         if (isRootOnly) return;
-
-        const setupPresent = !!(props.AB || props.AW || props.AE || props.PL);
-        if (setupPresent && !props.B && !props.W) {
-            console.warn('SGF: Setup node in main line (move ' + index + ') — setup mid-game is noted but not replayed.');
-        }
 
         if (props.B || props.W) {
             const color = props.B ? 'B' : 'W';
@@ -13603,6 +13829,41 @@ function loadSGF(sgfString) {
                 nodeAnnotation,
                 nodeName,
                 moveNumber,
+                DD: props.DD ? props.DD.slice() : null,
+                MA: props.MA ? props.MA.slice() : null,
+                TB: props.TB ? props.TB.slice() : null,
+                TW: props.TW ? props.TW.slice() : null,
+                sgfNode: props
+            });
+        } else {
+            const comment = props.C ? props.C[0] : '';
+            let annotations = [], territory = { black: [], white: [] };
+            try {
+                const parsed = SgfEngine.parseMarkupProperties(props, bw, bh);
+                if (parsed) { annotations = parsed.annotations || []; territory = parsed.territory || territory; }
+            } catch(e) {}
+            const unknownProps = SgfEngine.extractUnknownProperties(props);
+            let nodeAnnotation = null;
+            if (props.GB) nodeAnnotation = { type: 'GB', value: props.GB[0] || '1' };
+            else if (props.GW) nodeAnnotation = { type: 'GW', value: props.GW[0] || '1' };
+            else if (props.DM) nodeAnnotation = { type: 'DM', value: props.DM[0] || '1' };
+            else if (props.UC) nodeAnnotation = { type: 'UC', value: props.UC[0] || '1' };
+            const nodeName = props.N ? props.N[0] : '';
+            state.allSgfMoves.push({
+                player: null,
+                c: -1,
+                r: -1,
+                isPass: false,
+                isSetupOnly: true,
+                setupProps: props,
+                comment,
+                annotations,
+                territory,
+                unknownProps,
+                moveAnnotation: null,
+                nodeAnnotation,
+                nodeName,
+                moveNumber: null,
                 DD: props.DD ? props.DD.slice() : null,
                 MA: props.MA ? props.MA.slice() : null,
                 TB: props.TB ? props.TB.slice() : null,
@@ -14606,7 +14867,10 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         useColor: true,
         color: '#dcb35c',
         imgSrc: '',
-        imgRepeat: false, imgZoom: 1.0,
+        imgRepeat: false,
+        imgZoom: 1.0,
+        imgOpacity: 1.0,
+        imgBlendMode: 'normal',
         size: 720
     },
     border: {
@@ -14697,19 +14961,23 @@ function setEffectiveInitialStyle(style) {
 // that session and MUST NOT overwrite the empty page-load initial-board setting; they are
 // captured into the rec by captureActiveRecSettings() instead.
 function persistBoardStyles() {
-    if (state.activeStudyId) {
-        localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
-        if (state.scoringBoardStyle) {
-            localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
+    try {
+        if (state.activeStudyId) {
+            localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
+            if (state.scoringBoardStyle) {
+                localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
+            }
+            localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+        } else {
+            localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
+            localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
+            if (state.scoringBoardStyle) {
+                localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
+            }
+            localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
         }
-        localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
-    } else {
-        localStorage.setItem('baduk_initial_board_style', JSON.stringify(state.initialBoardStyle));
-        localStorage.setItem('baduk_study_board_style', JSON.stringify(state.studyBoardStyle));
-        if (state.scoringBoardStyle) {
-            localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle));
-        }
-        localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+    } catch (e) {
+        console.warn('Could not persist board style to localStorage:', e);
     }
 }
 
@@ -14783,6 +15051,8 @@ function populateStyleInputs() {
     setInputVal('ib-board-color', style.board.color);
     setInputVal('ib-board-img-repeat', style.board.imgRepeat, true);
     setInputVal('ib-board-img-zoom-slider', style.board.imgZoom !== undefined ? style.board.imgZoom : 1.0);
+    setInputVal('ib-board-img-opacity', style.board.imgOpacity !== undefined ? style.board.imgOpacity : 1.0);
+    setInputVal('ib-board-img-blend', style.board.imgBlendMode || 'normal');
     setInputVal('ib-board-img-offset-x', style.board.imgOffsetX !== undefined ? style.board.imgOffsetX : 0);
     setInputVal('ib-board-img-offset-y', style.board.imgOffsetY !== undefined ? style.board.imgOffsetY : 0);
     setInputVal('ib-board-size', style.board.size);
@@ -14790,10 +15060,13 @@ function populateStyleInputs() {
     // Update thumbnail
     const thumb = document.getElementById('ib-board-img-thumb');
     if (thumb) {
-        if (!style.board.useColor && style.board.imgSrc) {
+        thumb.style.backgroundColor = style.board.color || '#dcb35c';
+        if (style.board.imgSrc) {
             thumb.style.backgroundImage = `url(${style.board.imgSrc})`;
+            thumb.style.backgroundBlendMode = style.board.imgBlendMode || 'normal';
         } else {
             thumb.style.backgroundImage = '';
+            thumb.style.backgroundBlendMode = 'normal';
         }
     }
     
@@ -14910,6 +15183,8 @@ function bindStyleInputsEvents() {
         { id: 'ib-board-color', section: 'board', key: 'color' },
         { id: 'ib-board-img-repeat', section: 'board', key: 'imgRepeat', isCheckbox: true },
         { id: 'ib-board-img-zoom-slider', section: 'board', key: 'imgZoom', isNum: true },
+        { id: 'ib-board-img-opacity', section: 'board', key: 'imgOpacity', isNum: true },
+        { id: 'ib-board-img-blend', section: 'board', key: 'imgBlendMode' },
         { id: 'ib-board-img-offset-x', section: 'board', key: 'imgOffsetX', isNum: true },
         { id: 'ib-board-img-offset-y', section: 'board', key: 'imgOffsetY', isNum: true },
         { id: 'ib-board-size', section: 'board', key: 'size', isNum: true },
@@ -15131,7 +15406,78 @@ function bindStyleInputsEvents() {
             const file = e.target.files[0];
             if (!file) return;
             
+            const isSvg = file.type === 'image/svg+xml' || (file.name && file.name.toLowerCase().endsWith('.svg'));
             const reader = new FileReader();
+            
+            if (isSvg) {
+                reader.onload = function(event) {
+                    let svgContent = event.target.result;
+                    if (typeof svgContent === 'string') {
+                        // Fix Inkscape broken filter mask quirk if present
+                        if (svgContent.includes('mask="url(#0d08b46e52)"')) {
+                            svgContent = svgContent.replace(/mask="url\(#0d08b46e52\)"/g, 'opacity="0.32"');
+                        }
+                    }
+                    
+                    const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+                    const blobUrl = URL.createObjectURL(svgBlob);
+                    const svgImg = new Image();
+                    
+                    const applyImgSrc = (src) => {
+                        const style = getActiveStyleObject();
+                        style.board.imgSrc = src;
+                        style.board.useColor = false;
+                        if (useImgRadio) useImgRadio.checked = true;
+                        if (useColorRadio) useColorRadio.checked = false;
+                        
+                        window.initialBoardBgImage = null;
+                        window.studyBoardBgImage = null;
+                        window.scoringBoardBgImage = null;
+                        window.exportBoardBgImage = null;
+                        
+                        saveStyleAndRedraw();
+                        populateStyleInputs();
+                    };
+
+                    svgImg.onload = function() {
+                        try {
+                            const maxDim = 1024;
+                            let w = svgImg.naturalWidth || svgImg.width || 1024;
+                            let h = svgImg.naturalHeight || svgImg.height || 1024;
+                            if (w > maxDim || h > maxDim) {
+                                if (w > h) {
+                                    h = Math.round((h * maxDim) / w);
+                                    w = maxDim;
+                                } else {
+                                    w = Math.round((w * maxDim) / h);
+                                    h = maxDim;
+                                }
+                            }
+                            const canvas = document.createElement('canvas');
+                            canvas.width = w;
+                            canvas.height = h;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(svgImg, 0, 0, w, h);
+                            URL.revokeObjectURL(blobUrl);
+                            const pngDataUrl = canvas.toDataURL('image/png');
+                            applyImgSrc(pngDataUrl);
+                        } catch (err) {
+                            URL.revokeObjectURL(blobUrl);
+                            applyImgSrc('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgContent));
+                        }
+                    };
+                    
+                    svgImg.onerror = function() {
+                        URL.revokeObjectURL(blobUrl);
+                        applyImgSrc('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgContent));
+                    };
+                    
+                    svgImg.src = blobUrl;
+                };
+                reader.readAsText(file);
+                return;
+            }
+
             reader.onload = function(event) {
                 const img = new Image();
                 img.onload = function() {
@@ -15156,7 +15502,9 @@ function bindStyleInputsEvents() {
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, w, h);
                     
-                    const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                    // Use image/png to preserve transparent alpha channels for PNGs / textures
+                    const isPng = file.type === 'image/png' || (file.name && file.name.toLowerCase().endsWith('.png'));
+                    const compressedDataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85);
                     
                     const style = getActiveStyleObject();
                     style.board.imgSrc = compressedDataUrl;
@@ -15570,7 +15918,8 @@ function checkAndShowGameEndPopup() {
 function updateEndgameScoringUI() {
     const el = document.getElementById('endgame-scoring-shortcut');
     if (!el) return;
-    const onLastMove = state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex === state.sgfMoves.length - 1;
+    const isMainLine = !state.variationData || !state.variationData.currentBranchPath || state.variationData.currentBranchPath.every(idx => idx === 0);
+    const onLastMove = isMainLine && state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex === state.sgfMoves.length - 1;
     el.style.display = onLastMove ? 'block' : 'none';
 }
 
@@ -15877,7 +16226,14 @@ window.calculateGamePhases = function() {
 window.updateFilterPresets = function() {
     if (!elements.btnRangeOpening || !elements.btnRangeMidgame || !elements.btnRangeEndgame) return;
     
-    const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    let totalAll = 0;
+    if (state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+        const ml = SgfEngine.extractMainLine(state.sgfTree);
+        totalAll = ml.filter(p => p.B || p.W).length;
+    }
+    if (!totalAll) {
+        totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    }
     
     if (totalAll === 0 || !state.gamePhases) {
         elements.btnRangeOpening.textContent = "1\u201350 (Opening)";
@@ -15926,8 +16282,24 @@ window.updateFilterPresets = function() {
 window.updatePhaseBar = function() {
     if (!elements.btnPhaseFuseki || !elements.btnPhaseChuban || !elements.btnPhaseYose) return;
     
-    const totalAll = state.allSgfMoves ? state.allSgfMoves.length : 0;
-    const absIdx = (state.filterStart || 1) - 1 + state.currentMoveIndex;
+    const isMainLine = !state.variationData || !state.variationData.currentBranchPath || state.variationData.currentBranchPath.every(idx => idx === 0);
+
+    // Total moves in the MAIN game tree
+    let mainTotal = 0;
+    if (state.sgfTree && typeof SgfEngine !== 'undefined' && typeof SgfEngine.extractMainLine === 'function') {
+        const ml = SgfEngine.extractMainLine(state.sgfTree);
+        mainTotal = ml.filter(p => p.B || p.W).length;
+    }
+    if (!mainTotal) {
+        mainTotal = state.allSgfMoves ? state.allSgfMoves.length : 0;
+    }
+
+    let effectiveAbsIdx = (state.filterStart || 1) - 1 + state.currentMoveIndex;
+    if (!isMainLine && state.sgfTree) {
+        // When on a variation branch, progress is pinned to the fork point on the main line.
+        const prefixMoves = state.sgfTree.nodes.filter(n => n.properties && (n.properties.B || n.properties.W)).length;
+        effectiveAbsIdx = Math.max(0, prefixMoves - 1);
+    }
     
     // Reset node classes to default
     elements.btnPhaseFuseki.className = 'phase-step-node';
@@ -15969,7 +16341,7 @@ window.updatePhaseBar = function() {
     if (circleChuban) circleChuban.textContent = '2';
     if (circleYose) circleYose.textContent = '3';
     
-    if (totalAll === 0 || !state.gamePhases) {
+    if (mainTotal === 0 || !state.gamePhases) {
         elements.btnPhaseFuseki.classList.add('active');
         elements.btnPhaseFuseki.style.cursor = 'pointer';
         
@@ -16011,13 +16383,14 @@ window.updatePhaseBar = function() {
     
     // Determine active phase
     let activePhase = 'fuseki';
-    if (hasYose && absIdx >= yoseStart) {
+    if (hasYose && effectiveAbsIdx >= yoseStart) {
         activePhase = 'yose';
-    } else if (hasChuban && absIdx >= chubanStart) {
+    } else if (hasChuban && effectiveAbsIdx >= chubanStart) {
         activePhase = 'chuban';
     }
     
-    const isGameEnd = totalAll > 0 && absIdx === totalAll - 1;
+    // Game end ONLY applies to the main line
+    const isGameEnd = isMainLine && mainTotal > 0 && effectiveAbsIdx === mainTotal - 1;
     
     // Set node states and circle texts based on active phase
     if (activePhase === 'yose') {
@@ -16063,12 +16436,12 @@ window.updatePhaseBar = function() {
     }
     
     // Calculate & update progress percentage
-    // absIdx represents 0-based index of current move.
-    // 0% at index -1, 100% when reaching the absolute last move index of totalAll.
+    // On the main line: tracks move 0..mainTotal-1.
+    // On variations: stays pinned to the main line branch fork point percentage.
     let pct = 0;
-    if (totalAll > 0) {
-        if (absIdx >= 0) {
-            pct = Math.max(1, Math.min(100, Math.round(((absIdx + 1) / totalAll) * 100)));
+    if (mainTotal > 0) {
+        if (effectiveAbsIdx >= 0) {
+            pct = Math.max(1, Math.min(100, Math.round(((effectiveAbsIdx + 1) / mainTotal) * 100)));
         }
     }
     const fillBar = document.getElementById('phase-progress-bar');
@@ -18568,7 +18941,7 @@ function renderScoringBoardToCtx(ctx) {
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
     // 1. Board Background
-    const boardColor = (style.board && style.board.useColor && style.board.color) ? style.board.color : '#DCB35C';
+    const boardColor = (style.board && style.board.color) ? style.board.color : '#DCB35C';
     ctx.fillStyle = boardColor;
     ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Game Loading Flow</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #f5f5f5; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 500 580" width="500" height="580" role="img" aria-labelledby="gl-title" xmlns="http://www.w3.org/2000/svg">
+  <title id="gl-title">Game Loading — SGF drop to render pipeline</title>
+  <defs>
+    <marker id="gl-arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#4f5d75"/>
+    </marker>
+    <marker id="gl-arr-accent" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#eb6c36"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="500" height="580" fill="#f5f5f5"/>
+
+  <!-- Title -->
+  <text x="250" y="28" font-family="'Instrument Serif', serif" font-size="17" fill="#2d3142" text-anchor="middle">Game Loading</text>
+  <text x="250" y="44" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle" letter-spacing="0.12em">SGF INPUT → PARSE → STATE → RENDER</text>
+
+  <!-- Step 1: SGF Drop/Paste -->
+  <rect x="100" y="60" width="300" height="40" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+  <text x="250" y="77" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">SGF Drop / Paste / File Picker</text>
+  <text x="250" y="91" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">user input event</text>
+
+  <!-- Arrow -->
+  <line x1="250" y1="100" x2="250" y2="116" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- handleFileSelect -->
+  <rect x="100" y="116" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="131" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">handleFileSelect(file)</text>
+  <text x="250" y="145" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">annotation_v4.js</text>
+
+  <line x1="250" y1="152" x2="250" y2="168" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- FileReader -->
+  <rect x="100" y="168" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="183" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">FileReader.readAsText(file)</text>
+  <text x="250" y="197" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">async read · fires onload</text>
+
+  <line x1="250" y1="204" x2="250" y2="220" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- loadSGF -->
+  <rect x="100" y="220" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="235" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">loadSGF(sgfString)</text>
+  <text x="250" y="249" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">entry point · resets state</text>
+
+  <line x1="250" y1="256" x2="250" y2="272" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- parseSgf -->
+  <rect x="100" y="272" width="300" height="40" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="287" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">SgfEngine.parseSgf(sgfString)</text>
+  <text x="250" y="301" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">→ tree · state.sgfTree = cloneTree(tree)</text>
+
+  <line x1="250" y1="312" x2="250" y2="328" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- Extract / applyFilters -->
+  <rect x="100" y="328" width="300" height="40" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="343" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">Extract main line → applyFilters()</text>
+  <text x="250" y="357" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">allSgfMoves[] → sgfMoves[] → goToMove(0)</text>
+
+  <line x1="250" y1="368" x2="250" y2="384" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- renderBoardToCtx -->
+  <rect x="100" y="384" width="300" height="40" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="399" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">renderBoardToCtx() × 2</text>
+  <text x="250" y="413" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">initial board + study board</text>
+
+  <line x1="250" y1="424" x2="250" y2="440" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+
+  <!-- onMoveChanged / renderGameTree -->
+  <rect x="100" y="440" width="300" height="52" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="456" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">onMoveChanged()</text>
+  <text x="250" y="469" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">→ detectCurrentMoveTerm() → updateBadge()</text>
+  <text x="250" y="482" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">→ renderGameTree()</text>
+
+  <!-- Done marker -->
+  <line x1="250" y1="492" x2="250" y2="508" stroke="#4f5d75" stroke-width="1" marker-end="url(#gl-arr)"/>
+  <rect x="160" y="508" width="180" height="32" rx="16" fill="#ffffff" stroke="#4f5d75" stroke-width="1"/>
+  <text x="250" y="529" font-family="'Geist', sans-serif" font-size="10" font-weight="600" fill="#2d3142" text-anchor="middle">Game loaded &amp; rendered</text>
+
+  <!-- Step labels on side -->
+  <text x="76" y="84" font-family="'Geist Mono', monospace" font-size="7" fill="#eb6c36" text-anchor="middle" letter-spacing="0.10em">INPUT</text>
+  <text x="76" y="304" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75" text-anchor="middle" letter-spacing="0.10em">PARSE</text>
+  <text x="76" y="404" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75" text-anchor="middle" letter-spacing="0.10em">RENDER</text>
+
+</svg>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Move Navigation Flow</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #f5f5f5; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<svg role="img" aria-labelledby="flow-move-navigation-title flow-move-navigation-desc" viewBox="0 0 500 600" width="500" height="600" xmlns="http://www.w3.org/2000/svg">
+  <title id="flow-move-navigation-title">Move Navigation Flow</title>
+  <desc id="flow-move-navigation-desc">Move Navigation Flow diagram for baduk-notes documentation.</desc>
+<defs>
+    <marker id="mn-arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#4f5d75"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="500" height="600" fill="#f5f5f5"/>
+
+  <!-- Title -->
+  <text x="250" y="28" font-family="'Instrument Serif', serif" font-size="17" fill="#2d3142" text-anchor="middle">Move Navigation</text>
+  <text x="250" y="44" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle" letter-spacing="0.12em">USER INPUT → goToMove → DETECT → RENDER</text>
+
+  <!-- User input -->
+  <rect x="100" y="60" width="300" height="40" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+  <text x="250" y="77" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">User Clicks Next / Prev / Wheel / Key</text>
+  <text x="250" y="91" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">UI event listener</text>
+
+  <line x1="250" y1="100" x2="250" y2="116" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- goToMove -->
+  <rect x="100" y="116" width="300" height="40" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="131" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">goToMove(index)</text>
+  <text x="250" y="145" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">cancel what-if · clear highlights</text>
+
+  <line x1="250" y1="156" x2="250" y2="172" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- Rebuild board -->
+  <rect x="100" y="172" width="300" height="40" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="187" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">Rebuild board state</text>
+  <text x="250" y="201" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">baselineBoard + moves[0..index]</text>
+
+  <line x1="250" y1="212" x2="250" y2="228" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- renderBoardToCtx × 2 -->
+  <rect x="100" y="228" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="243" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">renderBoardToCtx() × 2</text>
+  <text x="250" y="257" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">+ captureAnimation() if captures</text>
+
+  <line x1="250" y1="264" x2="250" y2="280" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- onMoveChanged -->
+  <rect x="100" y="280" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="295" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">onMoveChanged()</text>
+  <text x="250" y="309" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">_termHL.clear()</text>
+
+  <line x1="250" y1="316" x2="250" y2="332" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- detectCurrentMoveTerm -->
+  <rect x="100" y="332" width="300" height="52" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="347" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">detectCurrentMoveTerm()</text>
+  <text x="250" y="361" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">findPatternInMove() → blueVertices</text>
+  <text x="250" y="375" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">evaluateTenuki() → greenVertices</text>
+
+  <line x1="250" y1="384" x2="250" y2="400" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- updateBadge -->
+  <rect x="100" y="400" width="300" height="52" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="415" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">updateBadge(match, blue, green)</text>
+  <text x="250" y="429" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">_termHL.set(blue, green, name, url)</text>
+  <text x="250" y="443" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">badge UI updated</text>
+
+  <line x1="250" y1="452" x2="250" y2="468" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+
+  <!-- renderGameTree -->
+  <rect x="100" y="468" width="300" height="36" rx="6" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="250" y="483" font-family="'Geist', sans-serif" font-size="10.5" font-weight="600" fill="#2d3142" text-anchor="middle">renderGameTree()</text>
+  <text x="250" y="497" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle">sidebar tree updated</text>
+
+  <!-- Done -->
+  <line x1="250" y1="504" x2="250" y2="520" stroke="#4f5d75" stroke-width="1" marker-end="url(#mn-arr)"/>
+  <rect x="160" y="520" width="180" height="32" rx="16" fill="#ffffff" stroke="#4f5d75" stroke-width="1"/>
+  <text x="250" y="541" font-family="'Geist', sans-serif" font-size="10" font-weight="600" fill="#2d3142" text-anchor="middle">Board updated</text>
+
+</svg>
+</body>
+</html>

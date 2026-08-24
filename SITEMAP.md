@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.008
+version: 0.2.009
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,31 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.009 — SGF Sanitizer Whitespace Scanner, Variation Sequence Addition & Branch Pinning
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **sgf** | `fix` | Fixed `SgfSanitizer.sanitize` start scanner: replaced `rawSgf.indexOf('(;')` with whitespace-aware `(` + optional whitespace + `;` scanner to prevent formatted SGFs `(\n\n;` from stripping metadata and truncating root moves at the first variation subtree |
+| **sgf** | `feat` | Clean Variation Continuation: consecutive moves placed along an active variation branch append directly to `segTree.nodes` rather than creating redundant 1-node child forks for each move |
+| **sgf** | `fix` | Full AST & Metadata Preservation: `exportEditedSgf`, `generateCurrentSgfString`, and `autoSaveActiveStudySettings` use `state.sgfTree` directly to preserve all header properties (`EV`, `PB`, `PW`, `KM`, `RE`, etc.) and all sibling branches |
+| **ui** | `fix` | Main Game Tree Progress Pinning: `updatePhaseBar` and `renderStudyList` calculate progress against the Main Game Tree; moves inside variation trees stay pinned to the main line branch fork point (e.g. 4%) |
+| **ui** | `fix` | Game End & Endgame Scoring Exclusivity: `isGameEnd`, `checkAndShowGameEndPopup`, and `updateEndgameScoringUI` (`⚑ Endgame Scoring`) only activate at the terminal move of the Main Game Tree, never on variations |
+| **study** | `feat` | Exact Variation Resume: study sessions now persist `rec.currentBranchPath` across navigation, autosave, and reloads; resuming immediately restores the exact variation branch and target move index |
+| **ui** | `feat` | Switched Variation Button Controls: `btn-var-prev` (Up icon) now navigates to Next variation (`+1`) and `btn-var-next` (Down icon) navigates to Previous variation (`-1`) with corresponding title and disable state updates |
+
+##### Details
+1. **SgfSanitizer Idempotency**: `SgfSanitizer` formats SGFs with an opening `(\n\n;`. Previous strict `indexOf('(;')` skipped past the formatted root container and matched the first inner subtree `(;W[...]...)`, slicing off the entire root sequence and discarding metadata. The new scanner scans for `(` followed by whitespace and `;`, making sanitization idempotent across repeated autosaves.
+2. **Sequential Variation Moves**: In `addVariationAt`, when standing at the tip of an existing variation segment (`atLineEnd === true` with no child subtrees), clicks append directly to `segTree.nodes.push(newNode)` creating clean FF[4] variations `(;W[oe]N[Var B];B[pd];W[pc])`.
+3. **Branch Progress & Resume**: Pinned variation progress to the main game tree branch point percentage to prevent false 100% completions on short variation branches. Restored `rec.currentBranchPath` in `resumeStudySession` so reloading or exiting a study session reopens at the exact variation and move.
+
+##### Verification
+- All 45 SGF FF[4] compliance tests and 64 `ff4_ex.sgf` stress tests passing.
+- Verified round-trip preservation of 18 root metadata fields and multi-move variation sequences on real-game SGFs (Lee Sedol vs AlphaGo).
+
+---
 
 ### v0.2.008 — List All Variants (Filter Removed)
 

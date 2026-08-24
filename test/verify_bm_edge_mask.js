@@ -110,7 +110,7 @@ async function main() {
     }
 
     const eff = window.getEffectiveInitialStyle();
-    const boardColor = (eff.board && eff.board.useColor) ? eff.board.color : '#dcb35c';
+    const boardColor = (eff.board && eff.board.color) ? eff.board.color : '#dcb35c';
     const borderColor = (eff.border && eff.border.color) ? eff.border.color : '#dcb35c';
     const overrideOn = !eff.border || eff.border.override !== false;
     const boundaryColor = (eff.grid && eff.grid.boundaryColor) ? eff.grid.boundaryColor : '#1c1917';

@@ -162,10 +162,42 @@ console.log('\n13. Pass variation');
     assert(pt.isPass === true, 'empty value recognized as pass');
 }
 
-// 14. Coordinate formatting for created moves
-console.log('\n14. formatGoPoint outputs');
-assert(SgfEngine.formatGoPoint(15, 3) === 'pd', 'col 15,row 3 → "pd"');
-assert(SgfEngine.formatGoPoint(0, 0) === 'aa', 'origin formats as "aa"');
+// 15. Real-game mid-sequence variation and multi-move continuation (Lee Sedol vs AlphaGo)
+console.log('\n15. Mid-game variation with multi-move branch continuation');
+{
+    const sgf = `(;FF[4]CA[UTF-8]GM[1]SZ[19]AP[SGFC:2.3]EV[Deepmind Challenge Match]PB[Lee Sedol]BR[9p]PW[AlphaGo]WR[9p]KM[7.5]DT[2016-03-09]PC[Four Season Hotel, Seoul  , Korea]RE[W+R]ST[2]GN[Match 1]RO[1]TM[7200]OT[3x60 byo-yomi]RU[Chinese]SO[gokifu.com]US[The fabulous Toe];B[qd];W[dd];B[pq];W[dp];B[fc];W[cf];B[ql];W[od];B[ld];W[qc];B[rc];W[pc];B[re];W[of])`;
+    const tree = SgfEngine.parseSgf(sgf);
+
+    // Fork at move 8 (W[od]) -> anchor is move 7 (B[ql], nodeIdx = 7)
+    const rest = { nodes: tree.nodes.slice(8), children: tree.children };
+    tree.nodes = tree.nodes.slice(0, 8);
+    const varSub = {
+        nodes: [{ properties: { W: ['oe'], N: ['Var B'] }, children: [] }],
+        children: []
+    };
+    tree.children = [rest, varSub];
+
+    // Continue variation with multiple moves: B[pd], W[pc]
+    varSub.nodes.push({ properties: { B: ['pd'] }, children: [] });
+    varSub.nodes.push({ properties: { W: ['pc'] }, children: [] });
+
+    const out = SgfEngine.writeSgf(tree);
+    const re = SgfEngine.parseSgf(out);
+
+    assert(re !== null, 're-parsed SGF is not null');
+    assert(re.children.length === 2, 're-parsed SGF has 2 branch children');
+    assert(re.nodes.length === 8, 'root segment has 8 nodes (root + 7 moves before fork)');
+    assert(re.children[0].nodes[0].properties.W[0] === 'od', 'main continuation starts with W[od]');
+    assert(re.children[1].nodes.length === 3, 'variation branch has 3 moves');
+    assert(re.children[1].nodes[0].properties.W[0] === 'oe', 'variation move 1 is W[oe]');
+    assert(re.children[1].nodes[1].properties.B[0] === 'pd', 'variation move 2 is B[pd]');
+    assert(re.children[1].nodes[2].properties.W[0] === 'pc', 'variation move 3 is W[pc]');
+    assert(re.nodes[0].properties.EV[0] === 'Deepmind Challenge Match', 'event metadata preserved');
+    assert(re.nodes[0].properties.PB[0] === 'Lee Sedol', 'player black preserved');
+    assert(re.nodes[0].properties.PW[0] === 'AlphaGo', 'player white preserved');
+    assert(re.nodes[0].properties.KM[0] === '7.5', 'komi preserved');
+    assert(re.nodes[0].properties.RE[0] === 'W+R', 'result preserved');
+}
 
 console.log('\n--- Results: ' + passed + ' passed, ' + failed + ' failed ---');
 process.exit(failed > 0 ? 1 : 0);

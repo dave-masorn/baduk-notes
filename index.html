@@ -296,7 +296,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.2.008</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.2.009</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -759,11 +759,11 @@
                                 <!-- Variation controls -->
                                 <div id="variation-controls" style="display: flex; gap: 6px; align-items: center; justify-content: space-between; background: white; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid rgba(5, 150, 105, 0.3);">
                                     <div style="display: flex; gap: 4px;">
-                                        <button id="btn-var-prev" class="secondary-btn flex-btn" title="Previous sibling variation" disabled style="padding: 4px 8px; font-size: 0.75rem; opacity: 0.6; cursor: not-allowed;">
+                                        <button id="btn-var-prev" class="secondary-btn flex-btn" title="Next sibling variation" disabled style="padding: 4px 8px; font-size: 0.75rem; opacity: 0.6; cursor: not-allowed;">
                                             <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
                                             Var
                                         </button>
-                                        <button id="btn-var-next" class="secondary-btn flex-btn" title="Next sibling variation" disabled style="padding: 4px 8px; font-size: 0.75rem; opacity: 0.6; cursor: not-allowed;">
+                                        <button id="btn-var-next" class="secondary-btn flex-btn" title="Previous sibling variation" disabled style="padding: 4px 8px; font-size: 0.75rem; opacity: 0.6; cursor: not-allowed;">
                                             <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                                             Var
                                         </button>
@@ -2269,7 +2269,7 @@
                           <input type="color" id="ib-black-bg" value="#111827">
                         </div>
                         <span id="ib-black-bg-val" class="color-code-val">#111827</span>
-                        <input type="file" id="ib-black-stone-img-input" accept="image/*" style="display: none;">
+                        <input type="file" id="ib-black-stone-img-input" accept="image/*,image/svg+xml,.svg" style="display: none;">
                         <div id="ib-black-stone-img-thumb" class="style-thumb custom-upload-thumb" title="Upload Image"></div>
                         <input type="range" id="ib-black-bg-size-slider" min="0.1" max="1.0" step="0.01" value="0.45" class="custom-slider">
                         <input type="number" id="ib-black-bg-size" min="0.1" max="2.0" step="0.01" value="0.45" class="style-num-input">
@@ -2322,7 +2322,7 @@
                           <input type="color" id="ib-white-bg" value="#f3f4f6">
                         </div>
                         <span id="ib-white-bg-val" class="color-code-val">#F3F4F6</span>
-                        <input type="file" id="ib-white-stone-img-input" accept="image/*" style="display: none;">
+                        <input type="file" id="ib-white-stone-img-input" accept="image/*,image/svg+xml,.svg" style="display: none;">
                         <div id="ib-white-stone-img-thumb" class="style-thumb custom-upload-thumb" title="Upload Image"></div>
                         <input type="range" id="ib-white-bg-size-slider" min="0.1" max="1.0" step="0.01" value="0.45" class="custom-slider">
                         <input type="number" id="ib-white-bg-size" min="0.1" max="2.0" step="0.01" value="0.45" class="style-num-input">
@@ -2410,12 +2410,30 @@
                 </div>
                 <div class="style-item-wide">
                   <label class="style-radio-label"><input type="radio" name="ib-board-bg-type" id="ib-board-bg-use-image"><span>Image</span></label>
-                  <input type="file" id="ib-board-img-input" accept="image/*" style="display:none;">
+                  <input type="file" id="ib-board-img-input" accept="image/*,image/svg+xml,.svg" style="display:none;">
                   <div id="ib-board-img-thumb" class="style-thumb custom-upload-thumb" title="Upload Image"></div>
                   <label class="style-checkbox-label" title="Repeat Image"><input type="checkbox" id="ib-board-img-repeat"><span>Rep.</span></label>
                   <div style="flex-grow:1;display:flex;align-items:center;margin-left:8px;" title="Image Zoom">
                     <input type="range" id="ib-board-img-zoom-slider" min="0.1" max="1.9" step="0.01" value="1.0" class="custom-slider" style="width:100%;">
                   </div>
+                </div>
+                <div class="style-row">
+                  <span class="style-label-wide">Opacity</span>
+                  <input type="range" id="ib-board-img-opacity-slider" min="0.01" max="1" step="0.01" value="1.0" class="custom-slider">
+                  <input type="number" id="ib-board-img-opacity" min="0.01" max="1" step="0.01" value="1.0" class="style-num-input-wide">
+                  <span class="style-unit"></span>
+                </div>
+                <div class="style-row">
+                  <span class="style-label-wide">Blend</span>
+                  <select id="ib-board-img-blend" class="style-select-wide">
+                    <option value="normal">Normal</option>
+                    <option value="multiply">Multiply</option>
+                    <option value="overlay">Overlay</option>
+                    <option value="soft-light">Soft Light</option>
+                    <option value="hard-light">Hard Light</option>
+                    <option value="color-burn">Color Burn</option>
+                    <option value="screen">Screen</option>
+                  </select>
                 </div>
                 <div class="style-row">
                   <span class="style-label-wide">X Offset</span>
@@ -2662,14 +2680,14 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script defer src="sgf-parser.js?v=0.2.008"></script>
-    <script defer src="deadstones.bundle.js?v=0.2.008"></script>
-    <script defer src="board-estimate.js?v=0.2.008"></script>
-    <script defer src="goscorer.js?v=0.2.008"></script>
-    <script defer src="liberties.js?v=0.2.008"></script>
-    <script defer src="move-term-detector.js?v=0.2.008"></script>
-    <script defer src="phase-detector.js?v=0.2.008"></script>
-    <script defer src="game-tree.js?v=0.2.008"></script>
-    <script defer src="annotation_v4.js?v=0.2.008"></script>
+    <script defer src="sgf-parser.js?v=0.2.009"></script>
+    <script defer src="deadstones.bundle.js?v=0.2.009"></script>
+    <script defer src="board-estimate.js?v=0.2.009"></script>
+    <script defer src="goscorer.js?v=0.2.009"></script>
+    <script defer src="liberties.js?v=0.2.009"></script>
+    <script defer src="move-term-detector.js?v=0.2.009"></script>
+    <script defer src="phase-detector.js?v=0.2.009"></script>
+    <script defer src="game-tree.js?v=0.2.009"></script>
+    <script defer src="annotation_v4.js?v=0.2.009"></script>
 </body>
 </html>
