@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tenuki Detection Zones</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #f5f5f5; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 760 480" width="760" height="480" role="img" aria-labelledby="tenuki-title tenuki-desc" xmlns="http://www.w3.org/2000/svg">
+  <title id="tenuki-title">Tenuki Detection Zones — 9-Zone Board Partition &amp; Adjacency Map</title>
+  <desc id="tenuki-desc">Diagram showing the 9 board zones used to evaluate Tenuki moves, with coordinate ranges, adjacency relationships, and detection criteria.</desc>
+
+  <!-- Background -->
+  <rect width="760" height="480" fill="#f5f5f5"/>
+
+  <!-- Title & Eyebrow -->
+  <text x="380" y="28" font-family="'Instrument Serif', serif" font-size="18" fill="#2d3142" text-anchor="middle">Tenuki Detection Zones</text>
+  <text x="380" y="44" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399" text-anchor="middle" letter-spacing="0.12em">19×19 BOARD PARTITION · 9 ZONES · ADJACENCY &amp; TACTICAL RULES</text>
+
+  <!-- ═══ LEFT: 9-ZONE BOARD MATRIX (444 × 348) ═══ -->
+  <rect x="24" y="60" width="444" height="356" rx="6" fill="rgba(45,49,66,0.02)" stroke="#2d3142" stroke-width="1.2"/>
+  <rect x="32" y="56" width="136" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="100" y="65" font-family="'Geist Mono', monospace" font-size="7" fill="rgba(45,49,66,0.50)" text-anchor="middle" letter-spacing="0.12em">9-ZONE PARTITION (19×19)</text>
+
+  <!-- Coordinate Column Headers (A-F, G-N, O-T) -->
+  <text x="102" y="78" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">c &lt; 6 (A–F)</text>
+  <text x="246" y="78" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">c ∈ [6, 12] (G–N)</text>
+  <text x="390" y="78" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">c &gt; 12 (O–T)</text>
+
+  <!-- Coordinate Row Labels (19-14, 13-7, 6-1) -->
+  <text x="28" y="142" font-family="'Geist Mono', monospace" font-size="6.5" fill="#7a8399" text-anchor="start" transform="rotate(-90 28,142)">r &lt; 6</text>
+  <text x="28" y="250" font-family="'Geist Mono', monospace" font-size="6.5" fill="#7a8399" text-anchor="start" transform="rotate(-90 28,250)">r ∈ [6, 12]</text>
+  <text x="28" y="358" font-family="'Geist Mono', monospace" font-size="6.5" fill="#7a8399" text-anchor="start" transform="rotate(-90 28,358)">r &gt; 12</text>
+
+  <!-- ── ROW 1: TOP ZONES (y=84, h=96) ── -->
+  <!-- Top-Left Corner -->
+  <rect x="36" y="84" width="132" height="96" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="44" y="90" width="36" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="62" y="99" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">CORNER</text>
+  <text x="102" y="122" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Top-Left Corner</text>
+  <text x="102" y="138" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &lt; 6, r &lt; 6</text>
+  <text x="102" y="154" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">A19–F14 · 6×6</text>
+  <text x="102" y="168" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: Top, Left, Center</text>
+
+  <!-- Top Side -->
+  <rect x="180" y="84" width="132" height="96" rx="4" fill="rgba(45,49,66,0.03)" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="188" y="90" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="202" y="99" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">SIDE</text>
+  <text x="246" y="122" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Top Side</text>
+  <text x="246" y="138" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c ∈ [6, 12], r &lt; 6</text>
+  <text x="246" y="154" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">G19–N14 · 7×6</text>
+  <text x="246" y="168" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: TL, TR, Center</text>
+
+  <!-- Top-Right Corner -->
+  <rect x="324" y="84" width="132" height="96" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="332" y="90" width="36" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="350" y="99" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">CORNER</text>
+  <text x="390" y="122" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Top-Right Corner</text>
+  <text x="390" y="138" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &gt; 12, r &lt; 6</text>
+  <text x="390" y="154" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">O19–T14 · 6×6</text>
+  <text x="390" y="168" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: Top, Right, Center</text>
+
+  <!-- ── ROW 2: MIDDLE ZONES (y=188, h=104) ── -->
+  <!-- Left Side -->
+  <rect x="36" y="188" width="132" height="104" rx="4" fill="rgba(45,49,66,0.03)" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="44" y="194" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="58" y="203" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">SIDE</text>
+  <text x="102" y="226" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Left Side</text>
+  <text x="102" y="242" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &lt; 6, r ∈ [6, 12]</text>
+  <text x="102" y="258" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">A13–F7 · 6×7</text>
+  <text x="102" y="274" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: TL, BL, Center</text>
+
+  <!-- Center (FOCAL NODE) -->
+  <rect x="180" y="188" width="132" height="104" rx="4" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+  <rect x="188" y="194" width="56" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.50)" stroke-width="0.8"/>
+  <text x="216" y="203" font-family="'Geist Mono', monospace" font-size="6.5" fill="#eb6c36" text-anchor="middle" letter-spacing="0.06em">8-WAY HUB</text>
+  <text x="246" y="226" font-family="'Geist', sans-serif" font-size="11.5" font-weight="600" fill="#eb6c36" text-anchor="middle">Center Zone</text>
+  <text x="246" y="242" font-family="'Geist Mono', monospace" font-size="8" fill="#2d3142" text-anchor="middle">c ∈ [6, 12], r ∈ [6, 12]</text>
+  <text x="246" y="258" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75" text-anchor="middle">G13–N7 · 7×7 Tengen</text>
+  <text x="246" y="274" font-family="'Geist Mono', monospace" font-size="6.5" font-weight="600" fill="#eb6c36" text-anchor="middle">★ Adjacent to ALL 8 Zones</text>
+
+  <!-- Right Side -->
+  <rect x="324" y="188" width="132" height="104" rx="4" fill="rgba(45,49,66,0.03)" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="332" y="194" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="346" y="203" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">SIDE</text>
+  <text x="390" y="226" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Right Side</text>
+  <text x="390" y="242" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &gt; 12, r ∈ [6, 12]</text>
+  <text x="390" y="258" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">O13–T7 · 6×7</text>
+  <text x="390" y="274" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: TR, BR, Center</text>
+
+  <!-- ── ROW 3: BOTTOM ZONES (y=300, h=96) ── -->
+  <!-- Bottom-Left Corner -->
+  <rect x="36" y="300" width="132" height="96" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="44" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="62" y="315" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">CORNER</text>
+  <text x="102" y="338" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Bottom-Left Corner</text>
+  <text x="102" y="354" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &lt; 6, r &gt; 12</text>
+  <text x="102" y="370" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">A6–F1 · 6×6</text>
+  <text x="102" y="384" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: Bottom, Left, Center</text>
+
+  <!-- Bottom Side -->
+  <rect x="180" y="300" width="132" height="96" rx="4" fill="rgba(45,49,66,0.03)" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="188" y="306" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="202" y="315" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">SIDE</text>
+  <text x="246" y="338" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Bottom Side</text>
+  <text x="246" y="354" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c ∈ [6, 12], r &gt; 12</text>
+  <text x="246" y="370" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">G6–N1 · 7×6</text>
+  <text x="246" y="384" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: BL, BR, Center</text>
+
+  <!-- Bottom-Right Corner -->
+  <rect x="324" y="300" width="132" height="96" rx="4" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <rect x="332" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
+  <text x="350" y="315" font-family="'Geist Mono', monospace" font-size="6.5" fill="#4f5d75" text-anchor="middle" letter-spacing="0.06em">CORNER</text>
+  <text x="390" y="338" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142" text-anchor="middle">Bottom-Right Corner</text>
+  <text x="390" y="354" font-family="'Geist Mono', monospace" font-size="8" fill="#4f5d75" text-anchor="middle">c &gt; 12, r &gt; 12</text>
+  <text x="390" y="370" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399" text-anchor="middle">O6–T1 · 6×6</text>
+  <text x="390" y="384" font-family="'Geist Mono', monospace" font-size="6.5" fill="#2e5aa8" text-anchor="middle">adj: Bottom, Right, Center</text>
+
+  <!-- ═══ RIGHT: SPECIFICATION CARDS ═══ -->
+
+  <!-- Card 1: Tenuki Evaluation Criteria -->
+  <rect x="480" y="60" width="256" height="172" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+  <rect x="488" y="56" width="108" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="542" y="65" font-family="'Geist Mono', monospace" font-size="7" fill="#eb6c36" text-anchor="middle" letter-spacing="0.12em">DETECTION CRITERIA</text>
+
+  <text x="496" y="84" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142">Tenuki Decision Rules</text>
+  <text x="496" y="98" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">evaluateTenuki(curr, prev, ...)</text>
+
+  <line x1="492" y1="106" x2="724" y2="106" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+
+  <!-- Rule 1 -->
+  <circle cx="502" cy="120" r="3" fill="#eb6c36"/>
+  <text x="512" y="123" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">1. Manhattan Distance</text>
+  <text x="512" y="135" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">dist = |Δc| + |Δr| ≥ 5</text>
+
+  <!-- Rule 2 -->
+  <circle cx="502" cy="150" r="3" fill="#2e5aa8"/>
+  <text x="512" y="153" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">2. Non-Adjacent Zone</text>
+  <text x="512" y="165" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">areZonesAdjacent(z1, z2) == false</text>
+
+  <!-- Rule 3 -->
+  <circle cx="502" cy="180" r="3" fill="#4f5d75"/>
+  <text x="512" y="183" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">3. No Local Interaction</text>
+  <text x="512" y="195" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">interactsLocally() == false</text>
+
+  <!-- Rule 4 -->
+  <circle cx="502" cy="210" r="3" fill="#f59e0b"/>
+  <text x="512" y="213" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">4. Atari Blunder Guard</text>
+  <text x="512" y="224" font-family="'Geist Mono', monospace" font-size="7" fill="#f59e0b">hasUrgentAtari() → Tenuki (Blunder)</text>
+
+  <!-- Card 2: Adjacency Topology Rules -->
+  <rect x="480" y="244" width="256" height="172" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+  <rect x="488" y="240" width="108" height="12" rx="2" fill="#f5f5f5"/>
+  <text x="542" y="249" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75" text-anchor="middle" letter-spacing="0.12em">TOPOLOGY MAPPING</text>
+
+  <text x="496" y="268" font-family="'Geist', sans-serif" font-size="11" font-weight="600" fill="#2d3142">Zone Adjacency Rules</text>
+  <text x="496" y="282" font-family="'Geist Mono', monospace" font-size="7.5" fill="#7a8399">areZonesAdjacent(currZone, prevZone)</text>
+
+  <line x1="492" y1="290" x2="724" y2="290" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+
+  <!-- Center Rule -->
+  <text x="496" y="306" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#eb6c36">Center Hub</text>
+  <text x="496" y="318" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">Adjacent to ALL 8 surrounding zones</text>
+
+  <!-- Side Rule -->
+  <text x="496" y="336" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">Sides (4 Zones)</text>
+  <text x="496" y="348" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">Adjacent to 2 corner neighbors + Center</text>
+
+  <!-- Corner Rule -->
+  <text x="496" y="366" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#2d3142">Corners (4 Zones)</text>
+  <text x="496" y="378" font-family="'Geist Mono', monospace" font-size="7" fill="#4f5d75">Adjacent to 2 side neighbors + Center</text>
+
+  <!-- Diagonals / Tenuki -->
+  <text x="496" y="396" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#7a8399">Opposite / Diagonal Zones</text>
+  <text x="496" y="408" font-family="'Geist Mono', monospace" font-size="7" fill="#7a8399">Non-adjacent → Tenuki trigger (e.g. TL → BR)</text>
+
+  <!-- ═══ BOTTOM: HORIZONTAL LEGEND STRIP ═══ -->
+  <line x1="24" y1="432" x2="736" y2="432" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+  <text x="24" y="452" font-family="'Geist Mono', monospace" font-size="7.5" fill="#4f5d75" letter-spacing="0.14em">LEGEND</text>
+
+  <!-- Legend 1: Corner -->
+  <rect x="88" y="443" width="14" height="12" rx="2" fill="#ffffff" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="108" y="453" font-family="'Geist', sans-serif" font-size="8.5" fill="#2d3142">Corner Zone (6×6)</text>
+
+  <!-- Legend 2: Side -->
+  <rect x="220" y="443" width="14" height="12" rx="2" fill="rgba(45,49,66,0.03)" stroke="#bfc0c0" stroke-width="1"/>
+  <text x="240" y="453" font-family="'Geist', sans-serif" font-size="8.5" fill="#2d3142">Side Zone (6×7 / 7×6)</text>
+
+  <!-- Legend 3: Center -->
+  <rect x="368" y="443" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+  <text x="388" y="453" font-family="'Geist', sans-serif" font-size="8.5" font-weight="600" fill="#eb6c36">Center Hub (7×7, 8-way)</text>
+
+  <!-- Legend 4: Tenuki Trigger -->
+  <circle cx="536" cy="449" r="4" fill="#22c55e"/>
+  <text x="546" y="453" font-family="'Geist', sans-serif" font-size="8.5" fill="#2d3142">Tenuki Move (Green Badge, Dist ≥ 5)</text>
+
+  <!-- Legend 5: Blunder -->
+  <circle cx="676" cy="449" r="4" fill="#f59e0b"/>
+  <text x="686" y="453" font-family="'Geist', sans-serif" font-size="8.5" fill="#f59e0b">Ignored Atari</text>
+</svg>
+</body>
+</html>

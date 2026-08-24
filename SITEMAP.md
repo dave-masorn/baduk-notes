@@ -3036,18 +3036,24 @@ Mixed SGF files, PNGs, and reference images for testing.
 
 The board is divided into 9 zones for Tenuki evaluation:
 
-```
-┌───────────────────┬───────────────────┬───────────────────┐
-│  Top-Left Corner   │   Top Side        │  Top-Right Corner │
-│  (c<6, r<6)       │  (c∈[6,12], r<6)  │  (c>12, r<6)     │
-├───────────────────┼───────────────────┼───────────────────┤
-│  Left Side         │   Center          │  Right Side       │
-│  (c<6, r∈[6,12])  │  (c∈[6,12], r∈[6,12]) │ (c>12, r∈[6,12]) │
-├───────────────────┼───────────────────┼───────────────────┤
-│  Bottom-Left       │   Bottom Side     │  Bottom-Right     │
-│  Corner            │  (c∈[6,12], r>12) │  Corner           │
-│  (c<6, r>12)      │                   │  (c>12, r>12)     │
-└───────────────────┴───────────────────┴───────────────────┘
-```
+<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden', margin: '1.5rem 0' }}>
+  <iframe src="/tech-log-dist/diagrams/layout-tenuki-zones.html" width="100%" height="480" style={{ border: 'none', display: 'block' }} title="Tenuki Detection Zones — 9 board partition zones and adjacency" />
+</div>
 
-Adjacent zones are: corners adjacent to their two sides; sides adjacent to their two corners; center adjacent to all 8 zones.
+| Zone | Column Range (`c`) | Row Range (`r`) | Coordinates (19×19) | Adjacency |
+| --- | --- | --- | --- | --- |
+| **Top-Left Corner** | `c < 6` | `r < 6` | A19–F14 (6×6) | Top Side, Left Side, Center |
+| **Top Side** | `c ∈ [6, 12]` | `r < 6` | G19–N14 (7×6) | Top-Left Corner, Top-Right Corner, Center |
+| **Top-Right Corner** | `c > 12` | `r < 6` | O19–T14 (6×6) | Top Side, Right Side, Center |
+| **Left Side** | `c < 6` | `r ∈ [6, 12]` | A13–F7 (6×7) | Top-Left Corner, Bottom-Left Corner, Center |
+| **Center Zone** | `c ∈ [6, 12]` | `r ∈ [6, 12]` | G13–N7 (7×7 Tengen) | **Adjacent to ALL 8 surrounding zones** |
+| **Right Side** | `c > 12` | `r ∈ [6, 12]` | O13–T7 (6×7) | Top-Right Corner, Bottom-Right Corner, Center |
+| **Bottom-Left Corner** | `c < 6` | `r > 12` | A6–F1 (6×6) | Bottom Side, Left Side, Center |
+| **Bottom Side** | `c ∈ [6, 12]` | `r > 12` | G6–N1 (7×6) | Bottom-Left Corner, Bottom-Right Corner, Center |
+| **Bottom-Right Corner** | `c > 12` | `r > 12` | O6–T1 (6×6) | Bottom Side, Right Side, Center |
+
+**Tenuki Detection Criteria (`evaluateTenuki`):**
+1. **Manhattan Distance**: `|Δc| + |Δr| ≥ 5` between the current move and the previous move.
+2. **Non-Adjacent Zone**: `areZonesAdjacent(currZone, prevZone) === false`.
+3. **No Local Interaction**: `interactsLocally() === false` (no contact with friendly or opponent virtual stone clusters).
+4. **Urgent Atari Blunder Guard**: If `hasUrgentAtari()` is true on the opponent's previous move, classified as `Tenuki (Blunder - Ignored Urgent Atari)`.
