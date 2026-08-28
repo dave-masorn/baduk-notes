@@ -205,17 +205,25 @@ async function main() {
       },
       bgPanel() {
         const el = document.getElementById('ib-canvas-bg-color');
+        const toggle = document.getElementById('ib-bg-solid');
         const trigger = document.querySelector('#acc-board');
         const titleEl = trigger ? trigger.closest('.accordion-item').querySelector('.accordion-trigger') : null;
         return {
           title: titleEl ? titleEl.textContent.trim() : null,
           pickerVal: el ? el.value : null,
+          toggleOn: toggle ? !!toggle.checked : null,
           resetBtn: !!document.querySelector('button[data-section="bg"]')
         };
       },
       setBg(color) {
         const el = document.getElementById('ib-canvas-bg-color');
         el.value = color;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      },
+      setBgSolid(on) {
+        const el = document.getElementById('ib-bg-solid');
+        el.checked = !!on;
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
@@ -748,12 +756,15 @@ async function main() {
   // ── S16: Canvas BG (c-BG) picker + renderer scoping (v0.1.071) ──────────
   // The c-BG control only appears for the initial/study views; the renderer honors
   // bg.color ONLY on those two canvases. Export + scoring stay white.
+  // v0.1.098+: the BG got an ON/OFF toggle like Border — OFF (default) is 100%
+  // transparent (see through), ON fills the picked color.
   await evalIn(page, () => __h.clickBtn('btn-close-scoring-modal'));
   await page.evaluate(() => new Promise(r => setTimeout(r, 100)));
   {
     const p = await evalIn(page, () => __h.bgPanel());
     check('S16 panel section titled Board, Border & BG', p.title === 'Board, Border & BG', p.title);
     check('S16 c-BG picker exists with white default', p.pickerVal === '#ffffff', p.pickerVal);
+    check('S16 c-BG toggle present and OFF by default (transparent)', p.toggleOn === false, p.toggleOn);
     check('S16 c-BG reset button present', p.resetBtn === true);
   }
   {
@@ -763,14 +774,16 @@ async function main() {
       export: __h.renderFill('export-tmp', false, false, true),
       scoring: __h.scoringFill()
     }));
-    check('S16 default initial render fills white', r.initial === '#ffffff', r.initial);
-    check('S16 default study render fills white', r.study === '#ffffff', r.study);
+    // Off by default => no independent BG fill; the first canvas fill is the board border.
+    check('S16 default initial render does NOT fill a BG color', r.initial === '#dcb35c', r.initial);
+    check('S16 default study render does NOT fill a BG color', r.study === '#dcb35c', r.study);
     check('S16 export render ignores bg (white)', r.export === '#ffffff', r.export);
     check('S16 scoring render keeps its own board color', !!r.scoring && r.scoring !== '#ffffff', r.scoring);
     // stash the pre-bg scoring fill for the scoping comparison below
     await evalIn(page, (v) => { window.__s16ScoringDefault = v; }, r.scoring);
   }
-  // Set bg while the panel targets the initial view.
+  // Turn BG ON and set a color while the panel targets the initial view.
+  await evalIn(page, () => __h.setBgSolid(true));
   await evalIn(page, () => __h.setBg('#123456'));
   await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
   {
@@ -787,7 +800,7 @@ async function main() {
     const scoringDefault = await evalIn(page, () => window.__s16ScoringDefault);
     check('S16 initial style.bg.color updated by picker', styleBg === '#123456', styleBg);
     check('S16 initial render fills the chosen bg', r.initial === '#123456', r.initial);
-    check('S16 study render unaffected (independent style)', r.study === '#ffffff', r.study);
+    check('S16 study render unaffected (independent style)', r.study === '#dcb35c', r.study);
     check('S16 export render still white (scoped out)', r.export === '#ffffff', r.export);
     check('S16 scoring render unchanged by bg', r.scoring === scoringDefault, r.scoring);
   }
@@ -798,7 +811,7 @@ async function main() {
   {
     const p = await evalIn(page, () => __h.bgPanel());
     const r = await evalIn(page, () => __h.renderFill('go-board-canvas-initial', true, false, false));
-    check('S16 initial-view section reset restores white', p.pickerVal === '#ffffff' && r === '#ffffff', `${p.pickerVal}/${r}`);
+    check('S16 initial-view section reset returns to OFF/transparent', p.toggleOn === false && r === '#dcb35c', `${p.toggleOn}/${r}`);
   }
   // Activate the study view: the same picker now targets studyBoardStyle.
   await evalIn(page, () => {
@@ -809,6 +822,7 @@ async function main() {
     const view = await evalIn(page, () => window.getCurrentBoardView());
     check('S16 panel targets the study view', view === '#go-board-canvas-study', view);
   }
+  await evalIn(page, () => __h.setBgSolid(true));
   await evalIn(page, () => __h.setBg('#123456'));
   await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
   {
@@ -822,9 +836,9 @@ async function main() {
     });
     check('S16 study style.bg.color updated by picker', styleBg === '#123456', styleBg);
     check('S16 study render fills the chosen bg', r.study === '#123456', r.study);
-    check('S16 initial render keeps its own white', r.initial === '#ffffff', r.initial);
+    check('S16 initial render keeps its own transparent', r.initial === '#dcb35c', r.initial);
   }
-  // Section reset restores the default white on the current (study) view.
+  // Section reset restores the default (OFF/transparent) on the current (study) view.
   await evalIn(page, () => document.querySelector('button[data-section="bg"]').click());
   await page.evaluate(() => new Promise(r => setTimeout(r, 150)));
   {
@@ -833,9 +847,10 @@ async function main() {
       initial: __h.renderFill('go-board-canvas-initial', true, false, false)
     }));
     const p = await evalIn(page, () => __h.bgPanel());
-    check('S16 study bg reset restores white render', r.study === '#ffffff', r.study);
+    check('S16 study bg reset restores OFF/transparent render', r.study === '#dcb35c', r.study);
     check('S16 picker resets to #ffffff', p.pickerVal === '#ffffff', p.pickerVal);
-    check('S16 initial render untouched by study reset', r.initial === '#ffffff', r.initial);
+    check('S16 toggle resets to OFF', p.toggleOn === false, p.toggleOn);
+    check('S16 initial render untouched by study reset', r.initial === '#dcb35c', r.initial);
   }
   // Restore the study overlay so later scenarios start clean.
   await evalIn(page, () => {

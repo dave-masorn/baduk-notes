@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.009
+version: 0.2.010
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,25 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.010 — Board BG Transparent Toggle
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **ui** | `feat` | Board BG ON/OFF Toggle (mirrors Board's Border): the BG row in the Board &amp; BG inspector section gains a switch — **OFF (default) = 100% transparent** canvas behind the board (see through to the page behind), **ON = fill with the picked color**. The color picker and code badge dim when OFF. |
+
+##### Details
+1. **Style key**: `DEFAULT_INITIAL_BOARD_STYLE.bg` gains `solid: false` (OFF/transparent default). The checkbox (`#ib-bg-solid`) is wired through `bindStyleInputsEvents` as `{ section: 'bg', key: 'solid', isCheckbox: true }`, `populateStyleInputs` sets it, and `updateBgUI()` refreshes the ON/OFF label + dims the color controls — the same pattern as the Border Override toggle.
+2. **Rendering**: `renderBoardToCtx` fills the canvas with `style.bg.color` only when the main/study board BG is solid ON; when OFF the main/study canvas stays transparent (no fill) so the page behind shows through. The export preview and scoring board keep their fixed canvas fills unchanged.
+3. **Reset**: the existing `data-section="bg"` reset button restores OFF/transparent, and both the initial and study views keep independent toggle state.
+
+##### Verification
+- `npm run test:all` green — 7 suites, 0 failures (replace-click 10, replace-fix 7, rearrange 6, msm 110, territory-freeze 22, bm-edge-mask 22, white-rim 7, stone-offset 18). S16 updated to assert the new transparent-by-default render, the OFF/ON toggle, section reset, and per-view (initial/study) independence.
+- `node --check` clean on `annotation_v4.js` and the test harness. `index.html` cache-busters to `v=0.2.010`.
+
+---
 
 ### v0.2.009 — SGF Sanitizer Whitespace Scanner, Variation Sequence Addition & Branch Pinning
 

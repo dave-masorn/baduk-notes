@@ -2466,10 +2466,15 @@
                     <input type="number" id="ib-border-size" min="0" max="100" value="100" class="style-num-input">
                     <span class="style-unit">%</span>
                   </div>
-                  <div class="style-row" style="border-top:1px dashed rgba(96,165,250,0.15);padding-top:8px;margin-top:4px;" title="Canvas BG — the canvas color behind the board and below the coordinates (main &amp; study boards only)">
+                  <div class="style-row" style="border-top:1px dashed rgba(96,165,250,0.15);padding-top:8px;margin-top:4px;" title="Board BG — ON: fill the canvas behind &amp; below the board with the picked color · OFF (default): 100% transparent, see through (main &amp; study boards only)">
                     <span class="style-label-wide">BG</span>
-                    <div class="color-picker-wrapper" style="margin-left:6px;"><input type="color" id="ib-canvas-bg-color" value="#ffffff"></div>
-                    <span id="ib-canvas-bg-color-val" class="color-code-val">#FFFFFF</span>
+                    <label class="switch" style="transform:scale(0.72);transform-origin:left center;flex-shrink:0;margin-left:6px;" title="Board BG Toggle — ON: use the picked BG color · OFF (default): 100% transparent, see through">
+                      <input type="checkbox" id="ib-bg-solid">
+                      <span class="slider round"></span>
+                    </label>
+                    <span id="ib-bg-transparent-label" style="font-size:0.62rem;font-weight:700;flex-shrink:0;width:26px;text-align:center;color:#f87171;">OFF</span>
+                    <div class="color-picker-wrapper" id="ib-bg-color-wrap" style="margin-left:6px;"><input type="color" id="ib-canvas-bg-color" value="#ffffff"></div>
+                    <span id="ib-canvas-bg-color-val" class="color-code-val" style="opacity:0.35;">#FFFFFF</span>
                   </div>
               </div>
             </div>
@@ -2688,6 +2693,6 @@
     <script defer src="move-term-detector.js?v=0.2.009"></script>
     <script defer src="phase-detector.js?v=0.2.009"></script>
     <script defer src="game-tree.js?v=0.2.009"></script>
-    <script defer src="annotation_v4.js?v=0.2.009"></script>
+    <script defer src="annotation_v4.js?v=0.2.010"></script>
 </body>
 </html>

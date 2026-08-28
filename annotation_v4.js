@@ -5677,7 +5677,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             return { cx, cy };
         };
 
-        // 1. Draw canvas background color. The Canvas BG (c-BG) control applies ONLY to the
+        // 1. Draw canvas background color. The BG control applies ONLY to the
         // main (#go-board-canvas-initial) and study (#go-board-canvas-study) boards — the
         // export preview and the scoring board keep their fixed white fill, so the picked
         // color is read only for those two canvases.
@@ -5685,8 +5685,15 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         if ((isInitialCanvas || isStudyMode) && style && style.bg && style.bg.color) {
             canvasBgColor = style.bg.color;
         }
-        ctx.fillStyle = canvasBgColor;
-        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        // BG solid ON fills the canvas with the picked color; solid OFF (default) leaves the
+        // main/study canvas 100% transparent so whatever sits behind the board (the page)
+        // shows through. The export preview and scoring board keep their fixed canvas fill.
+        const isMainOrStudy = isInitialCanvas || isStudyMode;
+        const bgSolid = isMainOrStudy && style && style.bg && style.bg.solid === true;
+        if (!isMainOrStudy || bgSolid) {
+            ctx.fillStyle = canvasBgColor;
+            ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        }
 
         // 1.1 Draw board background wood color or image
         let currentBoardBg = '#dcb35c';
@@ -14882,7 +14889,9 @@ const DEFAULT_INITIAL_BOARD_STYLE = {
         // Canvas background behind the board and below the coordinates. Rendered ONLY for the
         // main (#go-board-canvas-initial) and study (#go-board-canvas-study) boards — the
         // export modal and scoring board keep their own fixed white/dark canvas fills.
-        color: '#ffffff'
+        // `solid` OFF (default) = 100% transparent BG (see through); ON = fill with `color`.
+        color: '#ffffff',
+        solid: false
     },
     grid: {
         lineColor: '#1c1917',
@@ -15078,6 +15087,8 @@ function populateStyleInputs() {
     
     // Canvas BG (behind the board, below coordinates)
     setInputVal('ib-canvas-bg-color', style.bg && style.bg.color ? style.bg.color : '#ffffff');
+    setInputVal('ib-bg-solid', !!(style.bg && style.bg.solid === true), true);
+    updateBgUI();
     
     // Grids
     setInputVal('ib-grid-line-color', style.grid.lineColor);
@@ -15132,6 +15143,22 @@ function updateBorderOverrideUI() {
     const wrap = document.getElementById('ib-border-color-wrap');
     if (wrap) wrap.style.opacity = on ? '1' : '0.35';
     const valBadge = document.getElementById('ib-border-color-val');
+    if (valBadge) valBadge.style.opacity = on ? '1' : '0.35';
+}
+
+// Reflect the Board BG toggle state in the UI: ON shows the picked BG color (controls
+// active), OFF (default) means the BG is 100% transparent — the user sees through.
+function updateBgUI() {
+    const el = document.getElementById('ib-bg-solid');
+    const on = el ? el.checked : false;
+    const label = document.getElementById('ib-bg-transparent-label');
+    if (label) {
+        label.textContent = on ? 'ON' : 'OFF';
+        label.style.color = on ? '#34d399' : '#f87171';
+    }
+    const wrap = document.getElementById('ib-bg-color-wrap');
+    if (wrap) wrap.style.opacity = on ? '1' : '0.35';
+    const valBadge = document.getElementById('ib-canvas-bg-color-val');
     if (valBadge) valBadge.style.opacity = on ? '1' : '0.35';
 }
 
@@ -15194,6 +15221,7 @@ function bindStyleInputsEvents() {
         { id: 'ib-border-override', section: 'border', key: 'override', isCheckbox: true },
         
         { id: 'ib-canvas-bg-color', section: 'bg', key: 'color' },
+        { id: 'ib-bg-solid', section: 'bg', key: 'solid', isCheckbox: true },
         
         { id: 'ib-grid-line-color', section: 'grid', key: 'lineColor' },
         { id: 'ib-grid-line-size', section: 'grid', key: 'lineSize', isNum: true },
@@ -15284,6 +15312,10 @@ function bindStyleInputsEvents() {
         if (item.id === 'ib-border-override') {
             el.addEventListener('input', updateBorderOverrideUI);
             el.addEventListener('change', updateBorderOverrideUI);
+        }
+        if (item.id === 'ib-bg-solid') {
+            el.addEventListener('input', updateBgUI);
+            el.addEventListener('change', updateBgUI);
         }
         
         const attachSliderReset = (targetElement) => {
