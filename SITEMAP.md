@@ -37,7 +37,7 @@ How the application files interact — UI shell, script load order, scoring pipe
 | Scope | Type | Description |
 | --- | --- | --- |
 | **ui** | `feat` | Board BG ON/OFF Toggle (mirrors Board's Border): the BG row in the Board &amp; BG inspector section gains a switch — **OFF (default) = 100% transparent** canvas behind the board (see through to the page behind), **ON = fill with the picked color**. The color picker and code badge dim when OFF. |
-| **ui** | `feat` | Right-Panel Shadow Rebalanced: the main app `.right-panel` drops its box-shadow (now matches the left panels), and the smaller shadow is removed from `.study-modal-right` — the study-modal board area no longer carries a box-shadow. |
+| **ui** | `feat` | Right-Panel Shadow Scoped to Study Mode: the main app `.right-panel` drops its box-shadow (now matches the left panels), and the full shadow (`-8px 0 24px`, `-2px 0 8px`, `0 10px 30px -10px`) applies only to the study modal's right panel, gated by `.study-mode-active .study-modal-right` so it's visible only while the user is on the Study Mode. |
 
 ##### Details
 1. **Style key**: `DEFAULT_INITIAL_BOARD_STYLE.bg` gains `solid: false` (OFF/transparent default). The checkbox (`#ib-bg-solid`) is wired through `bindStyleInputsEvents` as `{ section: 'bg', key: 'solid', isCheckbox: true }`, `populateStyleInputs` sets it, and `updateBgUI()` refreshes the ON/OFF label + dims the color controls — the same pattern as the Border Override toggle.
