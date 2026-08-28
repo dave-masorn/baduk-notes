@@ -804,10 +804,10 @@ body {
     aspect-ratio: 1;
     background: transparent;
     border-radius: var(--radius-md);
-    box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.25);
+    box-shadow: none;
     overflow: hidden;
     position: relative;
-    border: 1px solid #b89648;
+    border: none;
 }
 
 #go-board-canvas-initial,
