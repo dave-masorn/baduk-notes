@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.016
+version: 0.2.017
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.017 — Split the Board Rendering Pipeline Out of the Monolith
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **arch** | `refactor` | **`annotation_v4.js` split (pass 2)**: Extracted the entire board-rendering pipeline into its own `board-renderer.js` (~3,583 lines) — canvas tools (`getGoTerm`, `getCanvasCoords`, `getSelectionRect`, `handleMouseDown/Move/Up`, `applyToolToCell`, `flipBoard180`), the board renderer (`drawBoard`, `renderBoardToCtx`), the stone/texture library (`drawGoStone`, hamaguri/slate textures), cell-content drawing (`drawCellContent`) and the rich-text renderer (`applyFormatting`, `parseRichText`, `wrapRichText`, `drawRichTextLine`, `drawCenteredRichText`). |
+
+##### Details
+`board-renderer.js` is a pure function-declaration module with no top-level execution effects, so it evaluates safely before `annotation_v4.js` in the defer chain. It shares the global lexical scope (reading `state`/`elements`/geometry `const`s and calling `window.*` helpers) only at call time, so load order stays safe. `annotation_v4.js` shrank from 19,343 to 15,766 lines. `updateSaveRecGameButton()` is still reachable unreserved from the moved code because `setupEventListeners` continues to publish it on `window` during init.
+
+##### Verification
+- `node --check` clean on `annotation_v4.js` and `board-renderer.js`.
+- Existing study-dir-store + setup-flow tests green; board-render smoke check on the served app.
+- Script cache busters synced to `v=0.2.017`.
+
+---
 
 ### v0.2.016 — Split Study Record Storage Out of the Monolith
 
