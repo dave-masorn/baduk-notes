@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.012
+version: 0.2.013
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,21 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.013 — Study Session Create Render Pipeline Fix
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study** | `fix` | **Immediate Board Render on Record Creation**: Fixed canvas blanking and scaling desync when dropping an SGF file and clicking "Yes" to record by ensuring `applyAppSettings`, `drawBoard`, and `applyCustomPanelState` execute cleanly immediately upon session creation. |
+| **rendering** | `fix` | **Guarded Wrapper Sizing in loadSGF**: Prevented premature canvas clear and coordinate desync during study session loading by wrapping initial wrapper sizing in `!state.isSgfLoading`. |
+
+##### Verification
+- Verified end-to-end drop $\rightarrow$ record $\rightarrow$ move 0 and move 2 rendering in headless browser test (`boardStoneCount: 1` at move 0, `3` at move 2).
+- `node --check` clean on `annotation_v4.js`. Script cache busters synced to `v=0.2.013`.
+
+---
 
 ### v0.2.012 — StudyRecordDB IndexedDB Persistence & Quota Resolution
 

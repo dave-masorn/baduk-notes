@@ -3880,6 +3880,16 @@ function setupEventListeners() {
                 updateBoardWrapperSize('#go-board-canvas-initial', state.gameBoardStyle.board.size);
             }
 
+            if (newRec.settings) {
+                applyAppSettings(newRec.settings);
+            }
+            if (typeof drawBoard === 'function') {
+                drawBoard();
+            }
+            if (typeof applyCustomPanelState === 'function') {
+                applyCustomPanelState();
+            }
+
             // Update totalMoves with actual parsed main line move count after loadSGF
             const updatedRec = StudyRecordDB.getRecord(newRec.id);
             if (updatedRec) {
@@ -13768,18 +13778,14 @@ function loadSGF(sgfString) {
     if (!sgfString || typeof sgfString !== 'string') return;
     saveHistoryState('load-sgf');
 
-    // A freshly loaded game is not tied to a study session, so drop the active-session
-    // game style and reset the main board to the page-load initial style/size.
-    state.gameBoardStyle = null;
-    // Detach any previously-active study record: once DIFFERENT content is
-    // loaded, autoSaveActiveStudySettings() would otherwise serialize this
-    // new game INTO the last-opened record and clobber it. (Resume is safe:
-    // it sets activeStudyId then wraps loadSGF in isSgfLoading=true.)
+    // A freshly loaded game (not from study session) drops the active-session
+    // game style and resets the main board to the page-load initial style/size.
     if (!state.isSgfLoading) {
         state.activeStudyId = null;
-    }
-    if (state.initialBoardStyle && state.initialBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
-        updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
+        state.gameBoardStyle = null;
+        if (state.initialBoardStyle && state.initialBoardStyle.board && typeof updateBoardWrapperSize === 'function') {
+            updateBoardWrapperSize('#go-board-canvas-initial', state.initialBoardStyle.board.size);
+        }
     }
 
     state.board = Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => ({
