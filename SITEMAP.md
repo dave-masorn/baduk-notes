@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.010
+version: 0.2.012
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,22 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.012 — StudyRecordDB IndexedDB Persistence & Quota Resolution
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `fix` | **IndexedDB Backing for StudyRecordDB**: Study records are now stored in an in-memory cache backed by IndexedDB (`BadukNotesDB` $\rightarrow$ `study_records`), completely eliminating `QuotaExceededError` when saving large games, SGF collections, or custom board styles. |
+| **storage** | `feat` | **Automatic Migration & Synchronous Memory Access**: On first startup, existing localStorage study sessions migrate seamlessly into IndexedDB. `StudyRecordDB.getAllRecords()` and `getRecord()` remain instantaneous via synchronized in-memory caching. |
+| **study** | `fix` | **Study Record Persistence across Hard Reload**: Dropping an SGF file, recording it, and navigating moves now persists 100% reliably to disk and reloads on fresh browser page loads. |
+
+##### Verification
+- Verified end-to-end drop $\rightarrow$ record $\rightarrow$ move $\rightarrow$ page reload in headless browser test (`allRecordsCount: 1`, move index and SGF fully retained).
+- `node --check` clean on `annotation_v4.js`. Script cache busters synced to `v=0.2.012`.
+
+---
 
 ### v0.2.010 — Board BG Transparent Toggle
 
