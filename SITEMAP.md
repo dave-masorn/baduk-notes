@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.015
+version: 0.2.016
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,26 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.016 — Split Study Record Storage Out of the Monolith
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **arch** | `refactor` | **`annotation_v4.js` split begins (pass 1 of safe wins)**: Extracted the entire study-record storage subsystem into its own `study-storage.js` (~730 lines) — `formatStudyAccessTime`, `StudyRecordDB` (IndexedDB/localStorage engine), `StudyDirStore` (File System Access API folder engine) and the directory-setup UI (`connectStudyDirectory`, `initStudyDirStorage`, `wireStudyDirSetupUI`, etc.). |
+| **arch** | `feat` | `window.formatStudyAccessTime` is now exported at the top of `study-storage.js`, so the record-dating helper is available before the deferred event-hub runs (previously set inside the `setupEventListeners` closure). |
+| **arch** | `chore` | `study-storage.js` added to `index.html` as a `defer` script between `game-tree.js` and `annotation_v4.js`, keeping load order and all `window.*` globals intact. This is the first step toward editing features without wading through the 20k-line monolith. |
+
+##### Details
+The storage block (formerly `annotation_v4.js` lines 1656–2385) moved byte-for-byte into `study-storage.js`; `annotation_v4.js` shrank from 20,069 to 19,343 lines. No behavior change: every `window.*` export (`window.StudyRecordDB`, `window.StudyDirStore`, `window.formatStudyAccessTime`) and all guarded cross-references (`renderResumeStudyTable`, `updateSaveRecGameButton` via `typeof` checks) are preserved, and `wireStudyDirSetupUI()` is still called from `setupEventListeners`. Defer script order guarantees it evaluates before `annotation_v4.js`.
+
+##### Verification
+- `node --check` clean on `annotation_v4.js` and `study-storage.js`.
+- `test/verify_study_dir_store.js` (10 checks) green against the split files.
+- Script cache busters synced to `v=0.2.016`.
+
+---
 
 ### v0.2.015 — Folder Import Fallback for Browsers Without the File System Access API
 
