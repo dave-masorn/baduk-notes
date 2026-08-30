@@ -72,12 +72,32 @@ async function main() {
     present: !!window.StudyDirStore,
     supported: window.StudyDirStore ? window.StudyDirStore.isSupported : null,
     configured: window.StudyDirStore ? window.StudyDirStore.isConfigured : null,
+    hasFallback: window.StudyDirStore ? window.StudyDirStore.hasFolderFallback : null,
+    usingFallback: window.StudyDirStore ? window.StudyDirStore.isUsingFallback : null,
+    hasImportFn: window.StudyDirStore ? typeof window.StudyDirStore.importFolderViaInput : null,
+    hasMergeFn: window.StudyRecordDB ? typeof window.StudyRecordDB.mergeDirRecords : null,
     overlay: !!document.getElementById('study-dir-setup-overlay'),
     dirBtn: !!document.getElementById('btn-study-dir-open')
   }));
   check('StudyDirStore exposed on window', dirState.present, '');
   check('setup overlay + Rec Folder button present in DOM', dirState.overlay && dirState.dirBtn, JSON.stringify(dirState));
   check('graceful fallback when FS API unsupported', dirState.present && dirState.supported === false, `supported=${dirState.supported}`);
+  check('webkitdirectory folder-import fallback wired', dirState.hasImportFn === 'function' && dirState.hasMergeFn === 'function', JSON.stringify({hasFallback: dirState.hasFallback, hasImportFn: dirState.hasImportFn, hasMergeFn: dirState.hasMergeFn}));
+  check('isUsingFallback false until a folder is imported', dirState.usingFallback === false, `usingFallback=${dirState.usingFallback}`);
+
+  // mergeDirRecords dedups by id (dir record wins) and keeps non-dir records
+  const merge = await page.evaluate(async () => {
+    const before = window.StudyRecordDB.getAllRecords().length;
+    const fake = [
+      { id: 'study_test_' + Date.now() + '_a', recNo: '099', fileNm: 'from-folder-a.sgf', blk: 'B', wht: 'W', lastAccess: '2026-01-01', rawSgf: '(;FF[4]GM[1]SZ[19];B[pd])', workingSgf: '(;FF[4]GM[1]SZ[19];B[pd])', _dirSchema: 1 },
+      { id: 'study_test_' + Date.now() + '_b', recNo: '100', fileNm: 'from-folder-b.sgf', blk: 'B', wht: 'W', lastAccess: '2026-01-02', rawSgf: '(;FF[4]GM[1]SZ[19];B[dd])', workingSgf: '(;FF[4]GM[1]SZ[19];B[dd])', _dirSchema: 1 }
+    ];
+    const merged = await window.StudyRecordDB.mergeDirRecords(fake);
+    const hasA = merged.some(r => r.id === fake[0].id);
+    const hasB = merged.some(r => r.id === fake[1].id);
+    return { mergedLen: merged.length, hasA, hasB, beforeCount: before };
+  });
+  check('mergeDirRecords merges folder records into cache+storage', merge.hasA && merge.hasB && merge.mergedLen >= merge.beforeCount + 2, JSON.stringify(merge));
 
   // Refresh persistence (browser storage mirror) — reload the page and confirm the record is still there
   await page.reload({ waitUntil: 'domcontentloaded' });

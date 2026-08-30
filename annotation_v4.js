@@ -1816,7 +1816,13 @@ window.StudyRecordDB = {
         if (typeof window === 'undefined' || !window.StudyDirStore || !window.StudyDirStore.isConfigured) return [];
         const dirRecords = await window.StudyDirStore.loadAllRecords();
         if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
+        return this.mergeDirRecords(dirRecords);
+    },
 
+    // Merge a set of directory-sourced records into the in-memory cache +
+    // IndexedDB + localStorage mirror (dedup by id, dir records win).
+    async mergeDirRecords(dirRecords) {
+        if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
         const merged = dirRecords.slice();
         const byId = new Map(dirRecords.map(r => [r.id, r]));
         this.getAllRecords().forEach(r => { if (!byId.has(r.id)) merged.push(r); });
@@ -1989,18 +1995,31 @@ async function _readJson(dirHandle, fileName) {
 
 const StudyDirStore = {
     _dir: null,
+    _fallbackName: '',
+    _lastFallbackRecords: [],
 
     get isSupported() {
         return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+    },
+
+    // Cross-browser fallback to <input webkitdirectory>: works even when the
+    // File System Access API is disabled (e.g. Brave's default privacy setting).
+    get hasFolderFallback() {
+        return typeof window !== 'undefined' && document.createElement('input').webkitdirectory !== undefined;
     },
 
     get isConfigured() {
         return this.isSupported && !!this._dir;
     },
 
+    get isUsingFallback() {
+        return !this.isSupported && !!this._fallbackName;
+    },
+
     getDirName() {
-        if (!this._dir) return '';
-        try { return this._dir.name || ''; } catch (e) { return ''; }
+        if (this._dir) { try { return this._dir.name || ''; } catch (e) {} }
+        if (this._fallbackName) return this._fallbackName;
+        return '';
     },
 
     // Load persisted handle and request read/write permission (required once per session).
@@ -2049,6 +2068,7 @@ const StudyDirStore = {
     async clear() {
         await _clearDirHandle();
         this._dir = null;
+        this._fallbackName = '';
         _dirStoreReady = null;
     },
 
@@ -2069,8 +2089,84 @@ const StudyDirStore = {
         return okSgf && okJson;
     },
 
-    // Read every record from the directory (authoritative source).
+    // Read every Rec out of a user-picked folder (for browsers with no File System
+    // Access API). Uses a hidden <input webkitdirectory>. Returns { records, name }.
+    async importFolderViaInput() {
+        if (!this.hasFolderFallback) return { records: [], name: '' };
+        return new Promise((resolve) => {
+            let settled = false;
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.setAttribute('webkitdirectory', '');
+            input.multiple = true;
+            input.style.display = 'none';
+            input.accept = '.sgf,.json,application/x-go-sgf';
+            input.addEventListener('change', async () => {
+                const files = Array.from(input.files || []);
+                const { records, name } = await this._recordsFromFiles(files);
+                this._fallbackName = name;
+                this._lastFallbackRecords = records;
+                settled = true;
+                resolve({ records, name });
+            });
+            input.addEventListener('cancel', () => {
+                if (!settled) resolve({ records: [], name: '' });
+            });
+            document.body.appendChild(input);
+            input.click();
+            input.remove();
+        });
+    },
+
+    // Build Rec records from a webkitdirectory FileList.
+    async _recordsFromFiles(files) {
+        const list = Array.isArray(files) ? files : Array.from(files || []);
+        const name = (list[0] && list[0].webkitRelativePath ? list[0].webkitRelativePath.split('/')[0] : '') || 'Selected Folder';
+        const records = [];
+        const jsonFiles = list.filter(f => /\.json$/i.test(f.name));
+        for (const jf of jsonFiles) {
+            let meta = null;
+            try { meta = JSON.parse(await jf.text()); } catch (e) { continue; }
+            if (!meta || !meta.id || meta._dirSchema !== 1) continue;
+            let sgf = null;
+            if (meta.sgfFile) {
+                const sgfFile = list.find(f => f.name === meta.sgfFile);
+                if (sgfFile) { try { sgf = await sgfFile.text(); } catch (e) {} }
+            }
+            if (sgf == null && !meta.rawSgf) continue;
+            records.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
+        }
+        if (records.length === 0) {
+            // No metadata sidecars — fall back to importing every .sgf as a bare rec.
+            for (const sf of list.filter(f => /\.sgf$/i.test(f.name))) {
+                let text = '';
+                try { text = await sf.text(); } catch (e) { continue; }
+                if (!text || !text.includes('(;')) continue;
+                const pb = (text.match(/PB\[([^\]]*)\]/) || [])[1] || 'Black';
+                const pw = (text.match(/PW\[([^\]]*)\]/) || [])[1] || 'White';
+                records.push({
+                    id: 'study_fallback_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
+                    recNo: String(records.length + 1).padStart(3, '0'),
+                    fileNm: sf.name,
+                    blk: pb,
+                    wht: pw,
+                    lastAccess: formatStudyAccessTime(),
+                    currentMoveIndex: 0,
+                    rawSgf: text,
+                    workingSgf: text,
+                    _dirSchema: 1,
+                    _fromFallbackFolder: name
+                });
+            }
+        }
+        records.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
+        return { records, name };
+    },
+
     async loadAllRecords() {
+        if (this.isUsingFallback) {
+            return this._lastFallbackRecords || [];
+        }
         if (!this.isConfigured) return [];
         try {
             const out = [];
@@ -2157,6 +2253,23 @@ async function connectStudyDirectory() {
         const secure = typeof window.isSecureContext !== 'undefined' ? window.isSecureContext : null;
         const ctx = { showDirectoryPicker: hasPicker, isSecureContext: secure, href: window.location.href };
         console.warn('[StudyDirStore] local-folder storage unavailable:', ctx);
+        if (window.StudyDirStore.hasFolderFallback) {
+            // Fallback: read Recs from a picked folder via <input webkitdirectory>.
+            _setDirStatus('Opening a folder to load Rec games from (read-only fallback)…');
+            const res = await window.StudyDirStore.importFolderViaInput();
+            if (res.records && res.records.length) {
+                await StudyRecordDB.mergeDirRecords(res.records);
+                _setDirStatus(`Loaded ${res.records.length} Rec(s) from folder "${res.name}". New Recs save to browser storage; full folder write-back needs the File System Access API enabled in Brave.`);
+                refreshStudyListAfterDirLoad();
+                return true;
+            }
+            if (res.name) {
+                _setDirStatus(`Folder "${res.name}" contained no Rec files. Add the <rec>.sgf files there, or keep using browser storage.`);
+            } else {
+                _setDirStatus('This browser does not expose the File System Access API (showDirectoryPicker). Recs remain in browser storage. You can still import a folder of Recs above, or enable the API in Brave for full write-back.');
+            }
+            return false;
+        }
         if (!secure) {
             _setDirStatus('Local-folder storage needs a secure context (HTTPS or http://localhost). Open the app at http://localhost:8577/ in Chrome/Edge/Brave, or Recs stay in browser storage.');
         } else if (!hasPicker) {

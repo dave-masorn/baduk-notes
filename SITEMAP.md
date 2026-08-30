@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.014
+version: 0.2.015
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,26 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.015 — Folder Import Fallback for Browsers Without the File System Access API
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `feat` | **Brave/FS-API-Less Folder Import Fallback**: When `showDirectoryPicker` is unavailable (Brave disables the whole File System Access API by default), the **Rec Folder** flow now falls back to a hidden `<input webkitdirectory>`: the user picks a folder and every Rec in it (`.json` sidecar + `.sgf`, or bare `.sgf` files) is read and merged into the study list. No browser-flag change required. |
+| **storage** | `refactor` | **Reusable merge + parse helpers**: `StudyRecordDB.loadAllFromDir()` now delegates to a new `StudyRecordDB.mergeDirRecords(records)` (dedup by id, dir records win, syncs cache+IndexedDB+localStorage), and the folder file parsing was extracted into a testable `StudyDirStore._recordsFromFiles(files)`. |
+| **storage** | `feat` | **Clearer diagnostics**: On unsupported browsers the setup overlay now offers the import fallback and explains that new Recs still save to browser storage (full folder write-back needs the FS Access API enabled in Brave). |
+
+##### Details
+The root cause of "does not support local-folder storage" in Brave was identified empirically: Brave ships with the entire File System Access API (`showDirectoryPicker`/`showOpenFilePicker`/`showSaveFilePicker`) disabled by default, even on a secure `http://localhost` context — verified by launching the installed Brave binary headlessly. This version adds `webkitdirectory` folder selection (supported in all Chromium browsers regardless of the FS Access API flag) as a read/import path, keeping browser storage as the write target when the API is off.
+
+##### Verification
+- `test/verify_study_dir_store.js` extended to 10 checks: added `hasFolderFallback`/`isUsingFallback` wiring, `mergeDirRecords` dedup/merge, and the webkitdirectory import function presence.
+- Verified in a real Brave headless session (default flags, FS API disabled): `isSupported=false`, `hasFolderFallback=true`; `_recordsFromFiles` returns a full Rec from a `.json`+`.sgf` sidecar pair and a synthesized Rec from a bare `.sgf` (PB name extracted); `mergeDirRecords` lands them in storage (2 records).
+- `node --check` clean on `annotation_v4.js`. Script cache busters synced to `v=0.2.015`.
+
+---
 
 ### v0.2.014 — Study Record Directory Storage (Real .sgf Files in a User-Chosen Folder)
 
