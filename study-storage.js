@@ -422,6 +422,29 @@ const StudyDirStore = {
         return this._dir || null;
     },
 
+    // Write a texture image (or any binary file) into the study directory at relPath,
+    // creating intermediate folders (e.g. "textures/") as needed. Returns true on success.
+    async importTexture(file, relPath) {
+        if (!this.isConfigured || !file || !relPath) return false;
+        try {
+            const parts = String(relPath).split('/').filter(Boolean);
+            const name = parts.pop();
+            if (!name) return false;
+            let dir = this._dir;
+            for (const part of parts) {
+                dir = await dir.getDirectoryHandle(part, { create: true });
+            }
+            const fileHandle = await dir.getFileHandle(name, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(file); // File / Blob are accepted by write()
+            await writable.close();
+            return true;
+        } catch (e) {
+            console.warn('[StudyDirStore] texture import failed:', relPath, e);
+            return false;
+        }
+    },
+
     // Persist a single record to the directory (sgf + metadata json sidecar).
     async saveRecord(rec) {
         if (!this.isConfigured || !rec || !rec.id) return false;

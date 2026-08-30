@@ -909,18 +909,11 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             
             if (style.board && !style.board.useColor && style.board.imgSrc) {
                 const cacheKey = isInitialCanvas ? 'initialBoardBgImage' : 'studyBoardBgImage';
-                if (!window[cacheKey]) {
-                    window[cacheKey] = new Image();
-                    window[cacheKey].onload = () => {
-                        if (typeof drawBoard === 'function') drawBoard();
-                    };
-                    window[cacheKey].src = style.board.imgSrc;
-                } else if (window[cacheKey].src !== style.board.imgSrc) {
-                    window[cacheKey].src = style.board.imgSrc;
-                }
-                
-                if (window[cacheKey].complete && window[cacheKey].naturalWidth > 0) {
-                    boardImage = window[cacheKey];
+                const bgImg = window.loadBoardTextureImage(cacheKey, style.board.imgSrc, () => {
+                    if (typeof drawBoard === 'function') drawBoard();
+                });
+                if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+                    boardImage = bgImg;
                 }
             }
         }
@@ -2488,6 +2481,15 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
         let boardImage = null;
         const boardImageCacheKey = isInitialCanvas ? 'initialBoardBgImage' : (isStudyCanvas ? 'studyBoardBgImage' : (isScoringCanvas ? 'scoringBoardBgImage' : 'exportBoardBgImage'));
         const cachedBoardImg = window[boardImageCacheKey];
+        // Seed a folder texture-reference load for canvases that have no cached
+        // image yet (scoring/export); board image loads asynchronously and the
+        // onload redraw picks it up, while the color fallback shows meanwhile.
+        if (style && style.board && !style.board.useColor && typeof style.board.imgSrc === 'string'
+            && style.board.imgSrc.indexOf('texture-ref:') === 0 && !cachedBoardImg) {
+            window.loadBoardTextureImage(boardImageCacheKey, style.board.imgSrc, () => {
+                if (typeof drawBoard === 'function') drawBoard();
+            });
+        }
         if (style && !style.board.useColor && cachedBoardImg && cachedBoardImg.complete && cachedBoardImg.naturalWidth > 0) {
             boardImage = cachedBoardImg;
         }
@@ -2612,20 +2614,13 @@ function drawCellContent(targetCtx, cell, cx, cy, cellSize, isExport = false, cl
     let stoneImage = null;
     if (stoneStyle && !stoneStyle.useColor && stoneStyle.imgSrc) {
         const cacheKey = `${viewPrefix}${cell.player}StoneBgImage`;
-        if (!window[cacheKey]) {
-            window[cacheKey] = new Image();
-            window[cacheKey].onload = () => {
-                if (typeof drawBoard === 'function') drawBoard();
-                // Ensure export preview also triggers a redraw when async images finish
-                if (isExport && typeof updateExportPreview === 'function') updateExportPreview();
-            };
-            window[cacheKey].src = stoneStyle.imgSrc;
-        } else if (window[cacheKey].src !== stoneStyle.imgSrc) {
-            window[cacheKey].src = stoneStyle.imgSrc;
-        }
-        
-        if (window[cacheKey].complete && window[cacheKey].naturalWidth > 0) {
-            stoneImage = window[cacheKey];
+        const stoneImg = window.loadBoardTextureImage(cacheKey, stoneStyle.imgSrc, () => {
+            if (typeof drawBoard === 'function') drawBoard();
+            // Ensure export preview also triggers a redraw when async images finish
+            if (isExport && typeof updateExportPreview === 'function') updateExportPreview();
+        });
+        if (stoneImg && stoneImg.complete && stoneImg.naturalWidth > 0) {
+            stoneImage = stoneImg;
         }
     }
 

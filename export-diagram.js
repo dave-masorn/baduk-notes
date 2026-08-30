@@ -610,14 +610,11 @@ async function generateDiagramDataURL() {
                     borderOverrideOn = !style.border || style.border.override !== false;
                     
                     if (!style.board.useColor && style.board.imgSrc) {
-                        if (!window.exportBoardBgImage) {
-                            window.exportBoardBgImage = new Image();
-                            window.exportBoardBgImage.src = style.board.imgSrc;
-                        } else if (window.exportBoardBgImage.src !== style.board.imgSrc) {
-                            window.exportBoardBgImage.src = style.board.imgSrc;
-                        }
-                        if (window.exportBoardBgImage.complete && window.exportBoardBgImage.naturalWidth > 0) {
-                            boardImage = window.exportBoardBgImage;
+                        const bgImg = window.loadBoardTextureImage('exportBoardBgImage', style.board.imgSrc, () => {
+                            if (typeof updateExportPreview === 'function') updateExportPreview();
+                        });
+                        if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+                            boardImage = bgImg;
                         }
                     }
                 }

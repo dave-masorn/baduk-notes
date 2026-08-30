@@ -9299,11 +9299,7 @@ function populateStyleInputs() {
     
     const blackThumb = document.getElementById('ib-black-stone-img-thumb');
     if (blackThumb) {
-        if (!style.blackStone.useColor && style.blackStone.imgSrc) {
-            blackThumb.style.backgroundImage = `url(${style.blackStone.imgSrc})`;
-        } else {
-            blackThumb.style.backgroundImage = '';
-        }
+        window.setBgTextureThumb(blackThumb, (!style.blackStone.useColor && style.blackStone.imgSrc) ? style.blackStone.imgSrc : '');
     }
     
     // White Stone
@@ -9319,11 +9315,7 @@ function populateStyleInputs() {
     
     const whiteThumb = document.getElementById('ib-white-stone-img-thumb');
     if (whiteThumb) {
-        if (!style.whiteStone.useColor && style.whiteStone.imgSrc) {
-            whiteThumb.style.backgroundImage = `url(${style.whiteStone.imgSrc})`;
-        } else {
-            whiteThumb.style.backgroundImage = '';
-        }
+        window.setBgTextureThumb(whiteThumb, (!style.whiteStone.useColor && style.whiteStone.imgSrc) ? style.whiteStone.imgSrc : '');
     }
     
     // Shared Stone Offset (applies to both Black and White stones)
@@ -9350,13 +9342,8 @@ function populateStyleInputs() {
     const thumb = document.getElementById('ib-board-img-thumb');
     if (thumb) {
         thumb.style.backgroundColor = style.board.color || '#dcb35c';
-        if (style.board.imgSrc) {
-            thumb.style.backgroundImage = `url(${style.board.imgSrc})`;
-            thumb.style.backgroundBlendMode = style.board.imgBlendMode || 'normal';
-        } else {
-            thumb.style.backgroundImage = '';
-            thumb.style.backgroundBlendMode = 'normal';
-        }
+        window.setBgTextureThumb(thumb, style.board.imgSrc || '');
+        thumb.style.backgroundBlendMode = style.board.imgBlendMode || 'normal';
     }
     
     // Board BDC (Border)
@@ -9655,6 +9642,31 @@ function bindStyleInputsEvents() {
     handleStoneBgColorChange('ib-black-bg', 'blackStone');
     handleStoneBgColorChange('ib-white-bg', 'whiteStone');
 
+    // Texture upload -> references into study folder. Reuses the shared
+    // #texture-notice-toast element (board-texture.js). ok=true is green.
+    const showTextureToast = (msg, ok) => {
+        let t = document.getElementById('texture-notice-toast');
+        if (!t) {
+            t = document.createElement('div');
+            t.id = 'texture-notice-toast';
+            t.className = 'texture-notice-toast';
+            document.body.appendChild(t);
+        }
+        t.style.border = ok ? '1px solid rgba(52,211,153,0.45)' : '1px solid rgba(251,146,60,0.45)';
+        t.innerHTML = `<span>${msg}</span>`;
+        t.style.display = 'flex';
+        clearTimeout(t._timeout);
+        t._timeout = setTimeout(() => { t.style.display = 'none'; }, 4200);
+    };
+
+    const applyTextureRefToast = (stored) => {
+        if (!stored) return '';
+        if (stored.mode === 'folder') {
+            return `Texture saved to study folder "${stored.rel}". Recs reference it by path — nothing is embedded in web storage.`;
+        }
+        return `Texture referenced as "${stored.rel}". This browser can't write into the study folder, so it's kept for this session only — enable File System Access API (brave://flags) or copy the file into the folder yourself.`;
+    };
+
     // Stone Image upload triggers
     const bindStoneImageUpload = (btnId, inputId, section) => {
         const btn = document.getElementById(btnId);
@@ -9663,31 +9675,31 @@ function bindStyleInputsEvents() {
             btn.addEventListener('click', () => {
                 input.click();
             });
-            input.addEventListener('change', (e) => {
+            input.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    const img = new Image();
-                    img.onload = function() {
-                        // Compress stone image to 256x256 to save localStorage quota
-                        const canvas = document.createElement('canvas');
-                        canvas.width = 256;
-                        canvas.height = 256;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, 256, 256);
-                        const compressedDataUrl = canvas.toDataURL('image/png');
-                        
-                        const style = getActiveStyleObject();
-                        style[section].imgSrc = compressedDataUrl;
-                        style[section].useColor = false;
-                        
-                        saveStyleAndRedraw();
-                        populateStyleInputs();
-                    };
-                    img.src = event.target.result;
-                };
-                reader.readAsDataURL(file);
+                const stored = await window.storeTextureFile(file, file.name, window.TEXTURE_DIR_SUBDIR);
+                if (!stored) return;
+
+                const style = getActiveStyleObject();
+                style[section].imgSrc = window.TEXTURE_REF_PREFIX + stored.rel;
+                style[section].useColor = false;
+
+                // Reload from the fresh file (not a stale objectURL) for this session.
+                window.invalidateTextureCache();
+                await window.setSessionTextureFile(stored.rel, file);
+                window.initialBStoneBgImage = null;
+                window.initialWStoneBgImage = null;
+                window.studyBStoneBgImage = null;
+                window.studyWStoneBgImage = null;
+                window.scoringBStoneBgImage = null;
+                window.scoringWStoneBgImage = null;
+                window.exportBStoneBgImage = null;
+                window.exportWStoneBgImage = null;
+
+                saveStyleAndRedraw();
+                populateStyleInputs();
+                showTextureToast(applyTextureRefToast(stored), stored.mode === 'folder');
             });
         }
     };
@@ -9714,132 +9726,43 @@ function bindStyleInputsEvents() {
             fileInput.click();
         });
         
-        fileInput.addEventListener('change', (e) => {
+        fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            
+
             const isSvg = file.type === 'image/svg+xml' || (file.name && file.name.toLowerCase().endsWith('.svg'));
-            const reader = new FileReader();
-            
+
+            // Store into (or reference within) the study folder; keep the exact
+            // bytes. SVG keeps its Inkscape mask fix applied ON-DISK so a reload
+            // from the folder renders identically.
+            let payload = file;
             if (isSvg) {
-                reader.onload = function(event) {
-                    let svgContent = event.target.result;
-                    if (typeof svgContent === 'string') {
-                        // Fix Inkscape broken filter mask quirk if present
-                        if (svgContent.includes('mask="url(#0d08b46e52)"')) {
-                            svgContent = svgContent.replace(/mask="url\(#0d08b46e52\)"/g, 'opacity="0.32"');
-                        }
-                    }
-                    
-                    const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-                    const blobUrl = URL.createObjectURL(svgBlob);
-                    const svgImg = new Image();
-                    
-                    const applyImgSrc = (src) => {
-                        const style = getActiveStyleObject();
-                        style.board.imgSrc = src;
-                        style.board.useColor = false;
-                        if (useImgRadio) useImgRadio.checked = true;
-                        if (useColorRadio) useColorRadio.checked = false;
-                        
-                        window.initialBoardBgImage = null;
-                        window.studyBoardBgImage = null;
-                        window.scoringBoardBgImage = null;
-                        window.exportBoardBgImage = null;
-                        
-                        saveStyleAndRedraw();
-                        populateStyleInputs();
-                    };
-
-                    svgImg.onload = function() {
-                        try {
-                            const maxDim = 1024;
-                            let w = svgImg.naturalWidth || svgImg.width || 1024;
-                            let h = svgImg.naturalHeight || svgImg.height || 1024;
-                            if (w > maxDim || h > maxDim) {
-                                if (w > h) {
-                                    h = Math.round((h * maxDim) / w);
-                                    w = maxDim;
-                                } else {
-                                    w = Math.round((w * maxDim) / h);
-                                    h = maxDim;
-                                }
-                            }
-                            const canvas = document.createElement('canvas');
-                            canvas.width = w;
-                            canvas.height = h;
-                            const ctx = canvas.getContext('2d');
-                            ctx.drawImage(svgImg, 0, 0, w, h);
-                            URL.revokeObjectURL(blobUrl);
-                            const pngDataUrl = canvas.toDataURL('image/png');
-                            applyImgSrc(pngDataUrl);
-                        } catch (err) {
-                            URL.revokeObjectURL(blobUrl);
-                            applyImgSrc('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgContent));
-                        }
-                    };
-                    
-                    svgImg.onerror = function() {
-                        URL.revokeObjectURL(blobUrl);
-                        applyImgSrc('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgContent));
-                    };
-                    
-                    svgImg.src = blobUrl;
-                };
-                reader.readAsText(file);
-                return;
+                let svgContent = await file.text();
+                if (typeof svgContent === 'string' && svgContent.includes('mask="url(#0d08b46e52)"')) {
+                    svgContent = svgContent.replace(/mask="url\(#0d08b46e52\)"/g, 'opacity="0.32"');
+                }
+                payload = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
             }
+            const stored = await window.storeTextureFile(payload, file.name || (isSvg ? 'texture.svg' : 'texture.png'), window.TEXTURE_DIR_SUBDIR);
+            if (!stored) return;
 
-            reader.onload = function(event) {
-                const img = new Image();
-                img.onload = function() {
-                    const maxDim = 1024;
-                    let w = img.width;
-                    let h = img.height;
-                    
-                    // Only scale down if it exceeds maxDim
-                    if (w > maxDim || h > maxDim) {
-                        if (w > h) {
-                            h = Math.round((h * maxDim) / w);
-                            w = maxDim;
-                        } else {
-                            w = Math.round((w * maxDim) / h);
-                            h = maxDim;
-                        }
-                    }
-                    
-                    const canvas = document.createElement('canvas');
-                    canvas.width = w;
-                    canvas.height = h;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, w, h);
-                    
-                    // Use image/png to preserve transparent alpha channels for PNGs / textures
-                    const isPng = file.type === 'image/png' || (file.name && file.name.toLowerCase().endsWith('.png'));
-                    const compressedDataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85);
-                    
-                    const style = getActiveStyleObject();
-                    style.board.imgSrc = compressedDataUrl;
-                    style.board.useColor = false;
-                    if (useImgRadio) useImgRadio.checked = true;
-                    if (useColorRadio) useColorRadio.checked = false;
-                    
-                    // Reset cached image object so it reloads
-                    const view = getCurrentBoardView();
-                    if (view === '#go-board-canvas-initial') {
-                        window.initialBoardBgImage = null;
-                    } else if (view === '#go-board-canvas-study') {
-                        window.studyBoardBgImage = null;
-                    } else {
-                        window.exportBoardBgImage = null;
-                    }
-                    
-                    saveStyleAndRedraw();
-                    populateStyleInputs();
-                };
-                img.src = event.target.result;
-            };
-            reader.readAsDataURL(file);
+            const style = getActiveStyleObject();
+            style.board.imgSrc = window.TEXTURE_REF_PREFIX + stored.rel;
+            style.board.useColor = false;
+            if (useImgRadio) useImgRadio.checked = true;
+            if (useColorRadio) useColorRadio.checked = false;
+
+            // Reload from the fresh file (not a stale objectURL) for this session.
+            window.invalidateTextureCache();
+            await window.setSessionTextureFile(stored.rel, payload);
+            window.initialBoardBgImage = null;
+            window.studyBoardBgImage = null;
+            window.scoringBoardBgImage = null;
+            window.exportBoardBgImage = null;
+
+            saveStyleAndRedraw();
+            populateStyleInputs();
+            showTextureToast(applyTextureRefToast(stored), stored.mode === 'folder');
         });
     }
 

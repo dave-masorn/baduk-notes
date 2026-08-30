@@ -4273,3 +4273,25 @@ input:checked + .slider:before {
     }
 }
 
+.texture-notice-toast {
+    position: fixed;
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999999;
+    max-width: 520px;
+    background: #1c1917;
+    border: 1px solid rgba(251, 146, 60, 0.45);
+    box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.7), 0 0 20px rgba(251, 146, 60, 0.2);
+    border-radius: 10px;
+    padding: 10px 20px;
+    color: #f1f5f9;
+    font-family: 'Anthropic Sans Medium', sans-serif;
+    font-size: 13.5px;
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: toastSlideDown 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+

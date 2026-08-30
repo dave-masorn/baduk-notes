@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.020
+version: 0.2.021
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,29 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.021 — Board/Stone Textures Referenced by Path (no more embedded images)
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `feat` | **`board-texture.js`**: Board and stone texture images are no longer embedded as large data URLs into every Rec's settings (which multiplied the bytes across localStorage ×4 + each Rec's `.json`/IndexedDB/mirror). A picked image is stored as a tiny `texture-ref:<relativePath>` token instead, e.g. `texture-ref:textures/kaya-wood.png`, relative to the study folder. |
+| **storage** | `feat` | **Auto-copy into `textures/`**: When a writable study directory is configured (File System Access API), `StudyDirStore.importTexture` writes the picked file — at full resolution — into the folder under `textures/` (creating the subfolder), and the Rec references it by path. The folder stays self-contained and portable; one file is shared by every Rec that uses it. |
+| **render** | `feat` | **Shared resolver** `window.resolveTextureSrc` / `window.loadBoardTextureImage`: on render a `texture-ref:` is re-read from the folder via the persisted directory handle (re-granted per session) into a session objectURL cache — nothing is kept in web storage. Board, stone, initial/study/scoring/export paths all route through it. |
+| **storage** | `feat` | **Graceful degradation without FS API (Brave default)**: the pick still stores the ref and renders from memory for the current session; after a reload an unresolvable ref falls back to the board color with a one-time "texture not found" notice (never a crash). Enabling `brave://flags → File System Access API` (or placing the file in the folder) makes refs resolve across sessions. |
+| **storage** | `fix` | SVG board textures keep the Inkscape mask-quirk fix applied **on-disk**, so re-loading the `.svg` from the folder renders identically; they are referenced instead of rasterized to a 1024px PNG. |
+| **storage** | `fix` | The 1024px / 256px downscale-on-pick is gone for both board and stone textures (full-resolution files; zoom/offset/repeat controls unchanged). |
+| **ui** | `fix` | Style-panel thumbnails resolve `texture-ref:` asynchronously (`setBgTextureThumb`) instead of feeding the token into `url()` as broken pixels. |
+
+##### Verification
+- `test/verify_texture_ref.js` (new, 8 checks): ref token + API surface, session-mode storage, missing-ref → `null`, cache-key loader contract, `importTexture` byte write into a mock dir, `folder` vs `session` reporting.
+- Real Brave, FS API enabled (OPFS-backed real handles): `storeTextureFile` → file physically listed under `textures/`, `loadBoardTextureImage` decodes the ref image (`complete`, 16×16) with zero page errors.
+- Real Brave, default flags: `mode='session'`, same-session resolve → blob URL, post-reload resolve → `null` fallback, zero page errors.
+- `test/verify_study_dir_store.js` (10) and `test/verify_study_dir_setup.js` (3) still green; `node --check` clean on all touched files.
+- New script `board-texture.js` added to the tag list (after `study-storage.js`); all cache busters synced to `v=0.2.021`.
+
+---
 
 ### v0.2.020 — Clearer Rec-Folder Prompt (Fallback Mode Copy)
 
