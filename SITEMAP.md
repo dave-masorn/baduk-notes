@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.018
+version: 0.2.019
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.019 — Split the Manual Scoring Module Out of the Monolith
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **arch** | `refactor` | **`annotation_v4.js` split (pass 4)**: Extracted the entire manual-scoring subsystem into `scoring.js` (~2,701 lines) — `window.scoringState` singleton + `scoringHistory`/`scoringFuture` undo stacks, ``getScoringSnapshot``/`undoScoring`/`redoScoring`, `initScoringModal`/`openScoringModal`/`updateScoringUI`/`handleScoringBoardClick`, `persistScoringSessionData`, `saveScoringBoard`, the scoring board renderer (`renderScoringBoardToCtx`) and the `_deferredScoringInit` scheduling tail. `annotation_v4.js` shrank from 13,687 to 10,992 lines. |
+
+##### Details
+The scoring slice is self-contained: `window.scoringState`/history ride along as top-level globals, and the shared scoring-model helpers (`computeScoringPropsFromSession` etc.) intentionally remain in `annotation_v4.js` because the replayer/comment UI also uses them. Cross-file references are all call-time (`drawBoard`, `loadSGF` which resets `scoringState`, `replayToTerminal`, `updateBoardWrapperSize`), so the defer ordering — `scoring.js` before `annotation_v4.js` — stays safe.
+
+##### Verification
+- `node --check` clean on `annotation_v4.js` and `scoring.js`.
+- Real-Brave smoke check: app boots, board draws, `openScoringModal`/`updateScoringUI`/`renderScoringBoardToCtx` exposed, zero page errors.
+- Script cache busters synced to `v=0.2.019`.
+
+---
 
 ### v0.2.018 — Split the Export/Diagram Module Out of the Monolith
 
