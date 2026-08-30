@@ -616,6 +616,8 @@ function updateDirLocationUI() {
     if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
         const name = window.StudyDirStore.getDirName() || 'the selected folder';
         html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The folder where Baduk-Notes keeps your Rec games">Change</a>';
+    } else if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
+        html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="How folder saving works in this browser">How folder saving works\u2026</a>';
     } else {
         html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="Choose where Baduk-Notes keeps your Rec games">Choose folder\u2026</a>';
     }
@@ -635,16 +637,37 @@ function _updateDirOverlayCopy() {
     const sub = document.getElementById('study-dir-sub');
     const desc = document.getElementById('study-dir-desc');
     const btn = document.getElementById('btn-study-dir-pick');
-    if (btn) btn.textContent = 'Choose Folder';
+    const later = document.getElementById('btn-study-dir-later');
     if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
+        // Fallback: a folder cannot be a KEEP location in this browser, so the ask
+        // has no folder picker at all — Recs stay in browser storage until the flag
+        // unlocks real folder writing. (A read-only import is not the keep question.)
         if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
-        if (sub) sub.textContent = 'This browser cannot write into a folder yet, so Recs stay saved in browser storage.';
-        if (desc) desc.innerHTML = 'The folder becomes your Rec database: Baduk-Notes writes every Rec there as a <strong>.sgf</strong> file and reads them back on your next visit. Enable \u0022File System Access API\u0022 (brave://flags) once and reload to use a folder \u2014 or keep your Recs here in browser storage.';
+        if (sub) sub.textContent = 'Recs are kept right here in browser storage for this device.';
+        if (desc) desc.innerHTML = 'To make a real folder your Rec database (one <strong>.sgf</strong> file per Rec, read back on your next visit), enable \u0022File System Access API\u0022 at brave://flags once and reload.';
+        if (btn) btn.style.display = 'none';
+        if (later) {
+            later.style.display = '';
+            later.style.background = '#10b981';
+            later.style.color = 'white';
+            later.style.border = 'none';
+            later.style.fontWeight = '700';
+            later.textContent = 'Keep in browser storage';
+        }
         return;
     }
     if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
     if (sub) sub.textContent = 'Pick a folder once. Every Rec is saved there as a real .sgf file and read back on your next visit.';
-    if (desc) desc.innerHTML = 'The folder becomes your Rec database on this device. You can change it anytime, and everything stays in sync.';
+    if (desc) desc.innerHTML = 'The folder becomes your Rec database on this device. The keeper choice is remembered and shown under the SGF drop-slot; you can change it anytime.';
+    if (btn) btn.style.display = '';
+    if (later) {
+        later.style.display = '';
+        later.style.background = 'transparent';
+        later.style.color = '#9ca3af';
+        later.style.border = '1px solid rgba(255,255,255,0.15)';
+        later.style.fontWeight = '600';
+        later.textContent = 'Keep in browser storage';
+    }
 }
 
 function _setDirStatus(msg) {
@@ -799,6 +822,13 @@ function wireStudyDirSetupUI() {
 
     if (btnPick) {
         btnPick.addEventListener('click', async () => {
+            const keepFallback = window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback;
+            if (keepFallback) {
+                // A folder can only ever be a read-only import in this browser, never a
+                // keep-location — so the keep question does not offer a folder pick.
+                _setDirStatus('Folder writing is not available in this browser \u2014 Recs are kept in browser storage. To use a folder as your Rec database, open brave://flags, enable \u0022File System Access API\u0022, then reload.');
+                return;
+            }
             btnPick.disabled = true;
             _setDirStatus('Opening the folder picker\u2026');
             const ok = await connectStudyDirectory();

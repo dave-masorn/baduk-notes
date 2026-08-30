@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.023
+version: 0.2.024
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,23 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.024 — Fully Honest Keep-Ask in Browsers Without Folder Writing
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `fix` | **No picker where a picker can't keep**: in browsers without folder-writing (e.g. Brave's default flag state), the keep question no longer offers a "Choose Folder" button — a folder there can only ever be a read-only import, never a keep-location, which contradicted the ask. The fallback overlay now has a single honest answer: a green **Keep in browser storage** button, with the folder-database path (enable the flag once, reload) explained once in the description. |
+| **ui** | `fix` | Drop-slot link is state-aware: configured folder shows **Change**; fallback browser shows **How folder saving works…** (opens the overlay explanation); full-support-unset shows **Choose folder…**. |
+| **storage** | `fix` | If the (now hidden) folder-pick handler is triggered in a fallback browser it returns honest status copy instead of silently opening a read-only import. The read-only import API (`importFolderViaInput`) remains for internal/utility use but is no longer presented as the primary keep flow. |
+
+##### Verification
+- `node --check` clean; `verify_study_dir_setup.js` (3), `verify_study_dir_store.js` (10), `verify_texture_ref.js` (8) all green.
+- Real Brave (default flags): overlay shows the single green "Keep in browser storage" (picker hidden), honest sub copy, drop-slot shows "How folder saving works…", zero page errors.
+- Cache busters synced to `v=0.2.024`.
+
+---
 
 ### v0.2.023 — Rec Database Folder: Ask Once, Show Location in the Drop-Slot
 
