@@ -343,9 +343,22 @@ const StudyDirStore = {
     _dir: null,
     _fallbackName: '',
     _lastFallbackRecords: [],
+    _opfsDir: false,
+    _dirLabel: '',
 
     get isSupported() {
         return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+    },
+
+    // Origin Private File System: a sandboxed folder owned by this app that works in
+    // every browser (including Brave's default privacy settings) with no flag and no
+    // dialog. Real .sgf/.json files, persisted per-origin, read back every visit.
+    get hasOpfs() {
+        return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.getDirectory === 'function';
+    },
+
+    get usingOpfs() {
+        return !!this._opfsDir;
     },
 
     // Cross-browser fallback to <input webkitdirectory>: works even when the
@@ -355,7 +368,7 @@ const StudyDirStore = {
     },
 
     get isConfigured() {
-        return this.isSupported && !!this._dir;
+        return !!this._dir;
     },
 
     get isUsingFallback() {
@@ -363,9 +376,26 @@ const StudyDirStore = {
     },
 
     getDirName() {
+        if (this._dirLabel) return this._dirLabel;
         if (this._dir) { try { return this._dir.name || ''; } catch (e) {} }
         if (this._fallbackName) return this._fallbackName;
         return '';
+    },
+
+    // Open (creating if needed) the app's automatic private folder for this origin.
+    async initOpfs() {
+        if (!this.hasOpfs) return false;
+        try {
+            const root = await navigator.storage.getDirectory();
+            const sub = await root.getDirectoryHandle('baduk-notes', { create: true });
+            this._dir = sub;
+            this._opfsDir = true;
+            this._dirLabel = 'Automatic folder';
+            return true;
+        } catch (e) {
+            console.warn('[StudyDirStore] OPFS init failed:', e);
+            return false;
+        }
     },
 
     // Load persisted handle and request read/write permission (required once per session).
@@ -382,6 +412,8 @@ const StudyDirStore = {
                 }
                 if (perm === 'granted') {
                     this._dir = handle;
+                    this._opfsDir = false;
+                    this._dirLabel = '';
                     return { supported: true, ready: true, needsSetup: false };
                 }
                 return { supported: true, ready: false, needsSetup: true, permissionDenied: true };
@@ -392,12 +424,14 @@ const StudyDirStore = {
         return _dirStoreReady;
     },
 
-    // Show the directory picker to the user.
+    // Show the directory picker to the user (switches off the automatic folder).
     async setupDirectory() {
         if (!this.isSupported) return false;
         try {
             const handle = await window.showDirectoryPicker({ id: 'baduk-rec-storage', mode: 'readwrite' });
             this._dir = handle;
+            this._opfsDir = false;
+            this._dirLabel = '';
             await _saveDirHandle(handle);
             return true;
         } catch (e) { return false; }
@@ -602,9 +636,12 @@ function _openDirSetup() {
     _updateDirOverlayCopy();
     overlay.classList.remove('hidden');
     overlay.style.display = 'flex';
-    _setDirStatus(window.StudyDirStore.getDirName()
-        ? 'Folder: ' + window.StudyDirStore.getDirName() + ' \u2014 click Choose Folder to change.'
-        : '');
+    const st = window.StudyDirStore;
+    if (st && st.isConfigured) {
+        _setDirStatus('Rec database: ' + st.getDirName() + ' \u2014 use the buttons below to change it.');
+    } else {
+        _setDirStatus('');
+    }
 }
 
 // The "Try dropping your SGF file" slot doubles as the Rec-database location:
@@ -612,12 +649,19 @@ function _openDirSetup() {
 function updateDirLocationUI() {
     const el = document.getElementById('header-subtitle-text');
     if (!el) return;
+    const st = window.StudyDirStore || null;
     let html;
-    if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
-        const name = window.StudyDirStore.getDirName() || 'the selected folder';
-        html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The folder where Baduk-Notes keeps your Rec games">Change</a>';
-    } else if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
-        html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="How folder saving works in this browser">How folder saving works\u2026</a>';
+    if (st && st.isConfigured) {
+        if (st.usingOpfs) {
+            const linkTxt = st.isSupported ? 'Use a folder\u2026' : 'How it works\u2026';
+            const linkTitle = st.isSupported ? 'Switch to a folder you choose' : 'How the automatic Rec folder works in this browser';
+            html = '\uD83D\uDCC1 Automatic folder (this device)  \u00B7  <a href="#" id="dir-change-link" title="' + linkTitle + '">' + linkTxt + '</a>';
+        } else {
+            const name = st.getDirName() || 'the selected folder';
+            html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The folder where Baduk-Notes keeps your Rec games">Change</a>';
+        }
+    } else if (st && st.hasOpfs) {
+        html = '\uD83D\uDDC2 Recs kept in automatic storage  \u00B7  <a href="#" id="dir-change-link" title="How the automatic Rec folder works in this browser">How it works\u2026</a>';
     } else {
         html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="Choose where Baduk-Notes keeps your Rec games">Choose folder\u2026</a>';
     }
@@ -638,36 +682,57 @@ function _updateDirOverlayCopy() {
     const desc = document.getElementById('study-dir-desc');
     const btn = document.getElementById('btn-study-dir-pick');
     const later = document.getElementById('btn-study-dir-later');
-    if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
-        // Fallback: a folder cannot be a KEEP location in this browser, so the ask
-        // has no folder picker at all — Recs stay in browser storage until the flag
-        // unlocks real folder writing. (A read-only import is not the keep question.)
-        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
-        if (sub) sub.textContent = 'Recs are kept right here in browser storage for this device.';
-        if (desc) desc.innerHTML = 'To make a real folder your Rec database (one <strong>.sgf</strong> file per Rec, read back on your next visit), enable \u0022File System Access API\u0022 at brave://flags once and reload.';
-        if (btn) btn.style.display = 'none';
-        if (later) {
-            later.style.display = '';
+    const st = window.StudyDirStore || null;
+    const useOpfs = st && st.usingOpfs;
+    const fsApiOn = st && st.isSupported;
+
+    const resetPick = (show, label) => {
+        if (btn) { btn.style.display = show ? '' : 'none'; if (label) btn.textContent = label; }
+    };
+    const resetLater = (primary, label) => {
+        if (!later) return;
+        later.style.display = '';
+        if (primary) {
             later.style.background = '#10b981';
             later.style.color = 'white';
             later.style.border = 'none';
             later.style.fontWeight = '700';
-            later.textContent = 'Keep in browser storage';
+        } else {
+            later.style.background = 'transparent';
+            later.style.color = '#9ca3af';
+            later.style.border = '1px solid rgba(255,255,255,0.15)';
+            later.style.fontWeight = '600';
         }
+        if (label) later.textContent = label;
+    };
+
+    if (useOpfs && !fsApiOn) {
+        // Brave + automatic folder: no dialog can exist, so the ask has a single answer.
+        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+        if (sub) sub.textContent = 'Recs live in a private folder that belongs to this app, on this device.';
+        if (desc) desc.innerHTML = 'Every Rec is a real <strong>.sgf</strong> file there and is read back on every visit, so nothing is lost. To keep them in a folder you choose instead, enable \u0022File System Access API\u0022 at brave://flags once and reload.';
+        resetPick(false);
+        resetLater(true, 'Use automatic folder');
         return;
     }
+
+    if (useOpfs && fsApiOn) {
+        // Chrome/Edge: automatic folder by default, real folder optionally.
+        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+        if (sub) sub.textContent = 'Recs currently live in the private folder that belongs to this app.';
+        if (desc) desc.innerHTML = 'Every Rec is a real <strong>.sgf</strong> file there and is read back on every visit. You can also keep them in a folder you choose:';
+        resetPick(true, 'Use a folder I choose\u2026');
+        resetLater(false, 'Keep automatic folder');
+        return;
+    }
+
+    // A user folder can actually be picked (FS API on, not configured yet) or is
+    // already configured and this overlay is the "Change folder" entry point.
     if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
     if (sub) sub.textContent = 'Pick a folder once. Every Rec is saved there as a real .sgf file and read back on your next visit.';
     if (desc) desc.innerHTML = 'The folder becomes your Rec database on this device. The keeper choice is remembered and shown under the SGF drop-slot; you can change it anytime.';
-    if (btn) btn.style.display = '';
-    if (later) {
-        later.style.display = '';
-        later.style.background = 'transparent';
-        later.style.color = '#9ca3af';
-        later.style.border = '1px solid rgba(255,255,255,0.15)';
-        later.style.fontWeight = '600';
-        later.textContent = 'Keep in browser storage';
-    }
+    resetPick(true, 'Choose Folder');
+    resetLater(false, 'Keep in browser storage');
 }
 
 function _setDirStatus(msg) {
@@ -676,7 +741,8 @@ function _setDirStatus(msg) {
     const indicator = document.getElementById('study-dir-indicator');
     if (indicator) {
         if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
-            indicator.textContent = `📁 ${window.StudyDirStore.getDirName()}`;
+            const label = window.StudyDirStore.usingOpfs ? 'Automatic folder' : window.StudyDirStore.getDirName();
+            indicator.textContent = `📁 ${label}`;
             indicator.style.color = '#295D2F';
             indicator.style.fontWeight = '600';
         } else {
@@ -700,6 +766,20 @@ async function connectStudyDirectory() {
     if (!window.StudyDirStore) {
         _setDirStatus('Storage engine not initialised. Please reload the page.');
         return false;
+    }
+    // Browsers without an OS folder-pick dialog store into the app's automatic
+    // private folder (OPFS): real .sgf files, no dialog, works everywhere.
+    if (!window.StudyDirStore.isSupported && window.StudyDirStore.hasOpfs) {
+        const started = await window.StudyDirStore.initOpfs();
+        if (started) {
+            _markDirChoiceDone();
+            updateDirLocationUI();
+            await StudyRecordDB.loadAllFromDir();
+            _setDirStatus('Rec database: ' + window.StudyDirStore.getDirName() + ' (real .sgf files on this device)');
+            refreshStudyListAfterDirLoad();
+            return true;
+        }
+        // OPFS init failed unexpectedly — fall through to diagnostics below.
     }
     if (!window.StudyDirStore.isSupported) {
         const hasPicker = typeof window.showDirectoryPicker === 'function';
@@ -744,11 +824,16 @@ async function connectStudyDirectory() {
     let ok = false;
     try {
         if (window.StudyDirStore.isConfigured) {
-            ok = await window.StudyDirStore.reGrantPermission();
-            if (!ok) {
-                // Stored handle is stale/revoked — fall back to re-picking a folder.
-                _setDirStatus('Could not re-grant access to the saved folder. Choose a folder again below.');
+            if (window.StudyDirStore.usingOpfs) {
+                // Switching from the automatic folder to a folder the user chooses.
                 ok = await window.StudyDirStore.setupDirectory();
+            } else {
+                ok = await window.StudyDirStore.reGrantPermission();
+                if (!ok) {
+                    // Stored handle is stale/revoked — fall back to re-picking a folder.
+                    _setDirStatus('Could not re-grant access to the saved folder. Choose a folder again below.');
+                    ok = await window.StudyDirStore.setupDirectory();
+                }
             }
         } else {
             ok = await window.StudyDirStore.setupDirectory();
@@ -771,7 +856,7 @@ async function connectStudyDirectory() {
     await StudyRecordDB.loadAllFromDir();
     _markDirChoiceDone();
     updateDirLocationUI();
-    _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
+    _setDirStatus(`Rec database: ${window.StudyDirStore.getDirName()}`);
     refreshStudyListAfterDirLoad();
     return true;
 }
@@ -779,23 +864,32 @@ async function connectStudyDirectory() {
 async function initStudyDirStorage() {
     if (!window.StudyDirStore) return;
 
+    let ready = false;
+
     if (window.StudyDirStore.isSupported) {
         const st = await window.StudyDirStore.init();
-        if (st.ready) {
-            await StudyRecordDB.loadAllFromDir();
-            _markDirChoiceDone();
-            updateDirLocationUI();
-            _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
-            return;
-        }
+        if (st.ready) ready = true;
     }
 
-    // Keep-location decided on a previous visit: no re-ask, just show the location
-    // under the SGF drop-slot (with a Change control).
+    // Automatic private folder (OPFS): always available, no dialog, no flag — the
+    // Rec database works in every browser (incl. Brave) right out of the box.
+    if (!ready && window.StudyDirStore.hasOpfs) {
+        ready = await window.StudyDirStore.initOpfs();
+    }
+
+    if (ready) {
+        await StudyRecordDB.loadAllFromDir();
+        _markDirChoiceDone();
+        updateDirLocationUI();
+        const name = window.StudyDirStore.getDirName();
+        _setDirStatus(name ? 'Rec database: ' + name : '');
+        return;
+    }
+
+    // No writable folder storage of any kind — ask once where Recs should live.
     updateDirLocationUI();
     if (_dirChoiceDone()) return;
 
-    // First launch — ask once where Baduk-Notes should keep the Rec database.
     const overlay = _dirOverlay();
     if (!overlay) return;
     if (overlay.dataset.triggered === '1') return;
@@ -822,11 +916,10 @@ function wireStudyDirSetupUI() {
 
     if (btnPick) {
         btnPick.addEventListener('click', async () => {
-            const keepFallback = window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback;
-            if (keepFallback) {
-                // A folder can only ever be a read-only import in this browser, never a
-                // keep-location — so the keep question does not offer a folder pick.
-                _setDirStatus('Folder writing is not available in this browser \u2014 Recs are kept in browser storage. To use a folder as your Rec database, open brave://flags, enable \u0022File System Access API\u0022, then reload.');
+            const opfsOnly = window.StudyDirStore && window.StudyDirStore.usingOpfs && !window.StudyDirStore.isSupported;
+            if (opfsOnly) {
+                // Automatic folder is the only keep-location here (no OS dialog exists).
+                _setDirStatus('Recs are kept in the automatic folder of this app. To use a folder you choose instead, enable \u0022File System Access API\u0022 at brave://flags and reload.');
                 return;
             }
             btnPick.disabled = true;

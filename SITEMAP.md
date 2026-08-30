@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.024
+version: 0.2.025
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.025 — Rec Database in an Automatic Private Folder (OPFS): Works in Brave with No Flags
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `feat` | **Automatic private folder (OPFS)**: every browser (including Brave's default privacy settings) now gets a real, writable Rec database with zero flags and no dialog. `initOpfs()` opens the app's sandboxed `baduk-notes` folder in the Origin Private File System and writes each Rec as a real `.sgf` + `.json` file (same code path as a user folder) — read back automatically on every visit. |
+| **storage** | `feat` | **Storage tiers**: (1) user-picked OS folder via the File System Access API (Chrome/Edge, or Brave with the flag on), (2) automatic OPFS folder (available everywhere, used whenever no OS folder is picked), (3) no-storage diagnostics only on browsers with neither. The overlay's "Use a folder I choose…" now correctly opens the real OS picker when the API exists instead of re-granting the automatic folder. |
+| **ui** | `feat` | Drop-slot location: `📁 Automatic folder (this device) · How it works…` (or `Use a folder…` when changing to a user folder is possible). The single-answer ask in dialog-less browsers is now genuinely automatic — no misleading "Choose Folder" button. |
+| **storage** | `fix` | `setupDirectory()`/`init()` clear the automatic-folder flag/label, so switching to a user folder is reflected in the location UI and status immediately. |
+
+##### Verification
+- `node --check` clean; `verify_study_dir_store.js` (10), `verify_study_dir_setup.js` (3), `verify_texture_ref.js` (8) all green.
+- Real Brave (default flags): automatic OPFS folder initializes with no dialog; saving a Rec writes `rec-001-<id>.sgf` + `.json` into `baduk-notes/` in OPFS; a fresh page load reads the Recs straight back from the folder; the drop-slot shows the automatic-folder location with a "How it works…" link. Zero page errors (one pre-existing unrelated `_scoringDirty` warning on the scoring restore path).
+- Cache busters synced to `v=0.2.025`.
+
+---
 
 ### v0.2.024 — Fully Honest Keep-Ask in Browsers Without Folder Writing
 
