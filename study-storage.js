@@ -563,6 +563,25 @@ function _dirStatusText() {
     return document.getElementById('study-dir-status');
 }
 
+// Rewrite the overlay title/description to match what this browser can actually do.
+function _updateDirOverlayCopy() {
+    const title = document.getElementById('study-dir-title');
+    const sub = document.getElementById('study-dir-sub');
+    const desc = document.getElementById('study-dir-desc');
+    const btn = document.getElementById('btn-study-dir-pick');
+    if (btn) btn.textContent = 'Choose Folder';
+    if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
+        if (title) title.textContent = 'Load Rec games from a folder';
+        if (sub) sub.textContent = 'This browser cannot write .sgf files to a folder yet — Recs are saved in browser storage.';
+        if (desc) desc.innerHTML = '“Choose Folder” <strong>loads</strong> existing Rec <code>.sgf</code>/<code>.json</code> files from a folder so they appear in your study list. You do not need to add anything. To auto-save future Recs into a folder, open <strong>brave://flags</strong>, set <strong>File System Access API</strong> to <strong>Enabled</strong>, and reload.';
+        if (btn) btn.textContent = 'Choose Folder to Load';
+        return;
+    }
+    if (title) title.textContent = 'Where should your Rec games be stored?';
+    if (sub) sub.textContent = 'Choose a folder on your computer.';
+    if (desc) desc.innerHTML = 'Baduk-notes saves every study Rec as a real <strong>.sgf</strong> file in that folder — no more losing games when browser cache is cleared. You can pick a different folder anytime.';
+}
+
 function _setDirStatus(msg) {
     const el = _dirStatusText();
     if (el) el.textContent = msg || '';
@@ -601,16 +620,17 @@ async function connectStudyDirectory() {
         console.warn('[StudyDirStore] local-folder storage unavailable:', ctx);
         if (window.StudyDirStore.hasFolderFallback) {
             // Fallback: read Recs from a picked folder via <input webkitdirectory>.
-            _setDirStatus('Opening a folder to load Rec games from (read-only fallback)…');
+            _updateDirOverlayCopy();
+            _setDirStatus('Opening a folder to LOAD Rec games from (your Recs stay saved in browser storage)…');
             const res = await window.StudyDirStore.importFolderViaInput();
             if (res.records && res.records.length) {
                 await StudyRecordDB.mergeDirRecords(res.records);
-                _setDirStatus(`Loaded ${res.records.length} Rec(s) from folder "${res.name}". New Recs save to browser storage; full folder write-back needs the File System Access API enabled in Brave.`);
+                _setDirStatus(`Loaded ${res.records.length} Rec(s) from folder "${res.name}". Your Recs stay saved in browser storage. To auto-save future Recs into a folder, enable "File System Access API" (brave://flags → Enabled) and reload.`);
                 refreshStudyListAfterDirLoad();
                 return true;
             }
             if (res.name) {
-                _setDirStatus(`Folder "${res.name}" contained no Rec files. Add the <rec>.sgf files there, or keep using browser storage.`);
+                _setDirStatus(`Folder "${res.name}" has no Rec games in it — nothing was loaded. That's fine: your Recs are safe in browser storage, and you don't need to add anything to the folder. Here, Choose Folder can only LOAD existing Recs; it cannot save to a folder. To auto-save Recs into a folder, enable "File System Access API" (brave://flags → Enabled) and reload.`);
             } else {
                 _setDirStatus('This browser does not expose the File System Access API (showDirectoryPicker). Recs remain in browser storage. You can still import a folder of Recs above, or enable the API in Brave for full write-back.');
             }
@@ -678,6 +698,7 @@ async function initStudyDirStorage() {
     if (!overlay) return;
     if (overlay.dataset.triggered === '1') return;
     overlay.dataset.triggered = '1';
+    _updateDirOverlayCopy();
     setTimeout(() => {
         overlay.style.display = 'flex';
         overlay.classList.remove('hidden');
@@ -716,6 +737,7 @@ function wireStudyDirSetupUI() {
     }
     if (btnReopen) {
         btnReopen.addEventListener('click', () => {
+            _updateDirOverlayCopy();
             overlay.style.display = 'flex';
             overlay.classList.remove('hidden');
             _setDirStatus(window.StudyDirStore.getDirName()

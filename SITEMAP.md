@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.019
+version: 0.2.020
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,22 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.020 — Clearer Rec-Folder Prompt (Fallback Mode Copy)
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `fix` | **Mode-aware setup prompt**: The "Where should your Rec games be stored?" overlay now rewrites its copy (`_updateDirOverlayCopy`) based on what the browser can actually do. When the File System Access API is unavailable (e.g. default Brave), it becomes "Load Rec games from a folder", the button reads "Choose Folder to Load", and it explicitly says Recs stay in browser storage and that `brave://flags → File System Access API → Enabled` is needed for auto-saving `.sgf` files into a folder. |
+| **storage** | `fix` | **Un-confusing empty-folder message**: The old "Folder contained no Rec files. Add the <rec>.sgf files there…" made users think they must upload files. Now it explains there is nothing to upload — the folder picker just *loads* existing Recs — and Recs are already safe in browser storage. |
+
+##### Verification
+- `_updateDirOverlayCopy()` verified in real Brave in both modes: FS API disabled → fallback title+button, FS API enabled → original copy ("Where should your Rec games be stored?"/"Choose Folder").
+- `test/verify_study_dir_store.js` (10 checks) and `test/verify_study_dir_setup.js` (3 checks) green; `node --check` clean.
+- Script cache busters synced to `v=0.2.020`.
+
+---
 
 ### v0.2.019 — Split the Manual Scoring Module Out of the Monolith
 
