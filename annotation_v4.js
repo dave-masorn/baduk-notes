@@ -1633,6 +1633,7 @@ function init() {
         setupEventListeners();
         setupGameInfoEdit();
         initFloatingToolbar();
+        initStudyDirStorage();
     };
     if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(_deferredInit, { timeout: 150 });
@@ -1785,6 +1786,15 @@ window.StudyRecordDB = {
                 console.warn('localStorage quota reached for study records; safely stored in memory and IndexedDB.');
             }
 
+            // 3. Persist the actual record as real .sgf/.json files in the user-chosen
+            //    study directory (authoritative, survives cache clears). Non-blocking.
+            const savedRec = records[idx >= 0 ? idx : 0];
+            if (typeof window !== 'undefined' && window.StudyDirStore && window.StudyDirStore.isConfigured) {
+                window.StudyDirStore.saveRecord(savedRec).then(ok => {
+                    if (!ok) console.warn('[StudyRecordDB] directory save failed for', savedRec.id);
+                });
+            }
+
             console.log(`[StudyRecordDB] saveRecord -> ID: ${record.id}, recNo: ${record.recNo}, currentMoveIndex: ${record.currentMoveIndex}`);
             return true;
         } catch (e) {
@@ -1799,8 +1809,41 @@ window.StudyRecordDB = {
         return records.find(r => r && r.id === id) || null;
     },
 
+    // Load the authoritative record set from the user-chosen directory and sync it
+    // into the in-memory cache + IndexedDB + localStorage mirror. Called after the
+    // directory is configured at startup, and after the user picks/regrants it.
+    async loadAllFromDir() {
+        if (typeof window === 'undefined' || !window.StudyDirStore || !window.StudyDirStore.isConfigured) return [];
+        const dirRecords = await window.StudyDirStore.loadAllRecords();
+        if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
+
+        const merged = dirRecords.slice();
+        const byId = new Map(dirRecords.map(r => [r.id, r]));
+        this.getAllRecords().forEach(r => { if (!byId.has(r.id)) merged.push(r); });
+        merged.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
+        _recordsCache = merged;
+
+        try {
+            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(merged));
+        } catch (quotaErr) {
+            console.warn('[StudyRecordDB] localStorage quota reached while syncing from directory.');
+        }
+
+        _initIDB().then(db => {
+            if (!db) return;
+            try {
+                const tx = db.transaction(IDB_STORE, 'readwrite');
+                const store = tx.objectStore(IDB_STORE);
+                merged.forEach(r => store.put(r));
+            } catch (e) {}
+        });
+
+        return merged;
+    },
+
     deleteRecord(id) {
         try {
+            const removed = this.getRecord(id);
             let records = this.getAllRecords();
             records = records.filter(r => r.id !== id);
             _recordsCache = records;
@@ -1816,6 +1859,10 @@ window.StudyRecordDB = {
             try {
                 localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
             } catch (e) {}
+
+            if (removed && typeof window !== 'undefined' && window.StudyDirStore && window.StudyDirStore.isConfigured) {
+                window.StudyDirStore.deleteRecord(removed);
+            }
 
             return true;
         } catch (e) {
@@ -1838,8 +1885,351 @@ window.StudyRecordDB = {
     }
 };
 
+// ==========================================================================
+// Study Record Directory Storage Engine
+// (File System Access API — persists real .sgf files in a user-chosen folder)
+// ==========================================================================
+const DIR_IDB_NAME = 'BadukNotesDirStore';
+const DIR_IDB_STORE = 'dir_handles';
+const DIR_HANDLE_KEY = 'studyRecDir';
+const DIR_PREFIX = 'rec-';
+
+let _dirStoreReady = null;
+
+function _sanitizeSlug(name) {
+    return String(name || '')
+        .replace(/\.(sgf|txt)$/i, '')
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'game';
+}
+
+function _recordFileNames(rec) {
+    const slug = _sanitizeSlug(rec.fileNm);
+    const base = `${DIR_PREFIX}${String(rec.recNo || '000').padStart(3, '0')}-${slug}`;
+    return {
+        sgf: `${base}.sgf`,
+        json: `${base}.json`
+    };
+}
+
+function _openDirIDB() {
+    return new Promise((resolve) => {
+        try {
+            const req = indexedDB.open(DIR_IDB_NAME, 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(DIR_IDB_STORE)) {
+                    db.createObjectStore(DIR_IDB_STORE, { keyPath: 'key' });
+                }
+            };
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+    });
+}
+
+async function _loadDirHandle() {
+    const db = await _openDirIDB();
+    if (!db) return null;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction(DIR_IDB_STORE, 'readonly');
+            const get = tx.objectStore(DIR_IDB_STORE).get(DIR_HANDLE_KEY);
+            get.onsuccess = () => resolve((get.result && get.result.handle) || null);
+            get.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+    });
+}
+
+async function _saveDirHandle(handle) {
+    const db = await _openDirIDB();
+    if (!db || !handle) return;
+    try {
+        const tx = db.transaction(DIR_IDB_STORE, 'readwrite');
+        tx.objectStore(DIR_IDB_STORE).put({ key: DIR_HANDLE_KEY, handle });
+    } catch (e) {}
+}
+
+async function _clearDirHandle() {
+    const db = await _openDirIDB();
+    if (!db) return;
+    try {
+        const tx = db.transaction(DIR_IDB_STORE, 'readwrite');
+        tx.objectStore(DIR_IDB_STORE).delete(DIR_HANDLE_KEY);
+    } catch (e) {}
+}
+
+async function _writeFile(dirHandle, fileName, content) {
+    try {
+        const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(content);
+        await writable.close();
+        return true;
+    } catch (e) {
+        console.warn('[StudyDirStore] write failed:', fileName, e);
+        return false;
+    }
+}
+
+async function _readFileText(dirHandle, fileName) {
+    try {
+        const fileHandle = await dirHandle.getFileHandle(fileName);
+        const file = await fileHandle.getFile();
+        return await file.text();
+    } catch (e) { return null; }
+}
+
+async function _readJson(dirHandle, fileName) {
+    const text = await _readFileText(dirHandle, fileName);
+    if (!text) return null;
+    try { return JSON.parse(text); } catch (e) { return null; }
+}
+
+const StudyDirStore = {
+    _dir: null,
+
+    get isSupported() {
+        return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+    },
+
+    get isConfigured() {
+        return this.isSupported && !!this._dir;
+    },
+
+    getDirName() {
+        if (!this._dir) return '';
+        try { return this._dir.name || ''; } catch (e) { return ''; }
+    },
+
+    // Load persisted handle and request read/write permission (required once per session).
+    async init() {
+        if (!this.isSupported) return { supported: false, ready: false };
+        if (_dirStoreReady) return _dirStoreReady;
+        _dirStoreReady = (async () => {
+            const handle = await _loadDirHandle();
+            if (!handle) return { supported: true, ready: false, needsSetup: true };
+            try {
+                let perm = await handle.queryPermission({ mode: 'readwrite' });
+                if (perm !== 'granted') {
+                    perm = await handle.requestPermission({ mode: 'readwrite' });
+                }
+                if (perm === 'granted') {
+                    this._dir = handle;
+                    return { supported: true, ready: true, needsSetup: false };
+                }
+                return { supported: true, ready: false, needsSetup: true, permissionDenied: true };
+            } catch (e) {
+                return { supported: true, ready: false, needsSetup: true };
+            }
+        })();
+        return _dirStoreReady;
+    },
+
+    // Show the directory picker to the user.
+    async setupDirectory() {
+        if (!this.isSupported) return false;
+        try {
+            const handle = await window.showDirectoryPicker({ id: 'baduk-rec-storage', mode: 'readwrite' });
+            this._dir = handle;
+            await _saveDirHandle(handle);
+            return true;
+        } catch (e) { return false; }
+    },
+
+    async reGrantPermission() {
+        if (!this._dir) return false;
+        try {
+            const perm = await this._dir.requestPermission({ mode: 'readwrite' });
+            return perm === 'granted';
+        } catch (e) { return false; }
+    },
+
+    async clear() {
+        await _clearDirHandle();
+        this._dir = null;
+        _dirStoreReady = null;
+    },
+
+    async getDirHandle() {
+        return this._dir || null;
+    },
+
+    // Persist a single record to the directory (sgf + metadata json sidecar).
+    async saveRecord(rec) {
+        if (!this.isConfigured || !rec || !rec.id) return false;
+        const names = _recordFileNames(rec);
+        const meta = { ...rec };
+        delete meta.workingSgf;
+        meta.sgfFile = names.sgf;
+        meta._dirSchema = 1;
+        const okSgf = await _writeFile(this._dir, names.sgf, rec.workingSgf || rec.rawSgf || '');
+        const okJson = await _writeFile(this._dir, names.json, JSON.stringify(meta, null, 2));
+        return okSgf && okJson;
+    },
+
+    // Read every record from the directory (authoritative source).
+    async loadAllRecords() {
+        if (!this.isConfigured) return [];
+        try {
+            const out = [];
+            for await (const entry of this._dir.values()) {
+                if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue;
+                const meta = await _readJson(this._dir, entry.name);
+                if (!meta || !meta.id || meta._dirSchema !== 1) continue;
+                const sgf = meta.sgfFile ? await _readFileText(this._dir, meta.sgfFile) : null;
+                if (sgf == null && !meta.rawSgf) continue;
+                out.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
+            }
+            out.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
+            return out;
+        } catch (e) {
+            console.warn('[StudyDirStore] loadAllRecords failed:', e);
+            return [];
+        }
+    },
+
+    async deleteRecord(rec) {
+        if (!this.isConfigured || !rec) return;
+        const names = _recordFileNames(rec);
+        try {
+            if (rec.id) {
+                // Remove the file matching this rec's stored sgfFile, if any differ.
+                if (rec._dirSchema === 1 && rec.sgfFile && rec.sgfFile !== names.sgf) {
+                    try { await this._dir.removeEntry(rec.sgfFile); } catch (e) {}
+                }
+            }
+            try { await this._dir.removeEntry(names.sgf); } catch (e) {}
+            try { await this._dir.removeEntry(names.json); } catch (e) {}
+        } catch (e) {}
+    }
+};
+
+if (typeof window !== 'undefined') {
+    window.StudyDirStore = StudyDirStore;
+}
+
+// ==========================================================================
+// Directory storage bootstrapping + setup UI
+// ==========================================================================
+function _dirOverlay() {
+    return document.getElementById('study-dir-setup-overlay');
+}
+
+function _dirStatusText() {
+    return document.getElementById('study-dir-status');
+}
+
+function _setDirStatus(msg) {
+    const el = _dirStatusText();
+    if (el) el.textContent = msg || '';
+    const indicator = document.getElementById('study-dir-indicator');
+    if (indicator) {
+        if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
+            indicator.textContent = `📁 ${window.StudyDirStore.getDirName()}`;
+            indicator.style.color = '#295D2F';
+            indicator.style.fontWeight = '600';
+        } else {
+            indicator.textContent = '⚠️ No rec folder set';
+            indicator.style.color = '#a16207';
+        }
+    }
+}
+
+function refreshStudyListAfterDirLoad() {
+    if (typeof renderResumeStudyTable === 'function') {
+        const searchEl = document.getElementById('kifu-search-input');
+        renderResumeStudyTable(searchEl ? searchEl.value : '');
+    }
+    if (typeof updateSaveRecGameButton === 'function') {
+        updateSaveRecGameButton();
+    }
+}
+
+async function connectStudyDirectory() {
+    if (!window.StudyDirStore || !window.StudyDirStore.isSupported) {
+        _setDirStatus('This browser does not support local-folder storage. Recs remain in browser storage.');
+        return false;
+    }
+    const ok = window.StudyDirStore.isConfigured
+        ? await window.StudyDirStore.reGrantPermission()
+        : await window.StudyDirStore.setupDirectory();
+    if (!ok) {
+        _setDirStatus('Folder access was not granted.');
+        return false;
+    }
+    await StudyRecordDB.loadAllFromDir();
+    _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
+    refreshStudyListAfterDirLoad();
+    return true;
+}
+
+async function initStudyDirStorage() {
+    if (!window.StudyDirStore) return;
+
+    if (window.StudyDirStore.isSupported) {
+        const st = await window.StudyDirStore.init();
+        if (st.ready) {
+            await StudyRecordDB.loadAllFromDir();
+            _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
+            return;
+        }
+    }
+
+    // Not configured yet (or permission not yet granted) — offer the setup prompt,
+    // but only on startup sessions, not for ordinary record snapshots.
+    const overlay = _dirOverlay();
+    if (!overlay) return;
+    if (overlay.dataset.triggered === '1') return;
+    overlay.dataset.triggered = '1';
+    setTimeout(() => {
+        overlay.style.display = 'flex';
+        overlay.classList.remove('hidden');
+    }, 400);
+}
+
+function wireStudyDirSetupUI() {
+    const overlay = _dirOverlay();
+    if (!overlay) return;
+
+    const btnPick = document.getElementById('btn-study-dir-pick');
+    const btnLater = document.getElementById('btn-study-dir-later');
+    const btnReopen = document.getElementById('btn-study-dir-open');
+
+    const close = () => {
+        overlay.style.display = 'none';
+        overlay.classList.add('hidden');
+    };
+
+    if (btnPick) {
+        btnPick.addEventListener('click', async () => {
+            await connectStudyDirectory();
+            close();
+        });
+    }
+    if (btnLater) {
+        btnLater.addEventListener('click', close);
+    }
+    if (btnReopen) {
+        btnReopen.addEventListener('click', () => {
+            overlay.style.display = 'flex';
+            overlay.classList.remove('hidden');
+            _setDirStatus(window.StudyDirStore.getDirName()
+                ? `Folder: ${window.StudyDirStore.getDirName()} — click Choose Folder to change.`
+                : '');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) close();
+        });
+    }
+}
+
 // Event Listeners Setup
 function setupEventListeners() {
+    wireStudyDirSetupUI();
     // Diagram Exporter Toggle
     const toggleDiagramExporter = document.getElementById('toggle-diagram-exporter');
     if (toggleDiagramExporter) {
@@ -2772,6 +3162,7 @@ function setupEventListeners() {
             });
         });
     }
+    window.renderResumeStudyTable = renderResumeStudyTable;
 
     function exportStudySessionSgf(id) {
         const rec = StudyRecordDB.getRecord(id);

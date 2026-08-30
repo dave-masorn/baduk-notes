@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.013
+version: 0.2.014
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,27 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.014 — Study Record Directory Storage (Real .sgf Files in a User-Chosen Folder)
+
+#### Added
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `feat` | **User-Chosen Rec Storage Folder**: On first use (or when none is set) the app asks the user to pick a local folder; every study Rec is then persisted as a real `.sgf` file (plus a `.json` metadata sidecar) in that folder via the File System Access API — no more losing games when browser cache/localStorage is cleared. |
+| **storage** | `feat` | **Folder Handle Remembered Across Sessions**: The `FileSystemDirectoryHandle` is stored in IndexedDB, restored on the next session, and re-granted read/write permission, so the user picks the folder once. A **📂 Rec Folder** button in the Resume Study (Kifu) modal opens the setup to change it anytime. |
+| **storage** | `feat` | **Directory Is the Authoritative Source**: On startup the app loads every Rec from the chosen folder and syncs into the in-memory cache, IndexedDB, and the existing localStorage mirror (kept as a fallback so it still works in browsers without the File System Access API). |
+| **storage** | `feat` | **Graceful Browser Fallback**: When the File System Access API is unavailable, records continue to persist via the existing IndexedDB/localStorage browser storage without interruption. |
+
+##### Details
+The new `StudyDirStore` (annotation_v4.js) wraps `showDirectoryPicker`/`getFileHandle`/`createWritable` and persists the directory handle in a dedicated `BadukNotesDirStore` IndexedDB database. Each record maps to deterministic filenames `rec-<recNo>-<slug>.sgf` and `rec-<recNo>-<slug>.json`; the JSON sidecar holds all non-SGF fields (recNo, fileNm, blk, wht, lastAccess, currentMoveIndex, currentBranchPath, settings, scoringData) plus a pointer to its `.sgf`. `saveRecord`/`deleteRecord`/`loadAllFromDir` on `StudyRecordDB` now write/read/merge through the directory while still mirroring to browser storage. A "Choose Folder" setup overlay (plus the `📂 Rec Folder` button in the Kifu modal) drives configuration.
+
+##### Verification
+- Added `test/verify_study_dir_store.js` (7 checks): `saveRecord` returns true, the record is retrievable, the row renders in the Resume Study table, `StudyDirStore`/setup overlay/Rec Folder button exist, graceful fallback when the FS API is unsupported, and a saved record survives a page reload.
+- Existing `npm run test:all` suites remain green (replace-click 10, replace-fix 7, rearrange 6, msm 110, territory-freeze 21+7 skip, bm-edge-mask 22, white-rim 7, stone-offset 18, study-dir-store 7).
+- `node --check` clean on `annotation_v4.js`. Script cache busters synced to `v=0.2.014`.
+
+---
 
 ### v0.2.013 — Study Session Create Render Pipeline Fix
 
