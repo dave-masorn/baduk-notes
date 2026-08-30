@@ -1669,20 +1669,94 @@ function formatStudyAccessTime(date = new Date()) {
     return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
 }
 
+const IDB_NAME = 'BadukNotesDB';
+const IDB_STORE = 'study_records';
+const IDB_VERSION = 1;
+
+let _recordsCache = null;
+let _idbPromise = null;
+
+function _initIDB() {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    if (_idbPromise) return _idbPromise;
+
+    _idbPromise = new Promise((resolve) => {
+        try {
+            const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(IDB_STORE)) {
+                    db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+                }
+            };
+            req.onsuccess = (e) => {
+                const db = e.target.result;
+                const tx = db.transaction(IDB_STORE, 'readonly');
+                const store = tx.objectStore(IDB_STORE);
+                const countReq = store.count();
+
+                countReq.onsuccess = () => {
+                    if (countReq.result === 0) {
+                        try {
+                            const localRaw = localStorage.getItem(STUDY_STORAGE_KEY);
+                            if (localRaw) {
+                                const localList = JSON.parse(localRaw);
+                                if (Array.isArray(localList) && localList.length > 0) {
+                                    const writeTx = db.transaction(IDB_STORE, 'readwrite');
+                                    const writeStore = writeTx.objectStore(IDB_STORE);
+                                    localList.forEach(r => writeStore.put(r));
+                                    _recordsCache = localList;
+                                }
+                            }
+                        } catch (migErr) {}
+                        resolve(db);
+                    } else {
+                        const getAllReq = store.getAll();
+                        getAllReq.onsuccess = () => {
+                            if (Array.isArray(getAllReq.result) && getAllReq.result.length > 0) {
+                                _recordsCache = getAllReq.result;
+                            }
+                            resolve(db);
+                        };
+                        getAllReq.onerror = () => resolve(db);
+                    }
+                };
+                countReq.onerror = () => resolve(db);
+            };
+            req.onerror = () => resolve(null);
+        } catch (e) {
+            resolve(null);
+        }
+    });
+
+    return _idbPromise;
+}
+
+if (typeof window !== 'undefined') {
+    _initIDB();
+}
+
 window.StudyRecordDB = {
     getAllRecords() {
         try {
             const raw = localStorage.getItem(STUDY_STORAGE_KEY);
-            if (!raw) return [];
-            const list = JSON.parse(raw);
-            return Array.isArray(list) ? list : [];
-        } catch (e) {
-            console.error('Failed to load study records:', e);
-            return [];
+            if (raw) {
+                const list = JSON.parse(raw);
+                if (Array.isArray(list)) {
+                    _recordsCache = list;
+                    return _recordsCache;
+                }
+            }
+        } catch (e) {}
+
+        if (_recordsCache !== null) {
+            return _recordsCache;
         }
+        return [];
     },
 
     saveRecord(record) {
+        if (!record || !record.id) return false;
         try {
             const records = this.getAllRecords();
             const idx = records.findIndex(r => r.id === record.id);
@@ -1691,7 +1765,26 @@ window.StudyRecordDB = {
             } else {
                 records.unshift(record);
             }
-            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            _recordsCache = records;
+
+            // 1. Immediately persist to IndexedDB (master store, unlimited quota)
+            _initIDB().then(db => {
+                if (!db) return;
+                try {
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    tx.objectStore(IDB_STORE).put(records[idx >= 0 ? idx : 0]);
+                } catch (e) {
+                    console.error('Error writing record to IndexedDB:', e);
+                }
+            });
+
+            // 2. Best-effort mirror to localStorage
+            try {
+                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            } catch (quotaErr) {
+                console.warn('localStorage quota reached for study records; safely stored in memory and IndexedDB.');
+            }
+
             console.log(`[StudyRecordDB] saveRecord -> ID: ${record.id}, recNo: ${record.recNo}, currentMoveIndex: ${record.currentMoveIndex}`);
             return true;
         } catch (e) {
@@ -1701,15 +1794,29 @@ window.StudyRecordDB = {
     },
 
     getRecord(id) {
+        if (!id) return null;
         const records = this.getAllRecords();
-        return records.find(r => r.id === id) || null;
+        return records.find(r => r && r.id === id) || null;
     },
 
     deleteRecord(id) {
         try {
             let records = this.getAllRecords();
             records = records.filter(r => r.id !== id);
-            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            _recordsCache = records;
+
+            _initIDB().then(db => {
+                if (!db) return;
+                try {
+                    const tx = db.transaction(IDB_STORE, 'readwrite');
+                    tx.objectStore(IDB_STORE).delete(id);
+                } catch (e) {}
+            });
+
+            try {
+                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
+            } catch (e) {}
+
             return true;
         } catch (e) {
             console.error('Failed to delete study record:', e);
@@ -3699,6 +3806,7 @@ function setupEventListeners() {
             promptOverlay.classList.remove('hidden');
         }
     }
+    window.openStudyPrompt = openStudyPrompt;
 
     if (btnPromptYes) {
         btnPromptYes.addEventListener('click', () => {
