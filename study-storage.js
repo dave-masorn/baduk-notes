@@ -586,6 +586,49 @@ function _dirStatusText() {
     return document.getElementById('study-dir-status');
 }
 
+// The keep-location question is asked only once (first launch). After that,
+// later visits show the current location under the SGF drop-slot instead.
+function _dirChoiceDone() {
+    try { return localStorage.getItem('baduk_dir_choice_done') === '1'; } catch (e) { return false; }
+}
+
+function _markDirChoiceDone() {
+    try { localStorage.setItem('baduk_dir_choice_done', '1'); } catch (e) {}
+}
+
+function _openDirSetup() {
+    const overlay = _dirOverlay();
+    if (!overlay) return;
+    _updateDirOverlayCopy();
+    overlay.classList.remove('hidden');
+    overlay.style.display = 'flex';
+    _setDirStatus(window.StudyDirStore.getDirName()
+        ? 'Folder: ' + window.StudyDirStore.getDirName() + ' \u2014 click Choose Folder to change.'
+        : '');
+}
+
+// The "Try dropping your SGF file" slot doubles as the Rec-database location:
+// once the keep-location is decided it shows where Recs live + a Change control.
+function updateDirLocationUI() {
+    const el = document.getElementById('header-subtitle-text');
+    if (!el) return;
+    let html;
+    if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
+        const name = window.StudyDirStore.getDirName() || 'the selected folder';
+        html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The folder where Baduk-Notes keeps your Rec games">Change</a>';
+    } else {
+        html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="Choose where Baduk-Notes keeps your Rec games">Choose folder\u2026</a>';
+    }
+    el.innerHTML = html;
+    const link = document.getElementById('dir-change-link');
+    if (link) {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            _openDirSetup();
+        });
+    }
+}
+
 // Rewrite the overlay title/description to match what this browser can actually do.
 function _updateDirOverlayCopy() {
     const title = document.getElementById('study-dir-title');
@@ -594,15 +637,14 @@ function _updateDirOverlayCopy() {
     const btn = document.getElementById('btn-study-dir-pick');
     if (btn) btn.textContent = 'Choose Folder';
     if (window.StudyDirStore && !window.StudyDirStore.isSupported && window.StudyDirStore.hasFolderFallback) {
-        if (title) title.textContent = 'Load Rec games from a folder';
-        if (sub) sub.textContent = 'This browser cannot write .sgf files to a folder yet — your Recs stay saved in browser storage.';
-        if (desc) desc.innerHTML = '"Choose Folder" loads existing Rec <code>.sgf</code>/<code>.json</code> files into your study list — nothing to upload. To have Baduk-Notes save future Recs as .sgf files into a folder, set <strong>brave://flags → File System Access API → Enabled</strong> and reload.';
-        if (btn) btn.textContent = 'Choose Folder to Load';
+        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+        if (sub) sub.textContent = 'This browser cannot write into a folder yet, so Recs stay saved in browser storage.';
+        if (desc) desc.innerHTML = 'The folder becomes your Rec database: Baduk-Notes writes every Rec there as a <strong>.sgf</strong> file and reads them back on your next visit. Enable \u0022File System Access API\u0022 (brave://flags) once and reload to use a folder \u2014 or keep your Recs here in browser storage.';
         return;
     }
-    if (title) title.textContent = 'Where should your Rec games be stored?';
-    if (sub) sub.textContent = 'Choose a folder on your computer.';
-    if (desc) desc.innerHTML = 'Baduk-notes saves every study Rec as a real <strong>.sgf</strong> file in that folder — no more losing games when browser cache is cleared. You can pick a different folder anytime.';
+    if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+    if (sub) sub.textContent = 'Pick a folder once. Every Rec is saved there as a real .sgf file and read back on your next visit.';
+    if (desc) desc.innerHTML = 'The folder becomes your Rec database on this device. You can change it anytime, and everything stays in sync.';
 }
 
 function _setDirStatus(msg) {
@@ -642,20 +684,26 @@ async function connectStudyDirectory() {
         const ctx = { showDirectoryPicker: hasPicker, isSecureContext: secure, href: window.location.href };
         console.warn('[StudyDirStore] local-folder storage unavailable:', ctx);
         if (window.StudyDirStore.hasFolderFallback) {
-            // Fallback: read Recs from a picked folder via <input webkitdirectory>.
+            // Fallback: the picked folder is the keep-location. This browser cannot
+            // WRITE into it yet, so Recs stay in browser storage; the folder can only
+            // be read (existing Recs brought in) until folder-write is enabled.
             _updateDirOverlayCopy();
-            _setDirStatus('Choosing a folder to LOAD Rec games from (your Recs stay saved in browser storage)…');
+            _setDirStatus('This browser cannot write into a folder yet. You can still bring in existing Rec games from the folder now.');
             const res = await window.StudyDirStore.importFolderViaInput();
+            _markDirChoiceDone();
+            updateDirLocationUI();
             if (res.records && res.records.length) {
                 await StudyRecordDB.mergeDirRecords(res.records);
-                _setDirStatus(`Loaded ${res.records.length} Rec(s) from "${res.name || 'folder'}". They stay saved in browser storage here; to auto-save future Recs as .sgf files into a folder, enable "File System Access API" (brave://flags --> Enabled) and reload.`);
+                const dirLabel = res.name || '(that folder)';
+                _setDirStatus(`Loaded ${res.records.length} Rec(s) from "${dirLabel}" into your study list. Your Recs stay saved in browser storage.`);
                 refreshStudyListAfterDirLoad();
                 return true;
             }
+            const dirLabel = res.name || '(that folder)';
             if (res.totalFiles > 0) {
-                _setDirStatus(`Scanned ${res.totalFiles} file(s) in "${res.name || 'that folder'}" but found no Rec games (.sgf/.json) — nothing was loaded. Your Recs stay safe in browser storage. To have Baduk-Notes save Recs into a folder, enable "File System Access API" (brave://flags → Enabled) and reload.`);
+                _setDirStatus(`Scanned ${res.totalFiles} file(s) in "${dirLabel}" but found no Rec games (.sgf/.json). Nothing was loaded; Recs stay in browser storage.`);
             } else {
-                _setDirStatus('That folder has no Rec files to load — nothing changed. Your Recs stay safe in browser storage. To have Baduk-Notes save Recs as .sgf files into a folder, enable "File System Access API" (brave://flags → Enabled) and reload.');
+                _setDirStatus('That folder has no Rec files. Recs stay in browser storage.');
             }
             return false;
         }
@@ -685,7 +733,7 @@ async function connectStudyDirectory() {
     } catch (err) {
         console.error('[StudyDirStore] folder selection failed:', err);
         if (err && err.name === 'AbortError') {
-            _setDirStatus('Folder selection was cancelled. Recs remain in browser storage until you pick a folder.');
+            _setDirStatus('Folder selection was cancelled. Recs stay in browser storage until you pick a folder.');
         } else {
             _setDirStatus(`Could not open the folder picker: ${err && err.message ? err.message : err}`);
         }
@@ -698,6 +746,8 @@ async function connectStudyDirectory() {
     }
 
     await StudyRecordDB.loadAllFromDir();
+    _markDirChoiceDone();
+    updateDirLocationUI();
     _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
     refreshStudyListAfterDirLoad();
     return true;
@@ -710,13 +760,19 @@ async function initStudyDirStorage() {
         const st = await window.StudyDirStore.init();
         if (st.ready) {
             await StudyRecordDB.loadAllFromDir();
+            _markDirChoiceDone();
+            updateDirLocationUI();
             _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
             return;
         }
     }
 
-    // Not configured yet (or permission not yet granted) — offer the setup prompt,
-    // but only on startup sessions, not for ordinary record snapshots.
+    // Keep-location decided on a previous visit: no re-ask, just show the location
+    // under the SGF drop-slot (with a Change control).
+    updateDirLocationUI();
+    if (_dirChoiceDone()) return;
+
+    // First launch — ask once where Baduk-Notes should keep the Rec database.
     const overlay = _dirOverlay();
     if (!overlay) return;
     if (overlay.dataset.triggered === '1') return;
@@ -744,10 +800,12 @@ function wireStudyDirSetupUI() {
     if (btnPick) {
         btnPick.addEventListener('click', async () => {
             btnPick.disabled = true;
-            _setDirStatus('Opening folder picker…');
+            _setDirStatus('Opening the folder picker\u2026');
             const ok = await connectStudyDirectory();
             btnPick.disabled = false;
             if (ok) {
+                _markDirChoiceDone();
+                updateDirLocationUI();
                 // Success — the status (folder name) is shown inside the overlay for a
                 // moment before closing so the user sees where their Recs will go.
                 setTimeout(close, 900);
@@ -756,16 +814,15 @@ function wireStudyDirSetupUI() {
         });
     }
     if (btnLater) {
-        btnLater.addEventListener('click', close);
+        btnLater.addEventListener('click', () => {
+            _markDirChoiceDone();
+            updateDirLocationUI();
+            close();
+        });
     }
     if (btnReopen) {
         btnReopen.addEventListener('click', () => {
-            _updateDirOverlayCopy();
-            overlay.style.display = 'flex';
-            overlay.classList.remove('hidden');
-            _setDirStatus(window.StudyDirStore.getDirName()
-                ? `Folder: ${window.StudyDirStore.getDirName()} — click Choose Folder to change.`
-                : '');
+            _openDirSetup();
         });
     }
     if (overlay) {

@@ -296,7 +296,7 @@
                 <img src="baduknt-2.png" class="logo-small" alt="Go Diagram Annotator">
             </div>
             <span class="brand-motto">Play Go, take notes, and have fun.</span>
-            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.2.022</a>
+            <a href="/tech-log-dist/docs/" style="position: absolute; left: 50%; transform: translateX(-50%); text-decoration: none; color: #8b8580; font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; padding: 4px 12px; border-radius: 6px; border: 1px solid #e8e5e0; background: #faf9f7; transition: all 0.15s; white-space: nowrap;" onmouseover="this.style.color='#c2410c';this.style.borderColor='#fed7aa';this.style.background='#fff7ed'" onmouseout="this.style.color='#8b8580';this.style.borderColor='#e8e5e0';this.style.background='#faf9f7'">tech_log-0.2.023</a>
             <button id="pwa-install-btn" style="display: none; background: #eab308; color: #854d0e; border: 1px solid #ca8a04; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; margin-left: auto; transition: all 0.2s;">Install App</button>
         </div>
     </header>
@@ -1683,11 +1683,11 @@
     <div id="study-dir-setup-overlay" class="modal-overlay hidden" style="display: none; align-items: center; justify-content: center; position: fixed; inset: 0; z-index: 10020; background: rgba(10, 25, 20, 0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);">
         <div style="background: #0d2822; color: #ecfdf5; border-radius: 16px; padding: 26px; max-width: 460px; width: 90%; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); border: 1px solid rgba(16, 185, 129, 0.25); text-align: center;">
             <div style="font-size: 2rem; margin-bottom: 12px;">📂</div>
-            <h2 id="study-dir-title" style="font-size: 1.1rem; font-weight: 700; margin: 0 0 8px; color: #f0fdf4;">Where should your Rec games be stored?</h2>
-            <p id="study-dir-sub" style="font-size: 0.85rem; color: #a7f3d0; margin: 0 0 6px;">Choose a folder on your computer.</p>
-            <p id="study-dir-desc" style="font-size: 0.78rem; color: #6ee7b7; margin: 0 0 16px;">Baduk-notes saves every study Rec as a real <strong>.sgf</strong> file in that folder — no more losing games when browser cache is cleared. You can pick a different folder anytime.</p>
+            <h2 id="study-dir-title" style="font-size: 1.1rem; font-weight: 700; margin: 0 0 8px; color: #f0fdf4;">Where should Baduk-Notes keep your Rec games?</h2>
+            <p id="study-dir-sub" style="font-size: 0.85rem; color: #a7f3d0; margin: 0 0 6px;">Pick a folder once. Every Rec is saved there as a real .sgf file and read back on your next visit.</p>
+            <p id="study-dir-desc" style="font-size: 0.78rem; color: #6ee7b7; margin: 0 0 16px;">The folder becomes your Rec database on this device. You can change it anytime, and everything stays in sync.</p>
             <button id="btn-study-dir-pick" style="background: #10b981; color: white; border: none; border-radius: 8px; padding: 11px 26px; font-size: 0.9rem; font-weight: 700; cursor: pointer; width: 100%; margin-bottom: 10px; transition: all 0.15s;">Choose Folder</button>
-            <button id="btn-study-dir-later" style="background: transparent; color: #9ca3af; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 9px 20px; font-size: 0.82rem; font-weight: 600; cursor: pointer; width: 100%;">Not Now</button>
+            <button id="btn-study-dir-later" style="background: transparent; color: #9ca3af; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 9px 20px; font-size: 0.82rem; font-weight: 600; cursor: pointer; width: 100%;">Keep in browser storage</button>
             <div id="study-dir-status" style="font-size: 0.74rem; color: #6ee7b7; margin-top: 12px; word-break: break-all;"></div>
         </div>
     </div>
@@ -2703,19 +2703,19 @@
     </script>
 
     <!-- Core Application Scripts -->
-    <script defer src="sgf-parser.js?v=0.2.022"></script>
-    <script defer src="deadstones.bundle.js?v=0.2.022"></script>
-    <script defer src="board-estimate.js?v=0.2.022"></script>
-    <script defer src="goscorer.js?v=0.2.022"></script>
-    <script defer src="liberties.js?v=0.2.022"></script>
-    <script defer src="move-term-detector.js?v=0.2.022"></script>
-    <script defer src="phase-detector.js?v=0.2.022"></script>
-    <script defer src="game-tree.js?v=0.2.022"></script>
-    <script defer src="study-storage.js?v=0.2.022"></script>
-    <script defer src="board-texture.js?v=0.2.022"></script>
-    <script defer src="board-renderer.js?v=0.2.022"></script>
-    <script defer src="export-diagram.js?v=0.2.022"></script>
-    <script defer src="annotation_v4.js?v=0.2.022"></script>
-    <script defer src="scoring.js?v=0.2.022"></script>
+    <script defer src="sgf-parser.js?v=0.2.023"></script>
+    <script defer src="deadstones.bundle.js?v=0.2.023"></script>
+    <script defer src="board-estimate.js?v=0.2.023"></script>
+    <script defer src="goscorer.js?v=0.2.023"></script>
+    <script defer src="liberties.js?v=0.2.023"></script>
+    <script defer src="move-term-detector.js?v=0.2.023"></script>
+    <script defer src="phase-detector.js?v=0.2.023"></script>
+    <script defer src="game-tree.js?v=0.2.023"></script>
+    <script defer src="study-storage.js?v=0.2.023"></script>
+    <script defer src="board-texture.js?v=0.2.023"></script>
+    <script defer src="board-renderer.js?v=0.2.023"></script>
+    <script defer src="export-diagram.js?v=0.2.023"></script>
+    <script defer src="annotation_v4.js?v=0.2.023"></script>
+    <script defer src="scoring.js?v=0.2.023"></script>
 </body>
 </html>

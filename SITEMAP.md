@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.022
+version: 0.2.023
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.023 — Rec Database Folder: Ask Once, Show Location in the Drop-Slot
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `feat` | **Ask "where to KEEP", not "what to load"**: the setup overlay now frames the folder as the Rec database (where Baduk-Notes writes every Rec as a `.sgf` and reads them back next visit), in both full FS-API support and browser-storage fallback. Secondary button is now "Keep in browser storage"; the old "load/upload" wording is gone. |
+| **storage** | `feat` | **Asked only once**: the "where to keep Recs" prompt appears on first launch only. The answer is remembered (`localStorage.baduk_dir_choice_done`); later visits never re-ask. |
+| **ui** | `feat` | **Drop-slot shows the DB location**: the "Try dropping your SGF file" header slot now displays the Rec database location — 📁 folder name or 🗂 "Recs kept in browser storage" — with a Change/Choose-folder link that reopens the setup. The location persists across visits. |
+| **storage** | `fix` | Fallback status lines shortened and de-duplicated: loaded-count, no-rec-found, and empty-folder cases each state plainly what happened with no repeated flag instructions (the flag path is mentioned once, in the overlay description). |
+
+##### Verification
+- `node --check` clean; `verify_study_dir_store.js` (10), `verify_study_dir_setup.js` (3), `verify_texture_ref.js` (8) all green.
+- Real Brave (default flags): first launch shows the new keep-copy once; "Keep in browser storage" closes it and the drop-slot shows the location badge; the Change link reopens the overlay; a reload does **not** re-ask and keeps the location displayed. Zero page errors related to this change (one pre-existing unrelated `_scoringDirty` warning on the scoring restore path).
+- Cache busters synced to `v=0.2.023`.
+
+---
 
 ### v0.2.022 — Rec-Folder Import: Real Folder Name, Clearer Copy
 
