@@ -2148,17 +2148,53 @@ function refreshStudyListAfterDirLoad() {
 }
 
 async function connectStudyDirectory() {
-    if (!window.StudyDirStore || !window.StudyDirStore.isSupported) {
-        _setDirStatus('This browser does not support local-folder storage. Recs remain in browser storage.');
+    if (!window.StudyDirStore) {
+        _setDirStatus('Storage engine not initialised. Please reload the page.');
         return false;
     }
-    const ok = window.StudyDirStore.isConfigured
-        ? await window.StudyDirStore.reGrantPermission()
-        : await window.StudyDirStore.setupDirectory();
+    if (!window.StudyDirStore.isSupported) {
+        const hasPicker = typeof window.showDirectoryPicker === 'function';
+        const secure = typeof window.isSecureContext !== 'undefined' ? window.isSecureContext : null;
+        const ctx = { showDirectoryPicker: hasPicker, isSecureContext: secure, href: window.location.href };
+        console.warn('[StudyDirStore] local-folder storage unavailable:', ctx);
+        if (!secure) {
+            _setDirStatus('Local-folder storage needs a secure context (HTTPS or http://localhost). Open the app at http://localhost:8577/ in Chrome/Edge/Brave, or Recs stay in browser storage.');
+        } else if (!hasPicker) {
+            _setDirStatus('This browser does not expose the File System Access API (showDirectoryPicker). Use Chrome/Edge/Brave to enable folder storage. Recs remain in browser storage for now.');
+        } else {
+            _setDirStatus('This browser does not support local-folder storage. Recs remain in browser storage.');
+        }
+        console.log('[StudyDirStore] diagnostics:', ctx);
+        return false;
+    }
+
+    let ok = false;
+    try {
+        if (window.StudyDirStore.isConfigured) {
+            ok = await window.StudyDirStore.reGrantPermission();
+            if (!ok) {
+                // Stored handle is stale/revoked — fall back to re-picking a folder.
+                _setDirStatus('Could not re-grant access to the saved folder. Choose a folder again below.');
+                ok = await window.StudyDirStore.setupDirectory();
+            }
+        } else {
+            ok = await window.StudyDirStore.setupDirectory();
+        }
+    } catch (err) {
+        console.error('[StudyDirStore] folder selection failed:', err);
+        if (err && err.name === 'AbortError') {
+            _setDirStatus('Folder selection was cancelled. Recs remain in browser storage until you pick a folder.');
+        } else {
+            _setDirStatus(`Could not open the folder picker: ${err && err.message ? err.message : err}`);
+        }
+        return false;
+    }
+
     if (!ok) {
-        _setDirStatus('Folder access was not granted.');
+        _setDirStatus('Folder access was not granted. Pick a folder to save your Rec games.');
         return false;
     }
+
     await StudyRecordDB.loadAllFromDir();
     _setDirStatus(`Rec folder: ${window.StudyDirStore.getDirName()}`);
     refreshStudyListAfterDirLoad();
@@ -2204,8 +2240,16 @@ function wireStudyDirSetupUI() {
 
     if (btnPick) {
         btnPick.addEventListener('click', async () => {
-            await connectStudyDirectory();
-            close();
+            btnPick.disabled = true;
+            _setDirStatus('Opening folder picker…');
+            const ok = await connectStudyDirectory();
+            btnPick.disabled = false;
+            if (ok) {
+                // Success — the status (folder name) is shown inside the overlay for a
+                // moment before closing so the user sees where their Recs will go.
+                setTimeout(close, 900);
+            }
+            // On failure the overlay stays open with the reason visible.
         });
     }
     if (btnLater) {
