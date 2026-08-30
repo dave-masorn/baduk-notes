@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.017
+version: 0.2.018
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.018 — Split the Export/Diagram Module Out of the Monolith
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **arch** | `refactor` | **`annotation_v4.js` split (pass 3)**: Extracted the export & diagram module into `export-diagram.js` (~2,084 lines) — `loadRecoloredSvg`, `generateDiagramDataURL`, `openExportModal`, `configureModalInputs`, `updateExportPreview`, `serializeState`/`deserializeState`, `updateReplicationCode`, `triggerBrowserDownload`/`triggerBrowserImageDownload`, `updateLegendUI`. `annotation_v4.js` shrank from 15,766 to 13,687 lines. |
+
+##### Details
+`export-diagram.js` is pure function declarations (no top-level effects), loaded after `board-renderer.js` and before `annotation_v4.js` in the defer chain. It calls `drawBoard`/`renderBoardToCtx` (exported by board-renderer.js) only at call time. No references to the `setupEventListeners` closure-local functions.
+
+##### Verification
+- `node --check` clean on `annotation_v4.js` and `export-diagram.js`.
+- Export smoke check on the served app (open export modal, serialize/replication code still exposed on `window`).
+- Script cache busters synced to `v=0.2.018`.
+
+---
 
 ### v0.2.017 — Split the Board Rendering Pipeline Out of the Monolith
 
