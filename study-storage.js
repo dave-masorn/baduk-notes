@@ -56,6 +56,7 @@ function _initIDB() {
                                 }
                             }
                         } catch (migErr) {}
+                        _rerenderResumeList();
                         resolve(db);
                     } else {
                         const getAllReq = store.getAll();
@@ -63,6 +64,7 @@ function _initIDB() {
                             if (Array.isArray(getAllReq.result) && getAllReq.result.length > 0) {
                                 _recordsCache = getAllReq.result;
                             }
+                            _rerenderResumeList();
                             resolve(db);
                         };
                         getAllReq.onerror = () => resolve(db);
@@ -77,6 +79,20 @@ function _initIDB() {
     });
 
     return _idbPromise;
+}
+
+// The resume-study list is rendered once during app init; if records land in the
+// cache later (async IDB load), re-render so the count is never stuck at 0.
+function _rerenderResumeList() {
+    if (typeof window === 'undefined') return;
+    requestAnimationFrame(() => {
+        if (typeof window.renderResumeStudyTable === 'function') {
+            try {
+                const searchEl = document.getElementById('kifu-search-input');
+                window.renderResumeStudyTable(searchEl ? searchEl.value : '');
+            } catch (e) {}
+        }
+    });
 }
 
 if (typeof window !== 'undefined') {
@@ -883,6 +899,10 @@ async function initStudyDirStorage() {
         updateDirLocationUI();
         const name = window.StudyDirStore.getDirName();
         _setDirStatus(name ? 'Rec database: ' + name : '');
+        // The resume-study list renders synchronously during app init, before this
+        // async load finishes — re-render it now so Recs loaded from the folder
+        // actually show up (and the count is not stuck at 0 RECORDED).
+        refreshStudyListAfterDirLoad();
         return;
     }
 

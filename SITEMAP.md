@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.025
+version: 0.2.026
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,21 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.026 — Resume-Study List No Longer Freezes at "0 RECORDED" After Refresh
+
+#### Fixed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **ui/storage** | `fix` | **Frozen "0 RECORDED" after refresh**: the Resume Your Study modal rendered once during app init — synchronously, before the async folder/OPFS load finished — and nothing re-rendered afterwards, so a full list could sit at "0 RECORDED" with no rows even though the Recs were safely persisted. `initStudyDirStorage()` now calls `refreshStudyListAfterDirLoad()` after the directory load completes, and the deferred IndexedDB cache populate re-renders the list via a new `_rerenderResumeList()` hook. The count/label ("N RECORDED", `Tracked Go Study Sessions (N Games)`) is derived live from the authoritative, merged record store on every render. |
+
+##### Verification
+- `node --check` clean; `verify_study_dir_store.js` (10), `verify_study_dir_setup.js` (3), `verify_texture_ref.js` (8) all green.
+- Real Brave (default flags) full UI round-trip: drop SGF → "Yes, Record It" → reload → badge "1 RECORDED", 1 row, `getAllRecords().length === 1`, rec files in the OPFS `baduk-notes/` folder, zero page errors.
+- Cache busters synced to `v=0.2.026`.
+
+---
 
 ### v0.2.025 — Rec Database in an Automatic Private Folder (OPFS): Works in Brave with No Flags
 
