@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.021
+version: 0.2.022
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,23 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.022 — Rec-Folder Import: Real Folder Name, Clearer Copy
+
+#### Added & Improved
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage** | `fix` | **Real folder name**: the "Choose Folder to Load" (webkitdirectory fallback) flow now reports the actual folder name instead of the placeholder "Selected Folder". The import `<input>` no longer sets an `accept` filter that hid the selection — every file comes through, ext filtering happens in code, so the real name and total scanned count are known even when nothing matches. |
+| **storage** | `fix` | **Scanned-file feedback**: when a folder has files but no Rec games, the status says `Scanned N file(s) in "<name>" but found no Rec games (.sgf/.json)`. Empty/zero-file selections say `That folder has no Rec files to load`. Both keep the one-line "enable File System Access API (brave://flags) and reload" path to real save-to-folder with no repeated, contradictory copy. |
+| **ui** | `fix` | Tightened overlay copy (fallback mode): "Choose Folder" described as a pure loader ("nothing to upload"), Recs stay in browser storage, and a single flag action unlocks auto-save — no duplicated instructions between the overlay body and the status line. |
+
+##### Verification
+- `node --check` clean; `test/verify_texture_ref.js` (8), `test/verify_study_dir_store.js` (10), `test/verify_study_dir_setup.js` (3) all green.
+- Real Brave (default flags): overlay renders with the new copy, and a simulated folder import returns the true folder name ("My Study Files"), `totalFiles`, and its parsed records — zero page errors.
+- Cache busters synced to `v=0.2.022`.
+
+---
 
 ### v0.2.021 — Board/Stone Textures Referenced by Path (no more embedded images)
 
