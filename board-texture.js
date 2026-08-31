@@ -23,7 +23,7 @@
     'use strict';
 
     const REF_PREFIX = 'texture-ref:';
-    const DIR_SUBDIR = 'textures';
+    const DIR_SUBDIR = 'imgs';
 
     const _sessionUrls = new Map();      // relPath            -> objectURL
     const _sessionFiles = new Map();     // relPath            -> File/Blob
@@ -51,11 +51,39 @@
             try {
                 const dir = await window.StudyDirStore.getDirHandle();
                 if (dir) {
-                    const fh = await dir.getFileHandle(rel);
+                    // Ref can be a nested path (e.g. "imgs/kaya.png"); walk each
+                    // path segment via getDirectoryHandle before the final file.
+                    const parts = String(rel).split('/').filter(Boolean);
+                    let cur = dir;
+                    for (let i = 0; i < parts.length - 1; i++) {
+                        cur = await cur.getDirectoryHandle(parts[i]);
+                    }
+                    const fh = await cur.getFileHandle(parts[parts.length - 1]);
                     const file = await fh.getFile();
                     return file;
                 }
             } catch (e) { /* file absent or handle unavailable — fall through */ }
+
+            // The ref names a file that isn't in the folder yet, but we have the
+            // bytes for it from this session (picked before the folder was
+            // writable). Persist it into the folder now if we can so the warning
+            // stops and the texture survives reload.
+            if (_sessionFiles.has(rel) && window.StudyDirStore.isConfigured) {
+                try {
+                    const ok = await window.StudyDirStore.importTexture(_sessionFiles.get(rel), rel);
+                    if (ok) {
+                        // Re-read from the folder so we return the real File.
+                        const dir = await window.StudyDirStore.getDirHandle();
+                        if (dir) {
+                            const parts = String(rel).split('/').filter(Boolean);
+                            let cur = dir;
+                            for (let i = 0; i < parts.length - 1; i++) cur = await cur.getDirectoryHandle(parts[i]);
+                            const fh = await cur.getFileHandle(parts[parts.length - 1]);
+                            return await fh.getFile();
+                        }
+                    }
+                } catch (e) { /* fall through to session file */ }
+            }
         }
         if (_sessionFiles.has(rel)) return _sessionFiles.get(rel);
         return null;
@@ -64,21 +92,11 @@
     function _notifyMissing(rel) {
         if (_missingReported.has(rel)) return;
         _missingReported.add(rel);
+        // A ref that can't be resolved just falls back to the board/stone color —
+        // that is self-evident visually, so log to the console only (no intrusive
+        // toast on every mount / refresh, which is confusing when there are no
+        // Recs or the texture file was moved).
         console.warn('[board-texture] texture not found in study folder:', rel);
-        if (typeof document === 'undefined') return;
-        try {
-            let toast = document.getElementById('texture-notice-toast');
-            if (!toast) {
-                toast = document.createElement('div');
-                toast.id = 'texture-notice-toast';
-                toast.className = 'texture-notice-toast';
-                document.body.appendChild(toast);
-            }
-            toast.innerHTML = `<span>Texture <strong>${rel}</strong> is referenced but can't be found in the study folder. The board uses its color instead. Enable the File System Access API or copy the file into the folder.</span>`;
-            toast.style.display = 'flex';
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(() => { toast.style.display = 'none'; }, 4200);
-        } catch (e) {}
     }
 
     // Resolve any imgSrc token into a URL an <img> or background-image can use.

@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.026
+version: 0.2.031
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,77 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.031 — Study Board BG "OFF" Is 100% Transparent
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study board BG** | `fix` | With the study board's BG toggle OFF, the study canvas was already transparent but `#study-board-viewport` was unconditionally receiving `backgroundColor = style.bg.color` in `updateStudyCrop()` and `saveStyleAndRedraw()`, plus having a CSS `#study-board-viewport { background: #ffffff; }` fallback. Both helpers now check `style.bg.solid === true` before applying the color (setting `transparent` when OFF), and the CSS default is now `transparent` — so Study BG OFF is 100% transparent exactly like the initial board. |
+
+##### Verification
+- `node --check` clean across all scripts; `npm run build-docs` green.
+- Cache busters synced to `v=0.2.031`.
+
+---
+
+### v0.2.030 — Drag & Drop of SGF Files Reliably Opens the Study Prompt
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **kifu drop zone** | `fix` | Dragging an `.sgf` onto the drop zone appeared to do nothing while "Browse Files" worked. The old handler relied on `DataTransferItem.getAsFile()`, which returns `null` for some OS/file-manager drops in Chromium/Brave even when `dataTransfer.files` is populated — so the drop silently no-oped. It now prefers `dataTransfer.files[0]` (most reliable) and falls back to `item.getAsFile()`. Also added a window-level `dragover`/`drop` `preventDefault` so a drop landing just outside the zone no longer navigates the browser to the file URL. Verified: a dropped `test.sgf` now opens the study prompt (`display:flex`). |
+
+##### Verification
+- `node --check` clean; headless Brave drop → study prompt opens.
+- Cache busters synced to `v=0.2.030`.
+
+---
+
+### v0.2.029 — "Change / Choose Folder" Always Opens the Folder Picker
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **study db folder picker** | `fix` | When already on a real folder, the "Change"/"Choose Folder" action called `reGrantPermission()` first, which returns `'granted'` for an already-granted handle **without opening the picker** — so switching Study DB folders appeared to do nothing (just a status blink). The explicit user action now always calls `setupDirectory()` (→ `showDirectoryPicker`), so a fresh picker always opens. |
+
+##### Verification
+- `node --check` clean; full suite (26 checks) green.
+- Cache busters synced to `v=0.2.029`.
+
+---
+
+### v0.2.028 — Missing-Texture Warning No Longer Toasts on Every Load
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **texture/storage** | `fix` | Remembered board/stone textures are global app settings (kept in `localStorage['baduk_*_board_style']`), independent of the Rec list — so after deleting all Recs, a stale `texture-ref:imgs/<name>` saved into a board style still made the board try to load it on every mount. `_notifyMissing()` now logs to the console only and no longer shows an intrusive toast on every refresh; a missing texture simply falls back to its colour (visually self-evident). |
+
+##### Verification
+- `node --check` clean; `verify_texture_ref.js` (9), `verify_study_dir_store.js` (10), `verify_study_dir_setup.js` (3), `verify_study_dir_dedupe.js` (4) all green.
+- Cache busters synced to `v=0.2.028`.
+
+---
+
+### v0.2.027 — Deleted Recs Stay Deleted + Texture in imgs/ Resolves Correctly
+
+#### Fixed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **storage/migration** | `fix` | **Deleted Recs came back on every reload**: `_migrateOldRecordsToStdB()` re-ran on every startup and re-seeded records from the stale legacy IndexedDB/localStorage stores whenever the STdB happened to be empty (e.g. right after deleting the last Rec). It now runs **exactly once** (persistent `baduk_study_migration_done` flag), clears the legacy IDB `study_records` store and the `baduk_notes_study_sessions_v1` localStorage mirror after a successful migrate, and marks itself done even when there was nothing to migrate. Deleting a Rec now stays deleted. |
+| **texture/storage** | `fix` | **"Texture imgs/... is referenced but can't be found" despite the file existing**: `board-texture.js` `_readRefFile()` called `getFileHandle('imgs/<name>')` on the study-folder root with a slash-containing path, but the File System Access API rejects `/` in `getFileHandle` — so a texture already sitting at `imgs/<name>` still failed to load and the color-fallback warning fired. It now walks each path segment via `getDirectoryHandle('imgs')` → `getFileHandle('<name>')`, matching exactly how `importTexture()` writes the file, and auto-persists a session-only texture into the folder once it becomes writable. |
+
+##### Verification
+- `node --check` clean; `verify_texture_ref.js` (9, incl. new nested `imgs/` read), `verify_study_dir_store.js` (10), `verify_study_dir_setup.js` (3), `verify_study_dir_dedupe.js` (4) all green.
+- Cache busters synced to `v=0.2.027` (the stale `?v=0.2.026` had kept the browser serving the pre-fix version).
+
+---
 
 ### v0.2.026 — Resume-Study List No Longer Freezes at "0 RECORDED" After Refresh
 
@@ -145,7 +216,7 @@ How the application files interact — UI shell, script load order, scoring pipe
 | Scope | Type | Description |
 | --- | --- | --- |
 | **storage** | `fix` | **Mode-aware setup prompt**: The "Where should your Rec games be stored?" overlay now rewrites its copy (`_updateDirOverlayCopy`) based on what the browser can actually do. When the File System Access API is unavailable (e.g. default Brave), it becomes "Load Rec games from a folder", the button reads "Choose Folder to Load", and it explicitly says Recs stay in browser storage and that `brave://flags → File System Access API → Enabled` is needed for auto-saving `.sgf` files into a folder. |
-| **storage** | `fix` | **Un-confusing empty-folder message**: The old "Folder contained no Rec files. Add the <rec>.sgf files there…" made users think they must upload files. Now it explains there is nothing to upload — the folder picker just *loads* existing Recs — and Recs are already safe in browser storage. |
+| **storage** | `fix` | **Un-confusing empty-folder message**: The old "Folder contained no Rec files. Add the `<rec>.sgf` files there…" made users think they must upload files. Now it explains there is nothing to upload — the folder picker just *loads* existing Recs — and Recs are already safe in browser storage. |
 
 ##### Verification
 - `_updateDirOverlayCopy()` verified in real Brave in both modes: FS API disabled → fallback title+button, FS API enabled → original copy ("Where should your Rec games be stored?"/"Choose Folder").

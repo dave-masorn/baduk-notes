@@ -2018,6 +2018,15 @@ function setupEventListeners() {
             e.stopPropagation();
         }
 
+        // Also keep the whole window from navigating away when a drag is dropped
+        // just outside the zone (Chromium navigates to the file URL otherwise).
+        ['dragover', 'drop'].forEach(eventName => {
+            window.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
+
         ['dragenter', 'dragover'].forEach(eventName => {
             elements.dropZone.addEventListener(eventName, () => {
                 elements.dropZone.classList.add('dragover');
@@ -2032,18 +2041,24 @@ function setupEventListeners() {
 
         elements.dropZone.addEventListener('drop', async (e) => {
             const dt = e.dataTransfer;
-            if (dt.items && dt.items.length > 0) {
+            // `dataTransfer.files` is the most reliable source for OS/file-manager
+            // drops (item.getAsFile() can return null for some Chromium paths even
+            // though files[] is populated), so prefer it, then fall back to items.
+            let file = null;
+            if (dt.files && dt.files.length > 0) {
+                file = dt.files[0];
+            } else if (dt.items && dt.items.length > 0) {
                 const item = dt.items[0];
                 if (item.kind === 'file') {
-                    let fileHandle = null;
-                    if (item.getAsFileSystemHandle) {
-                        try { fileHandle = await item.getAsFileSystemHandle(); } catch(err){}
-                    }
-                    const file = item.getAsFile();
-                    if (file) handleFileSelect(file, fileHandle);
+                    file = item.getAsFile();
                 }
-            } else if (dt.files && dt.files.length) {
-                handleFileSelect(dt.files[0]);
+            }
+            if (file) {
+                let fileHandle = null;
+                if (dt.items && dt.items.length > 0 && dt.items[0].getAsFileSystemHandle) {
+                    try { fileHandle = await dt.items[0].getAsFileSystemHandle(); } catch (err) {}
+                }
+                handleFileSelect(file, fileHandle);
             }
         }, false);
     }
@@ -2264,6 +2279,7 @@ function setupEventListeners() {
             initialBoardStyle: effectiveInitialStyle ? JSON.parse(JSON.stringify(effectiveInitialStyle)) : null,
             studyBoardStyle: state.studyBoardStyle ? JSON.parse(JSON.stringify(state.studyBoardStyle)) : null,
             exportBoardStyle: state.exportBoardStyle ? JSON.parse(JSON.stringify(state.exportBoardStyle)) : null,
+            scoringBoardStyle: state.scoringBoardStyle ? JSON.parse(JSON.stringify(state.scoringBoardStyle)) : null,
             replayer: {
                 showMoveNumbers: elements.toggleMoveNumbers ? elements.toggleMoveNumbers.checked : false,
                 moveNumberMode: moveNumMode,
@@ -2299,6 +2315,10 @@ function setupEventListeners() {
         if (settings.exportBoardStyle) {
             state.exportBoardStyle = JSON.parse(JSON.stringify(settings.exportBoardStyle));
             localStorage.setItem('baduk_export_board_style', JSON.stringify(state.exportBoardStyle));
+        }
+        if (settings.scoringBoardStyle) {
+            state.scoringBoardStyle = JSON.parse(JSON.stringify(settings.scoringBoardStyle));
+            try { localStorage.setItem('baduk_scoring_board_style', JSON.stringify(state.scoringBoardStyle)); } catch (e) {}
         }
 
         if (typeof updateCustomPanelUI === 'function') {
@@ -8671,9 +8691,10 @@ function updateStudyCrop() {
     boardCanvasWrapper.style.marginTop = '';
     
     // Apply padding to viewport to simulate the export margins, and set its
-    // background to the study board's BG color (Board, Border & BG -> BG), so
-    // the area around the board matches the canvas behind it.
-    const studyBgColor = (state.studyBoardStyle && state.studyBoardStyle.bg && state.studyBoardStyle.bg.color) || '#ffffff';
+    // background to the study board's BG color (Board, Border & BG -> BG) when solid is ON,
+    // or transparent when OFF, so the area around the board matches the canvas behind it.
+    const studyBgSolid = !!(state.studyBoardStyle && state.studyBoardStyle.bg && state.studyBoardStyle.bg.solid === true);
+    const studyBgColor = (studyBgSolid && state.studyBoardStyle && state.studyBoardStyle.bg && state.studyBoardStyle.bg.color) ? state.studyBoardStyle.bg.color : 'transparent';
     boardViewport.style.backgroundColor = studyBgColor;
     boardViewport.style.boxSizing = 'content-box';
     boardViewport.style.paddingLeft = `${zL}px`;
@@ -9971,7 +9992,8 @@ function saveStyleAndRedraw() {
         const viewport = document.getElementById('study-board-viewport');
         if (viewport) {
             const style = state.studyBoardStyle;
-            viewport.style.backgroundColor = (style && style.bg && style.bg.color) || '#ffffff';
+            const bgSolid = !!(style && style.bg && style.bg.solid === true);
+            viewport.style.backgroundColor = (bgSolid && style && style.bg && style.bg.color) ? style.bg.color : 'transparent';
         }
     }
     

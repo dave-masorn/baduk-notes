@@ -1,9 +1,16 @@
 // ==========================================================================
-// Study Record Local Persistence Database Engine
-// (Module scope — available before deferred init for tests / early use)
+// Study Record Storage Engine — STdB (Study Database)
+// All game records live as real files in a user-chosen folder.
+// No browser localStorage / IDB is used for game data — only for the
+// folder handle pointer (like a bookmark to the STdB).
+//
+// STdB layout:
+//   NNN.sgf        — the game (plain SGF text, written back on every move)
+//   NNN.theme      — JSON: record metadata + board setups (initial/study/export/scoring)
+//   imgs/          — board texture images assigned via Floating Panel
 // ==========================================================================
-const STUDY_STORAGE_KEY = 'baduk_notes_study_sessions_v1';
 
+// --- Format helper --------------------------------------------------------
 function formatStudyAccessTime(date = new Date()) {
     const pad = (n) => String(n).padStart(2, '0');
     const day = pad(date.getDate());
@@ -16,73 +23,12 @@ function formatStudyAccessTime(date = new Date()) {
 }
 window.formatStudyAccessTime = formatStudyAccessTime;
 
-const IDB_NAME = 'BadukNotesDB';
-const IDB_STORE = 'study_records';
-const IDB_VERSION = 1;
-
+// --- In-memory record cache (populated async from STdB) -------------------
 let _recordsCache = null;
-let _idbPromise = null;
 
-function _initIDB() {
-    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
-    if (_idbPromise) return _idbPromise;
-
-    _idbPromise = new Promise((resolve) => {
-        try {
-            const req = indexedDB.open(IDB_NAME, IDB_VERSION);
-            req.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains(IDB_STORE)) {
-                    db.createObjectStore(IDB_STORE, { keyPath: 'id' });
-                }
-            };
-            req.onsuccess = (e) => {
-                const db = e.target.result;
-                const tx = db.transaction(IDB_STORE, 'readonly');
-                const store = tx.objectStore(IDB_STORE);
-                const countReq = store.count();
-
-                countReq.onsuccess = () => {
-                    if (countReq.result === 0) {
-                        try {
-                            const localRaw = localStorage.getItem(STUDY_STORAGE_KEY);
-                            if (localRaw) {
-                                const localList = JSON.parse(localRaw);
-                                if (Array.isArray(localList) && localList.length > 0) {
-                                    const writeTx = db.transaction(IDB_STORE, 'readwrite');
-                                    const writeStore = writeTx.objectStore(IDB_STORE);
-                                    localList.forEach(r => writeStore.put(r));
-                                    _recordsCache = localList;
-                                }
-                            }
-                        } catch (migErr) {}
-                        _rerenderResumeList();
-                        resolve(db);
-                    } else {
-                        const getAllReq = store.getAll();
-                        getAllReq.onsuccess = () => {
-                            if (Array.isArray(getAllReq.result) && getAllReq.result.length > 0) {
-                                _recordsCache = getAllReq.result;
-                            }
-                            _rerenderResumeList();
-                            resolve(db);
-                        };
-                        getAllReq.onerror = () => resolve(db);
-                    }
-                };
-                countReq.onerror = () => resolve(db);
-            };
-            req.onerror = () => resolve(null);
-        } catch (e) {
-            resolve(null);
-        }
-    });
-
-    return _idbPromise;
-}
-
-// The resume-study list is rendered once during app init; if records land in the
-// cache later (async IDB load), re-render so the count is never stuck at 0.
+// The resume-study list renders synchronously during app init; if records
+// land in the cache later (async STdB load), re-render so the count is
+// never stuck at 0 RECORDED.
 function _rerenderResumeList() {
     if (typeof window === 'undefined') return;
     requestAnimationFrame(() => {
@@ -95,29 +41,23 @@ function _rerenderResumeList() {
     });
 }
 
-if (typeof window !== 'undefined') {
-    _initIDB();
-}
-
+// --- StudyRecordDB (public API — STdB-only) --------------------------------
+// The in-memory cache is the sync layer; STdB files are the persistence.
+// All callers (annotation_v4.js, scoring, tests) use this interface.
 window.StudyRecordDB = {
-    getAllRecords() {
-        try {
-            const raw = localStorage.getItem(STUDY_STORAGE_KEY);
-            if (raw) {
-                const list = JSON.parse(raw);
-                if (Array.isArray(list)) {
-                    _recordsCache = list;
-                    return _recordsCache;
-                }
-            }
-        } catch (e) {}
 
-        if (_recordsCache !== null) {
-            return _recordsCache;
-        }
+    getAllRecords() {
+        if (_recordsCache !== null) return _recordsCache;
         return [];
     },
 
+    getRecord(id) {
+        if (!id) return null;
+        return this.getAllRecords().find(r => r && r.id === id) || null;
+    },
+
+    // Write a record to the in-memory cache + async flush to STdB files.
+    // The in-memory update is synchronous so callers see the change immediately.
     saveRecord(record) {
         if (!record || !record.id) return false;
         try {
@@ -130,30 +70,11 @@ window.StudyRecordDB = {
             }
             _recordsCache = records;
 
-            // 1. Immediately persist to IndexedDB (master store, unlimited quota)
-            _initIDB().then(db => {
-                if (!db) return;
-                try {
-                    const tx = db.transaction(IDB_STORE, 'readwrite');
-                    tx.objectStore(IDB_STORE).put(records[idx >= 0 ? idx : 0]);
-                } catch (e) {
-                    console.error('Error writing record to IndexedDB:', e);
-                }
-            });
-
-            // 2. Best-effort mirror to localStorage
-            try {
-                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
-            } catch (quotaErr) {
-                console.warn('localStorage quota reached for study records; safely stored in memory and IndexedDB.');
-            }
-
-            // 3. Persist the actual record as real .sgf/.json files in the user-chosen
-            //    study directory (authoritative, survives cache clears). Non-blocking.
-            const savedRec = records[idx >= 0 ? idx : 0];
+            // Flush to STdB (async, non-blocking — caller does not wait)
             if (typeof window !== 'undefined' && window.StudyDirStore && window.StudyDirStore.isConfigured) {
+                const savedRec = records[idx >= 0 ? idx : 0];
                 window.StudyDirStore.saveRecord(savedRec).then(ok => {
-                    if (!ok) console.warn('[StudyRecordDB] directory save failed for', savedRec.id);
+                    if (!ok) console.warn('[StudyRecordDB] STdB save failed for', savedRec.id);
                 });
             }
 
@@ -165,78 +86,34 @@ window.StudyRecordDB = {
         }
     },
 
-    getRecord(id) {
-        if (!id) return null;
-        const records = this.getAllRecords();
-        return records.find(r => r && r.id === id) || null;
-    },
-
-    // Load the authoritative record set from the user-chosen directory and sync it
-    // into the in-memory cache + IndexedDB + localStorage mirror. Called after the
-    // directory is configured at startup, and after the user picks/regrants it.
-    async loadAllFromDir() {
-        if (typeof window === 'undefined' || !window.StudyDirStore || !window.StudyDirStore.isConfigured) return [];
-        const dirRecords = await window.StudyDirStore.loadAllRecords();
-        if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
-        return this.mergeDirRecords(dirRecords);
-    },
-
-    // Merge a set of directory-sourced records into the in-memory cache +
-    // IndexedDB + localStorage mirror (dedup by id, dir records win).
-    async mergeDirRecords(dirRecords) {
-        if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
-        const merged = dirRecords.slice();
-        const byId = new Map(dirRecords.map(r => [r.id, r]));
-        this.getAllRecords().forEach(r => { if (!byId.has(r.id)) merged.push(r); });
-        merged.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
-        _recordsCache = merged;
-
-        try {
-            localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(merged));
-        } catch (quotaErr) {
-            console.warn('[StudyRecordDB] localStorage quota reached while syncing from directory.');
-        }
-
-        _initIDB().then(db => {
-            if (!db) return;
-            try {
-                const tx = db.transaction(IDB_STORE, 'readwrite');
-                const store = tx.objectStore(IDB_STORE);
-                merged.forEach(r => store.put(r));
-            } catch (e) {}
-        });
-
-        return merged;
-    },
-
     deleteRecord(id) {
         try {
             const removed = this.getRecord(id);
-            let records = this.getAllRecords();
-            records = records.filter(r => r.id !== id);
-            _recordsCache = records;
-
-            _initIDB().then(db => {
-                if (!db) return;
-                try {
-                    const tx = db.transaction(IDB_STORE, 'readwrite');
-                    tx.objectStore(IDB_STORE).delete(id);
-                } catch (e) {}
-            });
-
-            try {
-                localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(records));
-            } catch (e) {}
+            _recordsCache = this.getAllRecords().filter(r => r.id !== id);
 
             if (removed && typeof window !== 'undefined' && window.StudyDirStore && window.StudyDirStore.isConfigured) {
                 window.StudyDirStore.deleteRecord(removed);
             }
-
             return true;
         } catch (e) {
             console.error('Failed to delete study record:', e);
             return false;
         }
+    },
+
+    // Read all records from the STdB folder and populate the in-memory cache.
+    async loadAllFromDir() {
+        if (typeof window === 'undefined' || !window.StudyDirStore || !window.StudyDirStore.isConfigured) {
+            return this.getAllRecords();
+        }
+        const dirRecords = await window.StudyDirStore.loadAllRecords();
+        if (Array.isArray(dirRecords) && dirRecords.length > 0) {
+            _recordsCache = dirRecords;
+        } else {
+            _recordsCache = _recordsCache || [];
+        }
+        _rerenderResumeList();
+        return _recordsCache;
     },
 
     generateNextRecNo() {
@@ -248,38 +125,32 @@ window.StudyRecordDB = {
                 if (!isNaN(num) && num > maxNum) maxNum = num;
             }
         });
-        const nextNum = maxNum + 1;
-        return String(nextNum).padStart(3, '0');
+        return String(maxNum + 1).padStart(3, '0');
+    },
+
+    // Compatibility: mergeDirRecords adds directory records to cache (STdB wins).
+    async mergeDirRecords(dirRecords) {
+        if (!Array.isArray(dirRecords) || dirRecords.length === 0) return this.getAllRecords();
+        const existing = this.getAllRecords();
+        const byId = new Map(existing.map(r => [r.id, r]));
+        dirRecords.forEach(r => { byId.set(r.id, r); });
+        _recordsCache = Array.from(byId.values());
+        _recordsCache.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
+        return _recordsCache;
     }
 };
 
 // ==========================================================================
-// Study Record Directory Storage Engine
-// (File System Access API — persists real .sgf files in a user-chosen folder)
+// Study Dir Store (filesystem layer — STdB)
+// Handles the FS API directory handle, OPFS fallback, and all file I/O.
+// IDB is used ONLY to persist the directory handle pointer (one tiny record).
 // ==========================================================================
+
 const DIR_IDB_NAME = 'BadukNotesDirStore';
 const DIR_IDB_STORE = 'dir_handles';
 const DIR_HANDLE_KEY = 'studyRecDir';
-const DIR_PREFIX = 'rec-';
 
 let _dirStoreReady = null;
-
-function _sanitizeSlug(name) {
-    return String(name || '')
-        .replace(/\.(sgf|txt)$/i, '')
-        .replace(/[^a-zA-Z0-9._-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 60) || 'game';
-}
-
-function _recordFileNames(rec) {
-    const slug = _sanitizeSlug(rec.fileNm);
-    const base = `${DIR_PREFIX}${String(rec.recNo || '000').padStart(3, '0')}-${slug}`;
-    return {
-        sgf: `${base}.sgf`,
-        json: `${base}.json`
-    };
-}
 
 function _openDirIDB() {
     return new Promise((resolve) => {
@@ -366,9 +237,6 @@ const StudyDirStore = {
         return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
     },
 
-    // Origin Private File System: a sandboxed folder owned by this app that works in
-    // every browser (including Brave's default privacy settings) with no flag and no
-    // dialog. Real .sgf/.json files, persisted per-origin, read back every visit.
     get hasOpfs() {
         return typeof navigator !== 'undefined' && !!navigator.storage && typeof navigator.storage.getDirectory === 'function';
     },
@@ -377,8 +245,6 @@ const StudyDirStore = {
         return !!this._opfsDir;
     },
 
-    // Cross-browser fallback to <input webkitdirectory>: works even when the
-    // File System Access API is disabled (e.g. Brave's default privacy setting).
     get hasFolderFallback() {
         return typeof window !== 'undefined' && document.createElement('input').webkitdirectory !== undefined;
     },
@@ -398,7 +264,7 @@ const StudyDirStore = {
         return '';
     },
 
-    // Open (creating if needed) the app's automatic private folder for this origin.
+    // Open the automatic private folder (OPFS) for this origin.
     async initOpfs() {
         if (!this.hasOpfs) return false;
         try {
@@ -440,7 +306,7 @@ const StudyDirStore = {
         return _dirStoreReady;
     },
 
-    // Show the directory picker to the user (switches off the automatic folder).
+    // Show the directory picker to the user.
     async setupDirectory() {
         if (!this.isSupported) return false;
         try {
@@ -472,8 +338,8 @@ const StudyDirStore = {
         return this._dir || null;
     },
 
-    // Write a texture image (or any binary file) into the study directory at relPath,
-    // creating intermediate folders (e.g. "textures/") as needed. Returns true on success.
+    // Write a texture image into the STdB at relPath (e.g. "imgs/kaya.png"),
+    // creating intermediate folders as needed.
     async importTexture(file, relPath) {
         if (!this.isConfigured || !file || !relPath) return false;
         try {
@@ -486,7 +352,7 @@ const StudyDirStore = {
             }
             const fileHandle = await dir.getFileHandle(name, { create: true });
             const writable = await fileHandle.createWritable();
-            await writable.write(file); // File / Blob are accepted by write()
+            await writable.write(file);
             await writable.close();
             return true;
         } catch (e) {
@@ -495,93 +361,33 @@ const StudyDirStore = {
         }
     },
 
-    // Persist a single record to the directory (sgf + metadata json sidecar).
+    // --- STdB file format ---------------------------------------------------
+    // Each Rec is a pair:  NNN.sgf  (game text)  +  NNN.theme  (metadata + board setups).
+
+    _recordFileNames(rec) {
+        const no = String(rec.recNo || '000').padStart(3, '0');
+        return { sgf: `${no}.sgf`, theme: `${no}.theme` };
+    },
+
+    // Write a single record to STdB as NNN.sgf + NNN.theme.
     async saveRecord(rec) {
         if (!this.isConfigured || !rec || !rec.id) return false;
-        const names = _recordFileNames(rec);
-        const meta = { ...rec };
-        delete meta.workingSgf;
-        meta.sgfFile = names.sgf;
-        meta._dirSchema = 1;
+        const names = this._recordFileNames(rec);
+
+        // SGF file = working game text
         const okSgf = await _writeFile(this._dir, names.sgf, rec.workingSgf || rec.rawSgf || '');
-        const okJson = await _writeFile(this._dir, names.json, JSON.stringify(meta, null, 2));
-        return okSgf && okJson;
+
+        // Theme file = everything except the SGF text
+        const theme = { ...rec };
+        delete theme.workingSgf;
+        delete theme.rawSgf;
+        const okTheme = await _writeFile(this._dir, names.theme, JSON.stringify(theme, null, 2));
+
+        return okSgf && okTheme;
     },
 
-    // Read every Rec out of a user-picked folder (for browsers with no File System
-    // Access API). Uses a hidden <input webkitdirectory>. Returns { records, name }.
-    async importFolderViaInput() {
-        if (!this.hasFolderFallback) return { records: [], name: '' };
-        return new Promise((resolve) => {
-            let settled = false;
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.setAttribute('webkitdirectory', '');
-            input.multiple = true;
-            input.style.display = 'none';
-            input.addEventListener('change', async () => {
-                const files = Array.from(input.files || []);
-                const { records, name, totalFiles } = await this._recordsFromFiles(files);
-                this._fallbackName = name;
-                this._lastFallbackRecords = records;
-                settled = true;
-                resolve({ records, name, totalFiles });
-            });
-            input.addEventListener('cancel', () => {
-                if (!settled) resolve({ records: [], name: '', totalFiles: 0 });
-            });
-            document.body.appendChild(input);
-            input.click();
-            input.remove();
-        });
-    },
-
-    // Build Rec records from a webkitdirectory FileList. Real folder name comes
-    // from the first file's relative path; stays '' when the selection was empty.
-    async _recordsFromFiles(files) {
-        const list = Array.isArray(files) ? files : Array.from(files || []);
-        const name = (list[0] && list[0].webkitRelativePath) ? list[0].webkitRelativePath.split('/')[0] : '';
-        const records = [];
-        const jsonFiles = list.filter(f => /\.json$/i.test(f.name));
-        for (const jf of jsonFiles) {
-            let meta = null;
-            try { meta = JSON.parse(await jf.text()); } catch (e) { continue; }
-            if (!meta || !meta.id || meta._dirSchema !== 1) continue;
-            let sgf = null;
-            if (meta.sgfFile) {
-                const sgfFile = list.find(f => f.name === meta.sgfFile);
-                if (sgfFile) { try { sgf = await sgfFile.text(); } catch (e) {} }
-            }
-            if (sgf == null && !meta.rawSgf) continue;
-            records.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
-        }
-        if (records.length === 0) {
-            // No metadata sidecars — fall back to importing every .sgf as a bare rec.
-            for (const sf of list.filter(f => /\.sgf$/i.test(f.name))) {
-                let text = '';
-                try { text = await sf.text(); } catch (e) { continue; }
-                if (!text || !text.includes('(;')) continue;
-                const pb = (text.match(/PB\[([^\]]*)\]/) || [])[1] || 'Black';
-                const pw = (text.match(/PW\[([^\]]*)\]/) || [])[1] || 'White';
-                records.push({
-                    id: 'study_fallback_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
-                    recNo: String(records.length + 1).padStart(3, '0'),
-                    fileNm: sf.name,
-                    blk: pb,
-                    wht: pw,
-                    lastAccess: formatStudyAccessTime(),
-                    currentMoveIndex: 0,
-                    rawSgf: text,
-                    workingSgf: text,
-                    _dirSchema: 1,
-                    _fromFallbackFolder: name
-                });
-            }
-        }
-        records.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
-        return { records, name, totalFiles: list.length };
-    },
-
+    // Read every Rec out of STdB. Handles both new (NNN.theme) and legacy
+    // (rec-NNN-slug.json) formats for backward compatibility.
     async loadAllRecords() {
         if (this.isUsingFallback) {
             return this._lastFallbackRecords || [];
@@ -590,15 +396,78 @@ const StudyDirStore = {
         try {
             const out = [];
             for await (const entry of this._dir.values()) {
-                if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue;
-                const meta = await _readJson(this._dir, entry.name);
-                if (!meta || !meta.id || meta._dirSchema !== 1) continue;
-                const sgf = meta.sgfFile ? await _readFileText(this._dir, meta.sgfFile) : null;
-                if (sgf == null && !meta.rawSgf) continue;
-                out.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
+                if (entry.kind !== 'file') continue;
+
+                // --- New format: *.theme ---
+                if (entry.name.endsWith('.theme')) {
+                    const meta = await _readJson(this._dir, entry.name);
+                    if (!meta || !meta.id || !meta.recNo) continue;
+                    const no = String(meta.recNo).padStart(3, '0');
+                    const sgf = await _readFileText(this._dir, `${no}.sgf`);
+                    if (sgf == null) continue;
+                    out.push({ ...meta, workingSgf: sgf });
+                    continue;
+                }
+
+                // --- Legacy format: rec-NNN-slug.json (pre-STdB) ---
+                if (entry.name.endsWith('.json')) {
+                    const meta = await _readJson(this._dir, entry.name);
+                    if (!meta || !meta.id || meta._dirSchema !== 1) continue;
+                    const sgfFile = meta.sgfFile || null;
+                    const sgf = sgfFile ? await _readFileText(this._dir, sgfFile) : null;
+                    if (sgf == null && !meta.rawSgf) continue;
+                    const rec = { ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') };
+                    // Tag the physical source filename so dedupe/cleanup can remove
+                    // exactly this legacy file without touching a same-numbered new file.
+                    rec._legacyJsonFile = entry.name;
+                    out.push(rec);
+                }
             }
             out.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
-            return out;
+
+            // De-duplicate by recNo. Each Rec must have a unique number; a leftover
+            // legacy file (rec-NNN-*.json) can share recNo with a newer NNN.theme if
+            // the same game was re-dropped after the STdB rewrite. Keep the most
+            // recently accessed one for display.
+            const byNo = new Map();
+            const staleFiles = [];
+            for (const rec of out) {
+                const no = String(rec.recNo || '').padStart(3, '0');
+                if (!no || no === '000') continue;
+                if (!byNo.has(no)) {
+                    byNo.set(no, rec);
+                } else {
+                    const prev = byNo.get(no);
+                    const prevTime = prev.lastAccess || '';
+                    const thisTime = rec.lastAccess || '';
+                    if (thisTime > prevTime) {
+                        byNo.set(no, rec);
+                        staleFiles.push(prev);
+                    } else {
+                        staleFiles.push(rec);
+                    }
+                }
+            }
+            const unique = Array.from(byNo.values());
+
+            // Best-effort removal of stale duplicate physical files so they do not
+            // keep re-appearing on every load. Never throws on failure.
+            // A legacy rec (rec-NNN-*.json) stores its real sgf filename in
+            // `sgfFile`, which differs from the new NNN.sgf/NNN.theme naming — so
+            // only ever remove a file that genuinely belongs to the stale record.
+            for (const dup of staleFiles) {
+                if (dup && dup.sgfFile && dup.sgfFile !== String(dup.recNo).padStart(3, '0') + '.sgf') {
+                    try { await this._dir.removeEntry(dup.sgfFile); } catch (e) {}
+                    if (dup._legacyJsonFile) { try { await this._dir.removeEntry(dup._legacyJsonFile); } catch (e) {} }
+                } else {
+                    const no = dup && dup.recNo !== undefined ? String(dup.recNo).padStart(3, '0') : '';
+                    if (no) {
+                        try { await this._dir.removeEntry(no + '.sgf'); } catch (e) {}
+                        try { await this._dir.removeEntry(no + '.theme'); } catch (e) {}
+                    }
+                }
+            }
+            return unique;
         } catch (e) {
             console.warn('[StudyDirStore] loadAllRecords failed:', e);
             return [];
@@ -607,17 +476,28 @@ const StudyDirStore = {
 
     async deleteRecord(rec) {
         if (!this.isConfigured || !rec) return;
-        const names = _recordFileNames(rec);
-        try {
-            if (rec.id) {
-                // Remove the file matching this rec's stored sgfFile, if any differ.
-                if (rec._dirSchema === 1 && rec.sgfFile && rec.sgfFile !== names.sgf) {
-                    try { await this._dir.removeEntry(rec.sgfFile); } catch (e) {}
+        const names = this._recordFileNames(rec);
+        try { await this._dir.removeEntry(names.sgf); } catch (e) {}
+        try { await this._dir.removeEntry(names.theme); } catch (e) {}
+        // Also remove any legacy files that share this recNo so the deleted Rec
+        // never re-appears on the next load from a leftover rec-NNN-* pair.
+        const no = String(rec.recNo || '').padStart(3, '0');
+        if (no && no !== '000') {
+            try {
+                for await (const entry of this._dir.values()) {
+                    if (entry.kind !== 'file') continue;
+                    if (/^rec-/.test(entry.name) && entry.name.includes(`-${no}-`)) {
+                        try { await this._dir.removeEntry(entry.name); } catch (e) {}
+                    }
                 }
-            }
-            try { await this._dir.removeEntry(names.sgf); } catch (e) {}
-            try { await this._dir.removeEntry(names.json); } catch (e) {}
-        } catch (e) {}
+            } catch (e) {}
+        }
+        if (rec._dirSchema === 1 && rec.sgfFile) {
+            try { await this._dir.removeEntry(rec.sgfFile); } catch (e) {}
+        }
+        if (rec.sgfFile && rec.sgfFile !== names.sgf) {
+            try { await this._dir.removeEntry(rec.sgfFile); } catch (e) {}
+        }
     }
 };
 
@@ -626,8 +506,143 @@ if (typeof window !== 'undefined') {
 }
 
 // ==========================================================================
+// Migration: carry old OPFS / localStorage records into the new STdB
+// ==========================================================================
+
+async function _migrateOldRecordsToStdB() {
+    if (!window.StudyDirStore || !window.StudyDirStore.isConfigured) return;
+
+    // One-time migration only: once we have carried legacy storage into the STdB
+    // (or decided there was nothing worth carrying), never run again. Otherwise the
+    // stale legacy IDB/localStorage stores keep re-seeding records on every load —
+    // which resurrects records the user deliberately deleted.
+    const MIG_FLAG = 'baduk_study_migration_done';
+    try {
+        if (localStorage.getItem(MIG_FLAG) === '1') return;
+    } catch (e) { return; }
+
+    // Only migrate if the STdB is empty (no theme files yet).
+    try {
+        let hasTheme = false;
+        for await (const entry of window.StudyDirStore._dir.values()) {
+            if (entry.kind === 'file' && entry.name.endsWith('.theme')) { hasTheme = true; break; }
+        }
+        if (hasTheme) {
+            // STdB already populated — nothing to migrate, stop forever.
+            try { localStorage.setItem(MIG_FLAG, '1'); } catch (e) {}
+            return;
+        }
+    } catch (e) { return; }
+
+    let oldRecords = [];
+    const legacyFilesToRemove = [];
+
+    // 1. Try the old OPFS automatic folder (baduk-notes/).
+    try {
+        const root = await navigator.storage.getDirectory();
+        const oldDir = await root.getDirectoryHandle('baduk-notes', { create: false });
+        for await (const entry of oldDir.values()) {
+            if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue;
+            const meta = await _readJson(oldDir, entry.name);
+            if (!meta || !meta.id || meta._dirSchema !== 1) continue;
+            const sgfFile = meta.sgfFile || null;
+            const sgf = sgfFile ? await _readFileText(oldDir, sgfFile) : null;
+            if (sgf == null && !meta.rawSgf) continue;
+            oldRecords.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
+            legacyFilesToRemove.push({ json: entry.name, sgf: sgfFile });
+        }
+    } catch (e) {}
+
+    // 2. Fallback: localStorage mirror.
+    if (oldRecords.length === 0) {
+        try {
+            const raw = localStorage.getItem('baduk_notes_study_sessions_v1');
+            if (raw) {
+                const list = JSON.parse(raw);
+                if (Array.isArray(list) && list.length > 0) oldRecords = list;
+            }
+        } catch (e) {}
+    }
+
+    // 3. Fallback: IDB record store.
+    if (oldRecords.length === 0) {
+        try {
+            const db = await new Promise((res) => {
+                const req = indexedDB.open('BadukNotesDB', 1);
+                req.onsuccess = (e) => res(e.target.result);
+                req.onerror = () => res(null);
+            });
+            if (db && db.objectStoreNames.contains('study_records')) {
+                const all = await new Promise((res) => {
+                    const tx = db.transaction('study_records', 'readonly');
+                    const req = tx.objectStore('study_records').getAll();
+                    req.onsuccess = () => res(req.result || []);
+                    req.onerror = () => res([]);
+                });
+                if (Array.isArray(all) && all.length > 0) oldRecords = all;
+            }
+        } catch (e) {}
+    }
+
+    if (oldRecords.length === 0) {
+        // Nothing to migrate. Mark complete so we never re-scan (and never
+        // resurrect records that were never created in the STdB).
+        try { localStorage.setItem(MIG_FLAG, '1'); } catch (e) {}
+        return;
+    }
+
+    // Write each old record into the STdB with fresh sequential numbering.
+    let nextNo = 1;
+    for (const rec of oldRecords) {
+        const no = String(nextNo).padStart(3, '0');
+        const newRec = { ...rec, recNo: no };
+        await window.StudyDirStore.saveRecord(newRec);
+        nextNo++;
+    }
+
+    // Remove the legacy source files we just migrated so they do not keep
+    // being read back (and de-duplicated) on every load. Only touch files that
+    // came from the current STdB dir (OPFS baduk-notes/) — not other sources.
+    // Remove the legacy source files we just migrated so they do not keep
+    // being read back (and de-duplicated) on every load. Only safe to do when
+    // the old OPFS folder IS the current STdB dir (i.e. using OPFS). If the
+    // STdB is a user-picked folder, leave the OPFS legacy files in place —
+    // loadAllRecords only reads from the current `_dir`, so they stay out of
+    // the way.
+    if (window.StudyDirStore && window.StudyDirStore.usingOpfs && window.StudyDirStore._dir) {
+        for (const f of legacyFilesToRemove) {
+            try { if (f.json) await window.StudyDirStore._dir.removeEntry(f.json); } catch (e) {}
+            try { if (f.sgf) await window.StudyDirStore._dir.removeEntry(f.sgf); } catch (e) {}
+        }
+    }
+
+    // Refresh the in-memory cache.
+    await window.StudyRecordDB.loadAllFromDir();
+    _rerenderResumeList();
+
+    // Mark migration done forever and clear the legacy stores so the deleted
+    // record(s) can never be resurrected by a later scan.
+    try { localStorage.setItem(MIG_FLAG, '1'); } catch (e) {}
+    try { localStorage.removeItem('baduk_notes_study_sessions_v1'); } catch (e) {}
+    try {
+        const db = await new Promise((res) => {
+            const req = indexedDB.open('BadukNotesDB', 1);
+            req.onsuccess = (e) => res(e.target.result);
+            req.onerror = () => res(null);
+        });
+        if (db && db.objectStoreNames.contains('study_records')) {
+            const tx = db.transaction('study_records', 'readwrite');
+            tx.objectStore('study_records').clear();
+        }
+    } catch (e) {}
+
+    console.log(`[StudyDirStore] Migrated ${oldRecords.length} Rec(s) into STdB`);
+}
+
+// ==========================================================================
 // Directory storage bootstrapping + setup UI
 // ==========================================================================
+
 function _dirOverlay() {
     return document.getElementById('study-dir-setup-overlay');
 }
@@ -636,8 +651,6 @@ function _dirStatusText() {
     return document.getElementById('study-dir-status');
 }
 
-// The keep-location question is asked only once (first launch). After that,
-// later visits show the current location under the SGF drop-slot instead.
 function _dirChoiceDone() {
     try { return localStorage.getItem('baduk_dir_choice_done') === '1'; } catch (e) { return false; }
 }
@@ -654,14 +667,12 @@ function _openDirSetup() {
     overlay.style.display = 'flex';
     const st = window.StudyDirStore;
     if (st && st.isConfigured) {
-        _setDirStatus('Rec database: ' + st.getDirName() + ' \u2014 use the buttons below to change it.');
+        _setDirStatus('Study Database: ' + st.getDirName() + '.');
     } else {
         _setDirStatus('');
     }
 }
 
-// The "Try dropping your SGF file" slot doubles as the Rec-database location:
-// once the keep-location is decided it shows where Recs live + a Change control.
 function updateDirLocationUI() {
     const el = document.getElementById('header-subtitle-text');
     if (!el) return;
@@ -670,16 +681,16 @@ function updateDirLocationUI() {
     if (st && st.isConfigured) {
         if (st.usingOpfs) {
             const linkTxt = st.isSupported ? 'Use a folder\u2026' : 'How it works\u2026';
-            const linkTitle = st.isSupported ? 'Switch to a folder you choose' : 'How the automatic Rec folder works in this browser';
-            html = '\uD83D\uDCC1 Automatic folder (this device)  \u00B7  <a href="#" id="dir-change-link" title="' + linkTitle + '">' + linkTxt + '</a>';
+            const linkTitle = st.isSupported ? 'Switch to a folder you choose' : 'How the Study Database works in this browser';
+            html = '\uD83D\uDCC1 Study Database (this device)  \u00B7  <a href="#" id="dir-change-link" title="' + linkTitle + '">' + linkTxt + '</a>';
         } else {
             const name = st.getDirName() || 'the selected folder';
-            html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The folder where Baduk-Notes keeps your Rec games">Change</a>';
+            html = '\uD83D\uDCC1 ' + name + '  \u00B7  <a href="#" id="dir-change-link" title="The Study Database folder">Change</a>';
         }
     } else if (st && st.hasOpfs) {
-        html = '\uD83D\uDDC2 Recs kept in automatic storage  \u00B7  <a href="#" id="dir-change-link" title="How the automatic Rec folder works in this browser">How it works\u2026</a>';
+        html = '\uD83D\uDDC2 Study Database in automatic storage  \u00B7  <a href="#" id="dir-change-link" title="How the Study Database works in this browser">How it works\u2026</a>';
     } else {
-        html = '\uD83D\uDDC2 Recs kept in browser storage  \u00B7  <a href="#" id="dir-change-link" title="Choose where Baduk-Notes keeps your Rec games">Choose folder\u2026</a>';
+        html = '\uD83D\uDDC2 Study Database not set  \u00B7  <a href="#" id="dir-change-link" title="Choose where Baduk-Notes keeps your Rec games">Choose folder\u2026</a>';
     }
     el.innerHTML = html;
     const link = document.getElementById('dir-change-link');
@@ -691,7 +702,6 @@ function updateDirLocationUI() {
     }
 }
 
-// Rewrite the overlay title/description to match what this browser can actually do.
 function _updateDirOverlayCopy() {
     const title = document.getElementById('study-dir-title');
     const sub = document.getElementById('study-dir-sub');
@@ -723,18 +733,16 @@ function _updateDirOverlayCopy() {
     };
 
     if (useOpfs && !fsApiOn) {
-        // Brave + automatic folder: no dialog can exist, so the ask has a single answer.
-        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+        if (title) title.textContent = 'Where should Baduk-Notes keep your Study Database?';
         if (sub) sub.textContent = 'Recs live in a private folder that belongs to this app, on this device.';
-        if (desc) desc.innerHTML = 'Every Rec is a real <strong>.sgf</strong> file there and is read back on every visit, so nothing is lost. To keep them in a folder you choose instead, enable \u0022File System Access API\u0022 at brave://flags once and reload.';
+        if (desc) desc.innerHTML = 'Every Rec is a real <strong>.sgf</strong> file there and is read back on every visit. To use a folder you choose instead, enable \u0022File System Access API\u0022 at brave://flags once and reload.';
         resetPick(false);
         resetLater(true, 'Use automatic folder');
         return;
     }
 
     if (useOpfs && fsApiOn) {
-        // Chrome/Edge: automatic folder by default, real folder optionally.
-        if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+        if (title) title.textContent = 'Where should Baduk-Notes keep your Study Database?';
         if (sub) sub.textContent = 'Recs currently live in the private folder that belongs to this app.';
         if (desc) desc.innerHTML = 'Every Rec is a real <strong>.sgf</strong> file there and is read back on every visit. You can also keep them in a folder you choose:';
         resetPick(true, 'Use a folder I choose\u2026');
@@ -742,12 +750,10 @@ function _updateDirOverlayCopy() {
         return;
     }
 
-    // A user folder can actually be picked (FS API on, not configured yet) or is
-    // already configured and this overlay is the "Change folder" entry point.
-    if (title) title.textContent = 'Where should Baduk-Notes keep your Rec games?';
+    if (title) title.textContent = 'Choose your Study Database folder';
     if (sub) sub.textContent = 'Pick a folder once. Every Rec is saved there as a real .sgf file and read back on your next visit.';
-    if (desc) desc.innerHTML = 'The folder becomes your Rec database on this device. The keeper choice is remembered and shown under the SGF drop-slot; you can change it anytime.';
-    resetPick(true, 'Choose Folder');
+    if (desc) desc.innerHTML = 'The folder becomes your Study Database on this device. The choice is remembered and shown under the drop-slot; you can change it anytime.';
+    resetPick(true, 'Choose Study Database Folder');
     resetLater(false, 'Keep in browser storage');
 }
 
@@ -758,11 +764,11 @@ function _setDirStatus(msg) {
     if (indicator) {
         if (window.StudyDirStore && window.StudyDirStore.isConfigured) {
             const label = window.StudyDirStore.usingOpfs ? 'Automatic folder' : window.StudyDirStore.getDirName();
-            indicator.textContent = `📁 ${label}`;
+            indicator.textContent = `\uD83D\uDCC1 ${label}`;
             indicator.style.color = '#295D2F';
             indicator.style.fontWeight = '600';
         } else {
-            indicator.textContent = '⚠️ No rec folder set';
+            indicator.textContent = '\u26A0\uFE0F No Study Database set';
             indicator.style.color = '#a16207';
         }
     }
@@ -791,11 +797,11 @@ async function connectStudyDirectory() {
             _markDirChoiceDone();
             updateDirLocationUI();
             await StudyRecordDB.loadAllFromDir();
-            _setDirStatus('Rec database: ' + window.StudyDirStore.getDirName() + ' (real .sgf files on this device)');
+            await _migrateOldRecordsToStdB();
+            _setDirStatus('Study Database: ' + window.StudyDirStore.getDirName() + ' (real .sgf files on this device)');
             refreshStudyListAfterDirLoad();
             return true;
         }
-        // OPFS init failed unexpectedly — fall through to diagnostics below.
     }
     if (!window.StudyDirStore.isSupported) {
         const hasPicker = typeof window.showDirectoryPicker === 'function';
@@ -803,35 +809,30 @@ async function connectStudyDirectory() {
         const ctx = { showDirectoryPicker: hasPicker, isSecureContext: secure, href: window.location.href };
         console.warn('[StudyDirStore] local-folder storage unavailable:', ctx);
         if (window.StudyDirStore.hasFolderFallback) {
-            // Fallback: the picked folder is the keep-location. This browser cannot
-            // WRITE into it yet, so Recs stay in browser storage; the folder can only
-            // be read (existing Recs brought in) until folder-write is enabled.
             _updateDirOverlayCopy();
-            _setDirStatus('This browser cannot write into a folder yet. You can still bring in existing Rec games from the folder now.');
+            _setDirStatus('This browser cannot write into a folder yet. You can still bring in existing Rec games from a folder now.');
             const res = await window.StudyDirStore.importFolderViaInput();
             _markDirChoiceDone();
             updateDirLocationUI();
             if (res.records && res.records.length) {
-                await StudyRecordDB.mergeDirRecords(res.records);
-                const dirLabel = res.name || '(that folder)';
-                _setDirStatus(`Loaded ${res.records.length} Rec(s) from "${dirLabel}" into your study list. Your Recs stay saved in browser storage.`);
+                await StudyRecordDB.loadAllFromDir();
+                _setDirStatus(`Loaded ${res.records.length} Rec(s) from "${res.name || '(that folder)'}" into your Study Database. Your Recs stay saved in browser storage.`);
                 refreshStudyListAfterDirLoad();
                 return true;
             }
-            const dirLabel = res.name || '(that folder)';
             if (res.totalFiles > 0) {
-                _setDirStatus(`Scanned ${res.totalFiles} file(s) in "${dirLabel}" but found no Rec games (.sgf/.json). Nothing was loaded; Recs stay in browser storage.`);
+                _setDirStatus(`Scanned ${res.totalFiles} file(s) but found no Rec games. Recs stay in browser storage.`);
             } else {
                 _setDirStatus('That folder has no Rec files. Recs stay in browser storage.');
             }
             return false;
         }
         if (!secure) {
-            _setDirStatus('Local-folder storage needs a secure context (HTTPS or http://localhost). Open the app at http://localhost:8577/ in Chrome/Edge/Brave, or Recs stay in browser storage.');
+            _setDirStatus('Local-folder storage needs a secure context (HTTPS or http://localhost). Open the app at http://localhost:8577/ in Chrome/Edge/Brave.');
         } else if (!hasPicker) {
-            _setDirStatus('This browser does not expose the File System Access API (showDirectoryPicker). Use Chrome/Edge/Brave to enable folder storage. Recs remain in browser storage for now.');
+            _setDirStatus('This browser does not expose the File System Access API. Use Chrome/Edge/Brave with File System Access enabled.');
         } else {
-            _setDirStatus('This browser does not support local-folder storage. Recs remain in browser storage.');
+            _setDirStatus('This browser does not support local-folder storage.');
         }
         console.log('[StudyDirStore] diagnostics:', ctx);
         return false;
@@ -839,21 +840,12 @@ async function connectStudyDirectory() {
 
     let ok = false;
     try {
-        if (window.StudyDirStore.isConfigured) {
-            if (window.StudyDirStore.usingOpfs) {
-                // Switching from the automatic folder to a folder the user chooses.
-                ok = await window.StudyDirStore.setupDirectory();
-            } else {
-                ok = await window.StudyDirStore.reGrantPermission();
-                if (!ok) {
-                    // Stored handle is stale/revoked — fall back to re-picking a folder.
-                    _setDirStatus('Could not re-grant access to the saved folder. Choose a folder again below.');
-                    ok = await window.StudyDirStore.setupDirectory();
-                }
-            }
-        } else {
-            ok = await window.StudyDirStore.setupDirectory();
-        }
+        // An explicit user action ("Choose folder" / "Change") should ALWAYS open
+        // the directory picker. Re-granting an already-granted handle returns
+        // 'granted' without showing the picker, which made "change folder" a
+        // no-op (just a status blink). So bypass re-grant here and go straight
+        // to showDirectoryPicker.
+        ok = await window.StudyDirStore.setupDirectory();
     } catch (err) {
         console.error('[StudyDirStore] folder selection failed:', err);
         if (err && err.name === 'AbortError') {
@@ -870,9 +862,10 @@ async function connectStudyDirectory() {
     }
 
     await StudyRecordDB.loadAllFromDir();
+    await _migrateOldRecordsToStdB();
     _markDirChoiceDone();
     updateDirLocationUI();
-    _setDirStatus(`Rec database: ${window.StudyDirStore.getDirName()}`);
+    _setDirStatus(`Study Database: ${window.StudyDirStore.getDirName()}`);
     refreshStudyListAfterDirLoad();
     return true;
 }
@@ -887,26 +880,21 @@ async function initStudyDirStorage() {
         if (st.ready) ready = true;
     }
 
-    // Automatic private folder (OPFS): always available, no dialog, no flag — the
-    // Rec database works in every browser (incl. Brave) right out of the box.
     if (!ready && window.StudyDirStore.hasOpfs) {
         ready = await window.StudyDirStore.initOpfs();
     }
 
     if (ready) {
         await StudyRecordDB.loadAllFromDir();
+        await _migrateOldRecordsToStdB();
         _markDirChoiceDone();
         updateDirLocationUI();
         const name = window.StudyDirStore.getDirName();
-        _setDirStatus(name ? 'Rec database: ' + name : '');
-        // The resume-study list renders synchronously during app init, before this
-        // async load finishes — re-render it now so Recs loaded from the folder
-        // actually show up (and the count is not stuck at 0 RECORDED).
+        _setDirStatus(name ? 'Study Database: ' + name : '');
         refreshStudyListAfterDirLoad();
         return;
     }
 
-    // No writable folder storage of any kind — ask once where Recs should live.
     updateDirLocationUI();
     if (_dirChoiceDone()) return;
 
@@ -919,6 +907,103 @@ async function initStudyDirStorage() {
         overlay.style.display = 'flex';
         overlay.classList.remove('hidden');
     }, 400);
+}
+
+// Fallback: <input webkitdirectory> import (read-only browsers).
+async function _importFolderFallback() {
+    if (!window.StudyDirStore || !window.StudyDirStore.hasFolderFallback) return { records: [], name: '', totalFiles: 0 };
+    return new Promise((resolve) => {
+        let settled = false;
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.setAttribute('webkitdirectory', '');
+        input.multiple = true;
+        input.style.display = 'none';
+        input.addEventListener('change', async () => {
+            const files = Array.from(input.files || []);
+            const { records, name, totalFiles } = await window.StudyDirStore._recordsFromFiles(files);
+            window.StudyDirStore._fallbackName = name;
+            window.StudyDirStore._lastFallbackRecords = records;
+            settled = true;
+            resolve({ records, name, totalFiles });
+        });
+        input.addEventListener('cancel', () => {
+            if (!settled) resolve({ records: [], name: '', totalFiles: 0 });
+        });
+        document.body.appendChild(input);
+        input.click();
+        input.remove();
+    });
+}
+
+// Build records from a webkitdirectory FileList.
+async function _recordsFromFiles(files) {
+    const list = Array.isArray(files) ? files : Array.from(files || []);
+    const name = (list[0] && list[0].webkitRelativePath) ? list[0].webkitRelativePath.split('/')[0] : '';
+    const records = [];
+
+    // New format: *.theme + *.sgf pairs
+    const themeFiles = list.filter(f => /\.theme$/i.test(f.name));
+    for (const tf of themeFiles) {
+        let meta = null;
+        try { meta = JSON.parse(await tf.text()); } catch (e) { continue; }
+        if (!meta || !meta.id || !meta.recNo) continue;
+        const no = String(meta.recNo).padStart(3, '0');
+        const sgfFile = list.find(f => f.name === `${no}.sgf`);
+        let sgf = null;
+        if (sgfFile) { try { sgf = await sgfFile.text(); } catch (e) {} }
+        if (sgf == null) continue;
+        records.push({ ...meta, workingSgf: sgf });
+    }
+
+    // Legacy format: rec-NNN-slug.json pairs
+    if (records.length === 0) {
+        const jsonFiles = list.filter(f => /\.json$/i.test(f.name));
+        for (const jf of jsonFiles) {
+            let meta = null;
+            try { meta = JSON.parse(await jf.text()); } catch (e) { continue; }
+            if (!meta || !meta.id || meta._dirSchema !== 1) continue;
+            let sgf = null;
+            if (meta.sgfFile) {
+                const sgfFile = list.find(f => f.name === meta.sgfFile);
+                if (sgfFile) { try { sgf = await sgfFile.text(); } catch (e) {} }
+            }
+            if (sgf == null && !meta.rawSgf) continue;
+            records.push({ ...meta, workingSgf: sgf != null ? sgf : (meta.rawSgf || '') });
+        }
+    }
+
+    // Bare .sgf fallback
+    if (records.length === 0) {
+        for (const sf of list.filter(f => /\.sgf$/i.test(f.name))) {
+            let text = '';
+            try { text = await sf.text(); } catch (e) { continue; }
+            if (!text || !text.includes(';(')) continue;
+            const pb = (text.match(/PB\[([^\]]*)\]/) || [])[1] || 'Black';
+            const pw = (text.match(/PW\[([^\]]*)\]/) || [])[1] || 'White';
+            records.push({
+                id: 'study_fallback_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
+                recNo: String(records.length + 1).padStart(3, '0'),
+                fileNm: sf.name,
+                blk: pb,
+                wht: pw,
+                lastAccess: formatStudyAccessTime(),
+                currentMoveIndex: 0,
+                rawSgf: text,
+                workingSgf: text,
+                _fromFallbackFolder: name
+            });
+        }
+    }
+
+    records.sort((a, b) => (a.lastAccess || '').localeCompare(b.lastAccess || '')).reverse();
+    return { records, name, totalFiles: list.length };
+}
+
+// Expose fallback helpers on StudyDirStore for callers.
+if (typeof window !== 'undefined' && window.StudyDirStore) {
+    window.StudyDirStore.importFolderViaInput = _importFolderFallback;
+    window.StudyDirStore._recordsFromFiles = _recordsFromFiles;
 }
 
 function wireStudyDirSetupUI() {
@@ -938,7 +1023,6 @@ function wireStudyDirSetupUI() {
         btnPick.addEventListener('click', async () => {
             const opfsOnly = window.StudyDirStore && window.StudyDirStore.usingOpfs && !window.StudyDirStore.isSupported;
             if (opfsOnly) {
-                // Automatic folder is the only keep-location here (no OS dialog exists).
                 _setDirStatus('Recs are kept in the automatic folder of this app. To use a folder you choose instead, enable \u0022File System Access API\u0022 at brave://flags and reload.');
                 return;
             }
@@ -949,11 +1033,8 @@ function wireStudyDirSetupUI() {
             if (ok) {
                 _markDirChoiceDone();
                 updateDirLocationUI();
-                // Success — the status (folder name) is shown inside the overlay for a
-                // moment before closing so the user sees where their Recs will go.
                 setTimeout(close, 900);
             }
-            // On failure the overlay stays open with the reason visible.
         });
     }
     if (btnLater) {

@@ -60,13 +60,13 @@ async function main() {
     // Same-session render should produce a usable URL (blob: or data:)
     return { st, ref, resolved, isUrl: !!resolved && (resolved.startsWith('blob:') || resolved.startsWith('data:')) }; 
   });
-  check('storeTextureFile returns session ref rel', session.st && session.st.rel === 'textures/My-Kaya-Wood.png' && session.st.mode === 'session', JSON.stringify(session.st));
+  check('storeTextureFile returns session ref rel', session.st && session.st.rel === 'imgs/My-Kaya-Wood.png' && session.st.mode === 'session', JSON.stringify(session.st));
   check('resolveTextureSrc resolves ref this session', session.resolved && session.isUrl, String(session.resolved));
 
   // Unresolvable ref (not in folder, cache cleared) -> null, no crash
   const missing = await page.evaluate(async () => {
     window.invalidateTextureCache();
-    const ref = window.TEXTURE_REF_PREFIX + 'textures/does-not-exist.png';
+    const ref = window.TEXTURE_REF_PREFIX + 'imgs/does-not-exist.png';
     const r = await window.resolveTextureSrc(ref);
     return { nullOrEmpty: r === null, retriedSame: await window.resolveTextureSrc(ref) === null };
   });
@@ -75,8 +75,8 @@ async function main() {
   // loadBoardTextureImage keeps board/stone cache-key contract
   const loader = await page.evaluate(async () => {
     const blob = new Blob(['abc']);
-    await window.storeTextureFile(blob, 'kaya.png', 'textures');
-    const ref = window.TEXTURE_REF_PREFIX + 'textures/kaya.png';
+    await window.storeTextureFile(blob, 'kaya.png', 'imgs');
+    const ref = window.TEXTURE_REF_PREFIX + 'imgs/kaya.png';
     const img = window.loadBoardTextureImage('testBoardBgImage', ref, () => {});
     await new Promise(r => setTimeout(r, 300));
     return { imgIsImage: img instanceof Image || (img instanceof window.Image), hasSrc: !!img.src };
@@ -100,7 +100,7 @@ async function main() {
     const s = window.StudyDirStore;
     window.showDirectoryPicker = async () => mockDirHandle;
     s._dir = mockDirHandle;
-    const dirOk = await s.importTexture(new Blob([new Uint8Array([1, 2, 3])]), 'textures/kaya.png');
+    const dirOk = await s.importTexture(new Blob([new Uint8Array([1, 2, 3])]), 'imgs/kaya.png');
     const st2 = await window.storeTextureFile(new Blob([new Uint8Array([4, 5])]), 'slate.png', window.TEXTURE_DIR_SUBDIR);
     const bytesWritten = await Promise.all(written.map(async w => Array.from(new Uint8Array(await w.arrayBuffer()))));;
     return {
@@ -112,7 +112,41 @@ async function main() {
     };
   });
   check('StudyDirStore.importTexture writes bytes into mock dir', folder.dirOk === true && folder.wroteTexturesKaya, JSON.stringify(folder));
-  check('storeTextureFile reports folder mode when dir writable', folder.mode === 'folder' && folder.rel === 'textures/slate.png', JSON.stringify(folder));
+  check('storeTextureFile reports folder mode when dir writable', folder.mode === 'folder' && folder.rel === 'imgs/slate.png', JSON.stringify(folder));
+
+  // Nested-path read: a ref into the imgs/ subfolder must resolve by walking the
+  // directory tree (getFileHandle does NOT accept "/" separators). Regression
+  // for: "Texture imgs/... is referenced but can't be found in the study folder".
+  const nested = await page.evaluate(async () => {
+    const origCreate = URL.createObjectURL;
+    URL.createObjectURL = () => 'blob:mocked';
+    function makeDir() { const children = {}; return {
+      _children: children,
+      async getDirectoryHandle(n, o) { if (o && o.create) this._children[n] = this._children[n] || makeDir(); return this._children[n] || null; },
+      async getFileHandle(n, o) { if (o && o.create) this._children[n] = this._children[n] || { bytes: null }; return this._children[n] || null; },
+      async removeEntry(n) { delete this._children[n]; },
+      async *values() { for (const k of Object.keys(this._children)) yield { name: k, kind: this._children[k].bytes !== undefined ? 'file' : 'dir' }; }
+    }; }
+    const root = makeDir();
+    const s = window.StudyDirStore;
+    s._dir = root;
+    const bytes = [137, 80, 4, 5, 6];
+    s.importTexture = async function (file, relPath) {
+      const parts = String(relPath).split('/').filter(Boolean);
+      const name = parts.pop(); let dir = this._dir;
+      for (const part of parts) dir = await dir.getDirectoryHandle(part, { create: true });
+      const fh = await dir.getFileHandle(name, { create: true });
+      const buf = await file.arrayBuffer(); fh.bytes = Array.from(new Uint8Array(buf));
+      fh.getFile = async () => ({ text: async () => '', arrayBuffer: async () => new Uint8Array(fh.bytes).buffer });
+      return true;
+    };
+    await s.importTexture(new Blob([new Uint8Array(bytes)]), 'imgs/ChatGPT-Image.png');
+    window.invalidateTextureCache();
+    const url = await window.resolveTextureSrc('texture-ref:imgs/ChatGPT-Image.png');
+    URL.createObjectURL = origCreate;
+    return { resolved: url === 'blob:mocked' };
+  });
+  check('texture-ref:imgs/<file> resolves by walking subfolder', nested.resolved, JSON.stringify(nested));
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;

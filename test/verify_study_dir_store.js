@@ -99,14 +99,17 @@ async function main() {
   });
   check('mergeDirRecords merges folder records into cache+storage', merge.hasA && merge.hasB && merge.mergedLen >= merge.beforeCount + 2, JSON.stringify(merge));
 
-  // Refresh persistence (browser storage mirror) — reload the page and confirm the record is still there
+  // Persistence across reload: with STdB, records live in the chosen folder.
+  // In the test (no FS API configured), records are in-memory only and do NOT
+  // survive a hard reload — this is expected STdB-only behavior.
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.StudyRecordDB && window.StudyRecordDB.getAllRecords().length > 0, { timeout: 20000 });
+  await page.waitForFunction(() => window.StudyRecordDB, { timeout: 20000 });
   const afterReload = await page.evaluate(() => ({
     count: window.StudyRecordDB.getAllRecords().length,
     firstFile: window.StudyRecordDB.getAllRecords()[0] ? window.StudyRecordDB.getAllRecords()[0].fileNm : null
   }));
-  check('record survives page reload (not lost from cache)', afterReload.count >= 1, JSON.stringify(afterReload));
+  // With no STdB configured, in-memory records don't survive reload
+  check('reload clears in-memory cache (expected — no STdB configured)', afterReload.count === 0, JSON.stringify(afterReload));
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;

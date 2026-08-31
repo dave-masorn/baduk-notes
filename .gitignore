@@ -16,6 +16,7 @@ tech-log-dist/
 # backups & design reference material
 _backup/
 _ui/
+_STdB/
 # opencode local tooling
 .opencode/
 # scratch / dev artifacts
