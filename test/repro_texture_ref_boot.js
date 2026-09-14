@@ -114,6 +114,25 @@ async function main() {
   check('store configured (OPFS)', hookState.configured === true);
   check('texture Image element loaded', hookState.imgLoaded === true);
 
+  // The transient pre-attach resolve must NOT have produced a false "missing" warn.
+  const transientWarns = consoleLog.filter(m =>
+    m.includes('texture not found in study folder: imgs/go.png'));
+  check('no false "missing" warn for the boot-race texture', transientWarns.length === 0,
+    `found ${transientWarns.length}: ${transientWarns.slice(0,2).join(' | ')}`);
+
+  // A genuinely absent ref (store now configured) MUST still warn once.
+  await page.evaluate(() => {
+    const style = getActiveStyleObject();
+    style.board.useColor = false;
+    style.board.imgSrc = window.TEXTURE_REF_PREFIX + 'imgs/definitely-not-here.png';
+    saveStyleAndRedraw();
+  });
+  await sleep(600);
+  const realWarns = consoleLog.filter(m =>
+    m.includes('texture not found in study folder: imgs/definitely-not-here.png'));
+  check('genuinely-missing ref still warns', realWarns.length >= 1,
+    `found ${realWarns.length}`);
+
   const fails = results.filter(r => !r.pass).length;
   console.log(`\n=== texture-ref boot: ${results.length - fails}/${results.length} passed ===`);
   console.log('console sample:', consoleLog.slice(0, 8).join(' | '));

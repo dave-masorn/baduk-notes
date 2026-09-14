@@ -30,6 +30,20 @@ How the application files interact — UI shell, script load order, scoring pipe
 
 ## Changelog
 
+### v0.2.034 — Silenced False `texture not found` Boot Warnings
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **texture/diagnostics** | `fix` | The first resolve attempt for every `texture-ref:imgs/...` happened before the study-folder store attached, so Chrome logged `[board-texture] texture not found in study folder: imgs/…` on every reload even though the texture loaded fine moments later via the v0.2.033 re-seed. `_notifyMissing` now stays silent while the store still has a chance to attach (exists, not yet configured, folder feature available); a genuinely absent ref after the store is connected — or when no folder can ever attach — still logs exactly one warning. |
+
+#### Verification
+- `test/repro_texture_ref_boot.js` (now 6 checks): texture still paints on its own after reload; `0` false `missing` warns for the boot texture; a `texture-ref:imgs/definitely-not-here.png` after the store is configured still warns (found 1).
+- Cache busters bumped to `v=0.2.034`.
+
+---
+
 ### v0.2.033 — Board Wood Image Fix: `texture-ref:` Re-seeded Once Study Folder Is Ready
 
 #### Changed

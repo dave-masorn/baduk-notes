@@ -89,8 +89,21 @@
         return null;
     }
 
+    // True while the study-folder store is still able to attach later — i.e. it
+    // exists but has not been configured yet (boot-time: the first drawBoard()
+    // seeds a texture-ref load before initStudyDirStorage() attaches OPFS/the
+    // folder). A resolve in that window is NOT a genuine missing file; the
+    // configure step re-seeds and repaints, so warn only once the store is either
+    // attached (file truly absent) or can never attach.
+    function _storeMayStillAttach() {
+        if (typeof window === 'undefined' || !window.StudyDirStore) return false;
+        if (window.StudyDirStore.isConfigured) return false;
+        return !!window.StudyDirStore.isSupported || !!window.StudyDirStore.hasOpfs;
+    }
+
     function _notifyMissing(rel) {
         if (_missingReported.has(rel)) return;
+        if (_storeMayStillAttach()) return;
         _missingReported.add(rel);
         // A ref that can't be resolved just falls back to the board/stone color —
         // that is self-evident visually, so log to the console only (no intrusive
