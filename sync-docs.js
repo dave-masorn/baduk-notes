@@ -33,6 +33,7 @@ const NAV_GROUPS = {
     title: 'Reference',
     items: {
       'Tech Log System': 'tech-log-system',
+      'Sound System': 'sound-system',
       'Assets': 'assets',
       'Reference & Data': 'reference-data',
       'Agents & Skills': 'agents-skills',

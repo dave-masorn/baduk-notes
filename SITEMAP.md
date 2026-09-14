@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.031
+version: 0.2.032
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,33 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.032 — Systematic SFX Split: Annotation vs rePlayer + Initial Modal Sounds
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **SFX** | `refactor` | **Two-category SFX registry**: every runtime sound is now routed through `resolveSfx(category, event)` into one of two mutually exclusive categories — `annotation` (annotation on/off, undo, board flip) and `replayer` (game-tree replay & navigation). The replayer category is split per board context: `initial` (the main annotation board) vs `study` (Resume Your Study sessions). `playSfx(document.body… ? 'stoneStudy' : 'stone')` ternaries are gone; every call site is now category+event explicit. |
+| **SFX** | `feat` | **Initial-modal rePlayer sounds**: the #initial modal's replayer now plays four new base64-embedded samples — `move.wav` (single step forward / placement), `deadstoneless.wav` (capture of ≤3 stones), `deadstonemore.wav` (capture of >3 stones), and `碁石を打つ-bkup-001.mp3` (single step backward / last-move delete). The study modal keeps its existing `stoneStudy` / `remove` sounds; study-mode captures remain silent (unchanged). |
+| **SFX** | `fix` | **capture sound restored**: the `capture` key referenced a non-existent `SFX_BASE64` entry (dead since v0.1.047), making captures silent. Replaced with the new `captureLess` / `captureMore` split; capture sounds are now heard in the initial modal. |
+| **arch** | `refactor` | **`SFX_CATEGORY` + `SFX_REGISTRY` + `resolveSfx()`**: new `annotation_v4.js` top-level constants (`SFX_CATEGORY.ANNOTATION`, `SFX_CATEGORY.REPLAYER`) and lookup registry per context. `_getSfxPool()` derives from the registry, removing the hard-coded key list that included the dead `capture`. Dead `_sfxKeyMap` removed. |
+
+#### Verification
+- `node --check` clean on `annotation_v4.js` and `board-renderer.js`.
+- Cache busters synced to `v=0.2.032`.
+
+#### Fixed — saved board styles backfilled to full structure on load
+
+Saved board styles (initial / study / export / scoring) are now deep-merged over the default style template when loaded (`_backfillBoardStyleStructure` in `_loadSavedBoardStyles`). A style persisted without newer or optional keys — e.g. an old-schema style with no `bg`, `hint` / `marker`, or no `board.size` — previously rendered the board with those parts silently missing until the user re-touched the floating-panel control (which is what re-creates the `bg` object). Now every missing key is backfilled at load, so solid-bg and board-size settings render on the very first draw; saved values are never overwritten and the next persist re-saves the healed structure permanently.
+
+#### Verification
+- `node --check` clean on `annotation_v4.js` and `board-renderer.js`.
+- Cache busters synced to `v=0.2.032`.
+- Headless Chrome repro: a saved style missing `bg` with `solid:true` now paints the solid background on first load; a saved style missing `board.size` backfills to 720 and renders instead of a blank 0×0 canvas.
+- `npm run test:all` + style/storage suites pass (only pre-existing msm S17 komi-restore failure, identical on HEAD).
+
+---
 
 ### v0.2.031 — Study Board BG "OFF" Is 100% Transparent
 
@@ -3270,6 +3297,53 @@ To prevent `Build failed because of webpack errors` or build stalls during Next.
 - **Prevention**: Ensure `turbopack: { root: path.resolve(__dirname) }` is present in `tech-log/next.config.ts` or build using `npx next build --webpack`.
 3. Build and sync (steps 3–4 above)
 
+## Sound System
+
+Every playable sound effect is routed through a two-category registry (`SFX_REGISTRY` in `annotation_v4.js`):
+
+### Category 1 — `replayer` (game-tree replay & navigation)
+
+Sounds played when the user steps through moves in a game record. Split per board context:
+
+| Context | Event | `SFX_BASE64` key | Source file |
+| --- | --- | --- | --- |
+| `initial` (#initial modal) | move forward / placement | `move` | `move.wav` |
+| `initial` | capture of 1–3 stones | `captureLess` | `deadstoneless.wav` |
+| `initial` | capture of >3 stones | `captureMore` | `deadstonemore.wav` |
+| `initial` | move backward / delete last | `moveBack` | `碁石を打つ-bkup-001.mp3` |
+| `initial` | jump / fast-forward | `jump` | `branch_7.wav` |
+| `study` (Resume Your Study) | move forward / placement | `move` | `stone_takk.wav` |
+| `study` | move backward | `moveBack` | `remove1.wav` |
+| `study` | jump / fast-forward | `jump` | `branch_7.wav` |
+| `study` | capture | — | *silent* (unchanged) |
+
+### Category 2 — `annotation` (board editing & annotations)
+
+Sounds played when the user places annotations, labels, or toggles the board POV. Context-independent — the same sound plays in both the initial and study modals.
+
+| Event | `SFX_BASE64` key | Source file |
+| --- | --- | --- |
+| Annotation / label / mark added | `add` | `annot.wav` |
+| Annotation undo | `undo` | `annot_undo.wav` |
+| Board flip (180°) | `flip` | `brd_flip.mp3` |
+
+### Lookup flow
+
+```text
+playSfx(resolveSfx(category, event))
+  → SFX_REGISTRY[category][context][event]   (replayer: initial or study)
+  → SFX_REGISTRY[category][event]            (annotation: context-free)
+  → SFX_BASE64[key]
+  → _getOrCreateSfx(key)                     (lazy Audio cache)
+  → Audio.play()
+```
+
+Call sites **never** reference `SFX_BASE64` keys directly — `resolveSfx()` is the only lookup path, ensuring every sound is heard in exactly its own category and the correct board context.
+
+### Base64 embedding
+
+All sounds are embedded as base64 data URIs in `SFX_BASE64` (annotation_v4.js) so SFX never depends on the `_sfx/` files being served at runtime. The `_sfx/` files in the repo are the source of truth; every file must be kept byte-identical with its embedded copy.
+
 ## Assets
 
 ### `_img-svg/` — Board & Stone Graphics
@@ -3292,17 +3366,24 @@ To prevent `Build failed because of webpack errors` or build stalls during Next.
 
 ### `_sfx/` — Sound Effects
 
-Source-of-truth files for the six sounds played at runtime. Since v0.1.047 these are **not** fetched at runtime — each sound is embedded in `annotation_v4.js` as a base64 data URI in the `SFX_BASE64` map (byte-identical to the file below), so playing never depends on file serving, the HTTP cache, the service worker, or filename encoding. Keep a changed file and its embedded copy in sync.
+Source-of-truth files for all sound effects played at runtime. Since v0.1.047 these are **not** fetched at runtime — each sound is embedded in `annotation_v4.js` as a base64 data URI in the `SFX_BASE64` map (byte-identical to the file below), so playing never depends on file serving, the HTTP cache, the service worker, or filename encoding. Keep a changed file and its embedded copy in sync.
 
-| File | Sound |
-| --- | --- |
-| `stone_takk.wav` | Stone placement |
-| `annot.wav` / `annot_undo.wav` | Annotation on/off |
-| `branch_7.wav` | Branch navigation |
-| `brd_flip.mp3` | Board flip |
-| `remove1.wav` | Stone removal |
-| `undo.wav` | Undo |
-| `spo_ge_igo_utu03.mp3` / `碁石を打つ.mp3` | Japanese stone placement |
+Every runtime sound belongs to one of two categories (v0.2.032):
+
+| Category | Context | File | Sound |
+| --- | --- | --- | --- |
+| **replayer** | `#initial` modal — move | `move.wav` | Single step forward / stone placement |
+| **replayer** | `#initial` modal — capture ≤3 | `deadstoneless.wav` | Capture of 1–3 stones |
+| **replayer** | `#initial` modal — capture >3 | `deadstonemore.wav` | Capture of more than 3 stones |
+| **replayer** | `#initial` modal — move back | `碁石を打つ-bkup-001.mp3` | Single step backward / last-move delete |
+| **replayer** | `#initial` modal — jump / FF | `branch_7.wav` | Fast-forward 5 moves |
+| **replayer** | study modal — move | `stone_takk.wav` | Stone placement (study) |
+| **replayer** | study modal — move back | `remove1.wav` | Stone removal (study) |
+| **replayer** | study modal — jump / FF | `branch_7.wav` | Fast-forward 5 moves |
+| **annotation** | both modals | `annot.wav` / `annot_undo.wav` | Annotation on / off |
+| **annotation** | both modals | `brd_flip.mp3` | Board flip |
+
+The `SFX_REGISTRY` in `annotation_v4.js` maps `(category, context, event)` to the `SFX_BASE64` key; `resolveSfx()` is the only call-site lookup path.
 
 ### `f0nts/` — Typography
 

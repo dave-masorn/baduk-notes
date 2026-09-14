@@ -116,7 +116,7 @@ function handleMouseDown(e) {
     if (state.variationEditMode) {
         if (c >= 0 && c <= 18 && r >= 0 && r <= 18 && !state.board[r][c].player) {
             const ok = addVariationAt(r, c);
-            if (!ok) playSfx('annotUndo');
+            if (!ok) playSfx(resolveSfx(SFX_CATEGORY.ANNOTATION, 'undo'));
         }
         drawBoard();
         return;
@@ -612,7 +612,7 @@ function applyToolToCell(r, c) {
     drawBoard();
 
     if (changed && tool !== 'stone-b' && tool !== 'stone-w' && tool !== 'crop' && tool !== 'clear') {
-        playSfx('annot');
+        playSfx(resolveSfx(SFX_CATEGORY.ANNOTATION, 'add'));
     }
 
     if (changed) {
@@ -835,7 +835,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 if (shouldPlaySound) {
                     let audio = state.fastForwardAnim.audioPool.find(a => a.ended || a.paused);
                     if (!audio && state.fastForwardAnim.audioPool.length < 8) {
-                        audio = new Audio(SFX_BASE64.stone);
+                        audio = new Audio(SFX_BASE64[resolveSfx(SFX_CATEGORY.REPLAYER, 'move')]);
                         audio.volume = 0.4;
                         state.fastForwardAnim.audioPool.push(audio);
                     }
