@@ -1704,6 +1704,32 @@ function _applySavedBoardSizes() {
     }
 }
 
+// Re-seed every texture-ref: board/stone image and repaint. The very first
+// drawBoard() in init() runs synchronously, almost always BEFORE
+// initStudyDirStorage() has attached the OPFS/folder handle — so a
+// 'texture-ref:imgs/...' style resolves to null, the load is terminal, and the
+// canvas silently keeps its flat fallback colour for the whole session until the
+// user re-touches a control (which re-seeds the load after the folder is ready).
+// initStudyDirStorage() calls this once the store is configured.
+window.reloadTextureAfterStorageReady = function () {
+    try {
+        if (window.invalidateTextureCache) window.invalidateTextureCache();
+        window.initialBoardBgImage = null;
+        window.studyBoardBgImage = null;
+        window.scoringBoardBgImage = null;
+        window.exportBoardBgImage = null;
+        window.initialBStoneBgImage = null;
+        window.initialWStoneBgImage = null;
+        window.studyBStoneBgImage = null;
+        window.studyWStoneBgImage = null;
+        window.scoringBStoneBgImage = null;
+        window.scoringWStoneBgImage = null;
+        window.exportBStoneBgImage = null;
+        window.exportWStoneBgImage = null;
+    } catch (e) {}
+    if (typeof drawBoard === 'function') drawBoard();
+};
+
 function init() {
     if (!elements.canvasInitial) elements.canvasInitial = document.getElementById('go-board-canvas-initial');
     if (!elements.canvasStudy) elements.canvasStudy = document.getElementById('go-board-canvas-study');

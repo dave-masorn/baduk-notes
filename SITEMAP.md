@@ -30,6 +30,21 @@ How the application files interact — UI shell, script load order, scoring pipe
 
 ## Changelog
 
+### v0.2.033 — Board Wood Image Fix: `texture-ref:` Re-seeded Once Study Folder Is Ready
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **texture/render** | `fix` | A board/stone style that uses a `texture-ref:imgs/...` image kept the **flat fallback colour** on the main board for the whole session after a page reload: the very first `drawBoard()` runs synchronously in `init()` before `initStudyDirStorage()` has attached the OPFS / folder handle, so `resolveTextureSrc` returned `null` terminally and the texture never loaded until the user re-touched a style control (which re-seeded the load after the store was ready). `initStudyDirStorage()` now fires `window.reloadTextureAfterStorageReady()` once the store is configured — it invalidates the texture cache, drops the stale canvas-image slots, and repaints, so saved `texture-ref:` board/stone images appear automatically. Works for the automatic OPFS folder, the re-granted directory handle, and the directory-picker setup path. |
+
+#### Verification
+- `test/repro_texture_ref_boot.js`: with the fix, after a reload a `texture-ref:imgs/go.png` board paints on its own (`grid≈[14,139,11]`, image element `naturalWidth>0`) with **no re-touch**; stashing the fix reproduces the old failure (flat `#e0901f`, `imgLoaded:false`).
+- Cache busters bumped to `v=0.2.033`.
+- `npm run test:all` + `verify_study_dir_setup` / `verify_study_dir_dedupe` / `verify_texture_ref` pass.
+
+---
+
 ### v0.2.032 — Systematic SFX Split: Annotation vs rePlayer + Initial Modal Sounds
 
 #### Changed

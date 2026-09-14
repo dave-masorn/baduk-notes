@@ -867,11 +867,29 @@ async function connectStudyDirectory() {
     updateDirLocationUI();
     _setDirStatus(`Study Database: ${window.StudyDirStore.getDirName()}`);
     refreshStudyListAfterDirLoad();
+    doTextureReloadIfReady();
     return true;
+}
+
+// Re-fire the texture re-seed once per configure transition. The first drawBoard()
+// runs before the directory store is attached, so a texture-ref: style keeps its
+// flat fallback colour until the store becomes ready; at that point we invalidate
+// the texture cache and repaint so the saved images appear without any re-touch.
+let _texReloadFired = false;
+function doTextureReloadIfReady() {
+    if (!window.StudyDirStore || !window.StudyDirStore.isConfigured) return;
+    if (_texReloadFired) return;
+    _texReloadFired = true;
+    if (typeof window.reloadTextureAfterStorageReady === 'function') {
+        window.reloadTextureAfterStorageReady();
+    }
 }
 
 async function initStudyDirStorage() {
     if (!window.StudyDirStore) return;
+
+    // A fresh configure transition (boot, picker setup, re-connect) may re-seed.
+    _texReloadFired = false;
 
     let ready = false;
 
@@ -892,6 +910,7 @@ async function initStudyDirStorage() {
         const name = window.StudyDirStore.getDirName();
         _setDirStatus(name ? 'Study Database: ' + name : '');
         refreshStudyListAfterDirLoad();
+        doTextureReloadIfReady();
         return;
     }
 
