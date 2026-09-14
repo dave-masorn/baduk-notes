@@ -885,6 +885,28 @@ function doTextureReloadIfReady() {
     }
 }
 
+// A texture-ref: resolve that runs while the store is still attaching (boot)
+// can wait for the folder to become available instead of failing terminally.
+// Returns a promise of the current configured state, bounded by a timeout so a
+// folder that never attaches still resolves.
+let _storeReadyListeners = [];
+window.waitForStudyDirStoreReady = function (timeoutMs = 1000) {
+    if (window.StudyDirStore && window.StudyDirStore.isConfigured) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        let settled = false;
+        const settle = (val) => { if (!settled) { settled = true; resolve(!!val); } };
+        const timer = setTimeout(() => {
+            settle(window.StudyDirStore && window.StudyDirStore.isConfigured);
+        }, timeoutMs);
+        _storeReadyListeners.push(() => { clearTimeout(timer); settle(true); });
+    });
+};
+function _notifyStudyDirStoreReady() {
+    const listeners = _storeReadyListeners;
+    _storeReadyListeners = [];
+    listeners.forEach((fn) => { try { fn(); } catch (e) {} });
+}
+
 async function initStudyDirStorage() {
     if (!window.StudyDirStore) return;
 
@@ -903,6 +925,7 @@ async function initStudyDirStorage() {
     }
 
     if (ready) {
+        _notifyStudyDirStoreReady();
         await StudyRecordDB.loadAllFromDir();
         await _migrateOldRecordsToStdB();
         _markDirChoiceDone();

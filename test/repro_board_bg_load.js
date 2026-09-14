@@ -106,7 +106,7 @@ async function main() {
   });
   page.on('requestfailed', req => consoleErrors.push('reqfail: ' + (req.url && req.url().length > 60 ? req.url().slice(0, 60) : (req.url && req.url())) + ' → ' + (req.failure && req.failure().errorText)));
   page.on('response', res => {
-    if (res.url().endsWith('repro-board.png')) consoleErrors.push('PNG response:' + res.status());
+    if (res.url().endsWith('repro-board.png') && res.status() !== 200) consoleErrors.push('PNG response:' + res.status());
   });
 
   await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded' });
@@ -159,7 +159,7 @@ async function main() {
   const afterSet = await dumpState(page);
   console.log('state after set:', JSON.stringify(afterSet, null, 2));
   check('solid bg ON', afterSet.bgSolid === true, `bgSolid=${afterSet.bgSolid}`);
-  check('bg color red', afterSet.bgColor === '#FF0000', `bgColor=${afterSet.bgColor}`);
+  check('bg color red', String(afterSet.bgColor || '').toUpperCase() === '#FF0000', `bgColor=${afterSet.bgColor}`);
   const pixelsAfterSet = await samplePixelColor(page);
   console.log('pixels after set:', JSON.stringify(pixelsAfterSet));
 
@@ -262,9 +262,10 @@ async function main() {
     };
   });
   const waitForWoodGreen = async () => {
+    const isGreenish = (g) => g[1] > 120 && g[1] > g[0] && g[1] > g[2]; // down-scaled blend vs flat #dcb35c fallback
     for (let i = 0; i < 30; i++) {
       const s = await sampleWood();
-      if (s.grid[1] > 150 && s.grid[0] < 60 && s.grid[2] < 60) return s;
+      if (isGreenish(s.grid)) return s;
       await sleep(200);
     }
     return await sampleWood();
@@ -281,9 +282,10 @@ async function main() {
     setTimeout(() => resolve({ ok: 'timeout', w: im.naturalWidth }), 3000);
   }));
   console.log('raw Image probe:', JSON.stringify(rawProbe));
+  const greenish = (g) => g[1] > 120 && g[1] > g[0] && g[1] > g[2];
   const woodAfterSet = await waitForWoodGreen();
   console.log('wood after set:', JSON.stringify(woodAfterSet));
-  check('wood image green after set', woodAfterSet.grid[1] > 150,
+  check('wood image green after set', greenish(woodAfterSet.grid),
     `grid=[${woodAfterSet.grid}] img=${JSON.stringify(woodAfterSet.img)}`);
 
   await page.evaluate(() => { window._scoringDirty = false; });
@@ -307,7 +309,7 @@ async function main() {
     `imgSrc=${woodStateAfterReload.imgSrc}`);
   const woodAfterReload = await waitForWoodGreen();
   console.log('wood after reload:', JSON.stringify(woodAfterReload));
-  check('wood image green after reload (THE BUG)', woodAfterReload.grid[1] > 150,
+  check('wood image green after reload (THE BUG)', greenish(woodAfterReload.grid),
     `grid=[${woodAfterReload.grid}] img=${JSON.stringify(woodAfterReload.img)}`);
 
   console.log('\n=== Phase 6: STUDY SESSION RESUME — main board must show the REC style ===');

@@ -30,6 +30,24 @@ How the application files interact — UI shell, script load order, scoring pipe
 
 ## Changelog
 
+### v0.2.035 — Board Wood Texture on First Visible Frame (no Flat-Colour Flash)
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **texture/boot** | `fix` | On a reload the board painted the flat wood colour first and only swapped to the saved `texture-ref:` image after the study-folder store attached — an ~100–800ms flash. Three changes remove it: (1) `initStudyDirStorage()` now attaches at the top of `init()` instead of in the deferred idle block, so the store is ready while the page bootstraps; (2) `resolveTextureSrc`/_readRefFile now **waits** up to ~1.2s for the store when it is still attaching, so the boot-time resolve reads the real file instead of failing terminally (this also makes the v0.2.033 re-seed a safety net rather than a prerequisite); (3) `init()` primes the saved board refs immediately and paints at the first frame — textured when ready, flat only after a 250ms deadline so the board is never blank. |
+| **boot metric** | `feat` | `window.__boot.firstPaint = { at, textured }` records whether the first visible paint already had the textures — used by the regression harness (and useful for diagnosing boot-time issues generally). |
+| **re-seed guard** | `fix` | `reloadTextureAfterStorageReady` no longer invalidates the texture cache when the board already painted from the store (that invalidate briefly re-flashed the flat fallback). |
+
+#### Verification
+- `test/repro_texture_ref_boot.js` (7 checks): texture paints on its own, on the **first visible frame** (`firstPaint.textured:true`), no false `missing` warn, genuine misses still warn.
+- `test/repro_board_bg_load.js` (16/16): solid-bg, direct-URL wood image, and study-resume flows — this harness's green-check and bg-colour heuristics were also re-calibrated (the green blend samples as `[14,139,11]`, not `>150`, and the persisted bg colour is lowercase `#ff0000`).
+- `npm run test:all` + `verify_texture_ref` / `verify_study_dir_setup` / `verify_study_dir_dedupe` pass (only the pre-existing S17 komi harness failure remains).
+- Cache busters bumped to `v=0.2.035`.
+
+---
+
 ### v0.2.034 — Silenced False `texture not found` Boot Warnings
 
 #### Changed

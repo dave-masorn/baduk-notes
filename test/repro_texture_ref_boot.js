@@ -85,7 +85,9 @@ async function main() {
     return [px[0], px[1], px[2]];
   });
 
-  // 3. RELOAD — the texture must appear on its own once the store is ready.
+  // 3. RELOAD — the texture must appear on its own once the store is ready, and
+  // specifically on the very FIRST painted frame (no flat-colour flash first).
+  // init()'s first-paint gate records window.__boot.firstPaint.{textured,at}.
   await page.evaluate(() => { window._scoringDirty = false; });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.StudyDirStore && window.state && window.toggleCustomPanel, { timeout: 20000 });
@@ -103,6 +105,13 @@ async function main() {
   }
   check('texture-ref board paints on its own after reload (no re-touch)', painted,
     `grid=${JSON.stringify(grid)}`);
+
+  // The very first paint must already have painted the texture (not the flat
+  // fallback) — init()'s gate reports it via window.__boot.firstPaint.
+  const boot = await page.evaluate(() => window.__boot && window.__boot.firstPaint
+    ? { textured: window.__boot.firstPaint.textured, at: window.__boot.firstPaint.at } : null);
+  check('texture painted on the FIRST visible frame (no flat flash)', !!boot && boot.textured === true,
+    `firstPaint=${JSON.stringify(boot)}`);
 
   // Confirm the re-seed hook actually ran.
   const hookState = await page.evaluate(() => ({

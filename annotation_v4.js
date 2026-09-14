@@ -1704,15 +1704,22 @@ function _applySavedBoardSizes() {
     }
 }
 
-// Re-seed every texture-ref: board/stone image and repaint. The very first
-// drawBoard() in init() runs synchronously, almost always BEFORE
-// initStudyDirStorage() has attached the OPFS/folder handle — so a
-// 'texture-ref:imgs/...' style resolves to null, the load is terminal, and the
-// canvas silently keeps its flat fallback colour for the whole session until the
-// user re-touches a control (which re-seeds the load after the folder is ready).
-// initStudyDirStorage() calls this once the store is configured.
+// Re-seed every texture-ref: board/stone image and repaint.
+//
+// Boot rap: a texture-ref resolve that runs before initStudyDirStorage() attaches
+// is no longer terminal — resolveTextureSrc/_readRefFile wait for the store — so
+// the saved images normally render on the very first paint. This re-seed remains
+// as the safety net for the folder-picker / session-file paths and only acts when
+// nothing was already painted from the store (otherwise it would nuke a good
+// texture and re-flash the flat colour).
 window.reloadTextureAfterStorageReady = function () {
     try {
+        const anyLoaded = ['initialBoardBgImage', 'studyBoardBgImage', 'scoringBoardBgImage']
+            .some(k => window[k] && window[k].naturalWidth > 0);
+        if (anyLoaded) {
+            if (typeof drawBoard === 'function') drawBoard();
+            return;
+        }
         if (window.invalidateTextureCache) window.invalidateTextureCache();
         window.initialBoardBgImage = null;
         window.studyBoardBgImage = null;
@@ -1730,10 +1737,81 @@ window.reloadTextureAfterStorageReady = function () {
     if (typeof drawBoard === 'function') drawBoard();
 };
 
+// Start the async texture-ref resolution for the saved board styles immediately,
+// so that by the time the first frame paints, the wood image is usually decoded
+// and renders on the very first visible frame (no flat-colour flash).
+let _primedTextureKeys = [];
+function _primeSavedBoardTextures() {
+    _primedTextureKeys = [];
+    const prime = (cacheKey, style) => {
+        if (!style || !style.board) return;
+        if (style.board.useColor || typeof style.board.imgSrc !== 'string' || !style.board.imgSrc) return;
+        if (typeof window.loadBoardTextureImage === 'function') {
+            window.loadBoardTextureImage(cacheKey, style.board.imgSrc);
+            _primedTextureKeys.push(cacheKey);
+        }
+    };
+    try {
+        const initialStyle = (typeof getEffectiveInitialStyle === 'function')
+            ? getEffectiveInitialStyle() : state.initialBoardStyle;
+        prime('initialBoardBgImage', initialStyle);
+        prime('studyBoardBgImage', state.studyBoardStyle);
+    } catch (e) {}
+}
+
+function _savedTexturesReady() {
+    if (!_primedTextureKeys.length) return true;
+    return _primedTextureKeys.every(k => {
+        const el = window[k];
+        return el && el.complete && el.naturalWidth > 0;
+    });
+}
+
+// Paint the board on the first frame whenever the saved textures are already
+// decoded (the normal reload case); otherwise paint flat after a bounded wait so
+// the board is never blank, and the async texture onload repaints when it lands.
+function _paintBoardAtFirstFrame() {
+    let painted = false;
+    const paintNow = () => {
+        if (painted) return;
+        painted = true;
+        // Boot metric for diagnostics/verification: did the first visible paint
+        // already have the saved textures (no flat-colour flash)?
+        if (typeof window !== 'undefined') {
+            window.__boot = window.__boot || {};
+            window.__boot.firstPaint = {
+                at: Math.round(performance.now()),
+                textured: _savedTexturesReady()
+            };
+        }
+        drawBoard();
+        updateCropBadge();
+        updateReplicationCode();
+    };
+    const deadline = performance.now() + 250;
+    const attempt = () => {
+        if (_savedTexturesReady() || performance.now() >= deadline) {
+            paintNow();
+            return;
+        }
+        requestAnimationFrame(attempt);
+    };
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(attempt);
+    } else {
+        paintNow();
+    }
+}
+
 function init() {
     if (!elements.canvasInitial) elements.canvasInitial = document.getElementById('go-board-canvas-initial');
     if (!elements.canvasStudy) elements.canvasStudy = document.getElementById('go-board-canvas-study');
     if (!elements.canvasScoring) elements.canvasScoring = document.getElementById('go-board-canvas-scoring');
+
+    // Attach the study-folder store as early as possible so a texture-ref resolve
+    // started below finds the folder already (or nearly) configured instead of
+    // failing the boot-time race. It's async and non-blocking.
+    if (typeof initStudyDirStorage === 'function') initStudyDirStorage();
 
     // Load saved board styles and set canvas wrapper sizes BEFORE drawing,
     // so the first drawBoard() uses the correct style and canvas dimensions.
@@ -1742,12 +1820,11 @@ function init() {
     _loadSavedBoardStyles();
     _applySavedBoardSizes();
 
-    // Draw the board immediately so the user sees it before any listeners
-    // or secondary initialisers run.
+    // Prime texture-ref resolution and paint once the board can show its saved
+    // image (or after a short deadline) — never a flat-colour-first flash.
     initBlankGame();
-    drawBoard();
-    updateCropBadge();
-    updateReplicationCode();
+    _primeSavedBoardTextures();
+    _paintBoardAtFirstFrame();
 
     // Defer heavy listener setup and secondary inits until after the first
     // paint — the board is already visible and interactive for the canvas
@@ -1758,7 +1835,6 @@ function init() {
         setupEventListeners();
         setupGameInfoEdit();
         initFloatingToolbar();
-        initStudyDirStorage();
     };
     if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(_deferredInit, { timeout: 150 });

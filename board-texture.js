@@ -46,8 +46,21 @@
 
     // Read the actual file a ref points at. Priority: FS directory handle
     // (authoritative, cross-session) -> this session's picked/imported files.
+    // A resolve attempt that runs before initStudyDirStorage() has attached (boot)
+    // would otherwise fail terminally and leave the flat fallback colour on the
+    // board. Wait for the store so the very first resolve reads the real file.
     async function _readRefFile(rel) {
-        if (typeof window !== 'undefined' && window.StudyDirStore && window.StudyDirStore.isConfigured) {
+        if (typeof window !== 'undefined' && window.StudyDirStore) {
+            if (!window.StudyDirStore.isConfigured && _storeMayStillAttach()) {
+                try {
+                    await window.waitForStudyDirStoreReady(1200);
+                } catch (e) { /* ignore */ }
+            }
+            if (!window.StudyDirStore.isConfigured) {
+                // No folder can attach (or the attach timed out): fall through to
+                // this session's picked files below.
+                return (_sessionFiles.has(rel)) ? _sessionFiles.get(rel) : null;
+            }
             try {
                 const dir = await window.StudyDirStore.getDirHandle();
                 if (dir) {
