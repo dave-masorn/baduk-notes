@@ -170,9 +170,25 @@ async function generateDiagramDataURL() {
         if (state.exportText.includeTitle) {
             let titleText = '';
             if (state.exportText.titleType === 'auto' && state.sgfMoves && state.sgfMoves.length > 0) {
-                const rawTitle = elements.sgfAutoTitle.getAttribute('data-raw-title') || elements.sgfAutoTitle.textContent;
-                // Remove excessive whitespace that might be extracted from SVGs if data-raw-title is missing
-                titleText = `**${rawTitle.replace(/\s+/g, ' ').trim()}**`;
+                const varStartMoveIndex = (typeof getVariationStartMoveIndex === 'function') 
+                    ? getVariationStartMoveIndex() 
+                    : -1;
+                let absoluteCurrentIndex = -1;
+                if (state.currentMoveIndex >= 0) {
+                    absoluteCurrentIndex = (state.filterStart || 1) - 1 + state.currentMoveIndex;
+                }
+                const isInsideVariation = (varStartMoveIndex >= 0 && absoluteCurrentIndex >= varStartMoveIndex);
+                if (isInsideVariation) {
+                    let varName = '';
+                    if (state.allSgfMoves && state.allSgfMoves[varStartMoveIndex] && state.allSgfMoves[varStartMoveIndex].nodeName) {
+                        varName = state.allSgfMoves[varStartMoveIndex].nodeName;
+                    }
+                    titleText = `**${varName || 'Dia. 1'}**`;
+                } else {
+                    const rawTitle = elements.sgfAutoTitle.getAttribute('data-raw-title') || elements.sgfAutoTitle.textContent;
+                    // Remove excessive whitespace that might be extracted from SVGs if data-raw-title is missing
+                    titleText = `**${rawTitle.replace(/\s+/g, ' ').trim()}**`;
+                }
             } else if (state.exportText.titleType === 'black-move') {
                 titleText = '**Black ● to Play**';
             } else if (state.exportText.titleType === 'white-move') {
@@ -695,12 +711,12 @@ async function generateDiagramDataURL() {
 
                 if (state.exportBoardStyle) {
                     const style = state.exportBoardStyle;
-                    gridMult = parseFloat(style.grid.lineSize) || 1.0;
-                    gridColor = style.grid.lineColor;
-                    hoshiMult = (parseFloat(style.grid.hoshiSize) || 3.0) / 3.0;
-                    hoshiColor = style.grid.hoshiColor;
-                    boundaryColor = style.grid.boundaryColor;
-                    boundarySize = parseFloat(style.grid.boundarySize) || 1.5;
+                    gridMult = (style.grid && style.grid.lineSize !== undefined && !isNaN(parseFloat(style.grid.lineSize))) ? parseFloat(style.grid.lineSize) : 1.0;
+                    gridColor = (style.grid && style.grid.lineColor) || '#000000';
+                    hoshiMult = (style.grid && style.grid.hoshiSize !== undefined && !isNaN(parseFloat(style.grid.hoshiSize))) ? parseFloat(style.grid.hoshiSize) / 3.0 : 1.0;
+                    hoshiColor = (style.grid && style.grid.hoshiColor) || '#000000';
+                    boundaryColor = (style.grid && style.grid.boundaryColor) || '#000000';
+                    boundarySize = (style.grid && style.grid.boundarySize !== undefined && !isNaN(parseFloat(style.grid.boundarySize))) ? parseFloat(style.grid.boundarySize) : 1.5;
                 }
 
                 const baseLine = Math.max(1.2, S * 0.035);
@@ -844,7 +860,12 @@ async function generateDiagramDataURL() {
                 }
 
                 // Move Numbers
-                if (state.displayMoveNumbers && state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex >= -1) {
+                const varStartMoveIndex = (typeof getVariationStartMoveIndex === 'function') 
+                    ? getVariationStartMoveIndex() 
+                    : -1;
+                const shouldDrawExportMoveNumbers = state.displayMoveNumbers || (varStartMoveIndex >= 0);
+
+                if (shouldDrawExportMoveNumbers && state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex >= -1) {
                     let absoluteCurrentIndex = -1;
                     if (state.currentMoveIndex >= 0) {
                         absoluteCurrentIndex = (state.filterStart || 1) - 1 + state.currentMoveIndex;
@@ -852,8 +873,12 @@ async function generateDiagramDataURL() {
                         absoluteCurrentIndex = (state.filterStart || 1) - 2;
                     }
 
+                    const isInsideVariation = (varStartMoveIndex >= 0 && absoluteCurrentIndex >= varStartMoveIndex);
+
                     let startIndex = 0;
-                    if (state.moveNumberMode === 'lastN') {
+                    if (isInsideVariation) {
+                        startIndex = varStartMoveIndex;
+                    } else if (state.moveNumberMode === 'lastN') {
                         startIndex = Math.max(0, absoluteCurrentIndex - state.lastNMoves + 1);
                     }
                     
@@ -864,13 +889,26 @@ async function generateDiagramDataURL() {
                             const move = state.allSgfMoves[i];
                             if (!move || move.r < 0 || move.r >= 19 || move.c < 0 || move.c >= 19) continue;
                             if (move.r >= boardRowStart && move.r <= boardRowEnd && move.c >= boardColStart && move.c <= boardColEnd) {
+                                // If viewing a variation, suppress move numbers for prior stones before the fork
+                                if (isInsideVariation && i < varStartMoveIndex) {
+                                    continue;
+                                }
+
                                 const cell = state.board[move.r][move.c];
+                                // Preserve explicit manual annotation or letter label in variation
+                                if (isInsideVariation && (cell.annotation || cell.label)) {
+                                    continue;
+                                }
+
                                 if (cell.player === move.player) {
                                     const cx = gridLeft + (move.c - boardColStart) * S;
                                     const cy = gridTop + (move.r - boardRowStart) * S;
                                     let moveDisplayNum;
                                     if (state.showMoveCoord) {
                                         moveDisplayNum = COLS[move.c] + (19 - move.r);
+                                    } else if (isInsideVariation) {
+                                        // Variation moves always begin at '1'
+                                        moveDisplayNum = (i - varStartMoveIndex + 1).toString();
                                     } else if (state.moveNumberCountback && state.moveNumberMode === 'lastN') {
                                         moveDisplayNum = (state.lastNMoves - (absoluteCurrentIndex - i)).toString();
                                     } else {
@@ -884,7 +922,19 @@ async function generateDiagramDataURL() {
                                     
                                     exportCtx.font = `normal ${fontSize}px "Figtree", sans-serif`;
                                     
-                                    if (i === absoluteCurrentIndex) {
+                                    if (isInsideVariation) {
+                                        // In professional variation diagram (Go World style), uniform stone fg
+                                        if (state.exportBoardStyle) {
+                                            exportCtx.fillStyle = cell.player === 'B' ? state.exportBoardStyle.blackStone.fg : state.exportBoardStyle.whiteStone.fg;
+                                            const fgSize = cell.player === 'B' ? parseFloat(state.exportBoardStyle.blackStone.fgSize) : parseFloat(state.exportBoardStyle.whiteStone.fgSize);
+                                            if (!isNaN(fgSize) && fgSize !== null) {
+                                                fontSize = fgSize * (S / 29.3333);
+                                                exportCtx.font = `normal ${fontSize}px "Figtree", sans-serif`;
+                                            }
+                                        } else {
+                                            exportCtx.fillStyle = cell.player === 'B' ? '#FFFFFF' : '#000000';
+                                        }
+                                    } else if (i === absoluteCurrentIndex) {
                                         exportCtx.fillStyle = cell.player === 'B' ? '#11ffee' : '#ff1122';
                                     } else {
                                         if (state.exportBoardStyle) {

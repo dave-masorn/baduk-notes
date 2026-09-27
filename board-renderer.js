@@ -629,14 +629,33 @@ function syncAnnotationsToState() {
             if (cell.label) anns.push({ r, c, type: 'label', label: cell.label });
         }
     }
+
+    let targetNode = null;
     if (state.currentMoveIndex === -1) {
         state.baselineAnnotations = anns;
+        if (state.sgfTree && state.sgfTree.nodes && state.sgfTree.nodes.length > 0) {
+            targetNode = state.sgfTree.nodes[0].properties;
+        }
     } else if (state.currentMoveIndex >= 0 && state.currentMoveIndex < state.sgfMoves.length) {
         state.sgfMoves[state.currentMoveIndex].annotations = anns;
+        targetNode = state.sgfMoves[state.currentMoveIndex].sgfNode;
+    }
+
+    // Write directly into SGF FF[4] properties of the active node in state.sgfTree
+    if (targetNode && typeof SgfEngine !== 'undefined' && typeof SgfEngine.annotationsToProperties === 'function') {
+        const MARKUP_KEYS = ['TR', 'SQ', 'CR', 'MA', 'SL', 'LB', 'CXR', 'CXG'];
+        MARKUP_KEYS.forEach(k => delete targetNode[k]);
+        const markupProps = SgfEngine.annotationsToProperties(anns);
+        Object.assign(targetNode, markupProps);
     }
     
-    state.isSgfDirty = true; state.sgfTreeIsCanonical = false; state.popupShownForCurrentChange = false;
+    state.isSgfDirty = true;
+    state.sgfTreeIsCanonical = true;
+    state.popupShownForCurrentChange = false;
     updateSaveRecGameButton();
+    if (typeof window.autoSaveActiveStudySettings === 'function') {
+        window.autoSaveActiveStudySettings();
+    }
     if (elements.sgfExportContainer) {
         elements.sgfExportContainer.style.display = 'flex';
         if (elements.btnExportSgf) elements.btnExportSgf.style.display = 'flex';
@@ -1103,55 +1122,62 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         let hoshiColor = '#000000';
         
         if (style && style.grid) {
-            gridLineWidth = parseFloat(style.grid.lineSize) || 1;
+            gridLineWidth = (style.grid.lineSize !== undefined && !isNaN(parseFloat(style.grid.lineSize))) ? parseFloat(style.grid.lineSize) : 1;
             gridLineColor = style.grid.lineColor || (isPlayerMode ? '#1C1917' : '#000000');
-            hoshiRadius = parseFloat(style.grid.hoshiSize) || 3;
+            hoshiRadius = (style.grid.hoshiSize !== undefined && !isNaN(parseFloat(style.grid.hoshiSize))) ? parseFloat(style.grid.hoshiSize) : 3;
             hoshiColor = style.grid.hoshiColor || '#000000';
         }
 
-        ctx.lineWidth = gridLineWidth;
-        ctx.strokeStyle = gridLineColor;
-        
-        // Draw horizontal & vertical grid lines — interior lines only (i = 1..17), drawn
-        // exactly as the original loop's interior branches. The outer boundary (BDL) is
-        // stroked below as a single rect, the same way the MSM scoring board strokes its
-        // wood outline (strokeRect at :5197-5200), so the 4 corners join as clean miter
-        // corners instead of two independent line ends meeting.
-        for (let i = 1; i < 18; i++) {
-            const offset = PADDING + i * CELL_SIZE;
+        if (gridLineWidth > 0) {
+            ctx.lineWidth = gridLineWidth;
+            ctx.strokeStyle = gridLineColor;
             
-            // Vertical line
-            ctx.beginPath();
-            ctx.moveTo(offset, PADDING);
-            ctx.lineTo(offset, CANVAS_SIZE - PADDING);
-            ctx.stroke();
+            // Draw horizontal & vertical grid lines — interior lines only (i = 1..17), drawn
+            // exactly as the original loop's interior branches. The outer boundary (BDL) is
+            // stroked below as a single rect, the same way the MSM scoring board strokes its
+            // wood outline (strokeRect at :5197-5200), so the 4 corners join as clean miter
+            // corners instead of two independent line ends meeting.
+            for (let i = 1; i < 18; i++) {
+                const offset = PADDING + i * CELL_SIZE;
+                
+                // Vertical line
+                ctx.beginPath();
+                ctx.moveTo(offset, PADDING);
+                ctx.lineTo(offset, CANVAS_SIZE - PADDING);
+                ctx.stroke();
 
-            // Horizontal line
-            ctx.beginPath();
-            ctx.moveTo(PADDING, offset);
-            ctx.lineTo(CANVAS_SIZE - PADDING, offset);
-            ctx.stroke();
+                // Horizontal line
+                ctx.beginPath();
+                ctx.moveTo(PADDING, offset);
+                ctx.lineTo(CANVAS_SIZE - PADDING, offset);
+                ctx.stroke();
+            }
         }
 
         // Outer boundary line (BDL) — single strokeRect, miter-joined true corners,
         // matching the MSM scoring board's wood-outline strokeRect.
-        ctx.save();
-        ctx.lineWidth = (style && style.grid) ? (parseFloat(style.grid.boundarySize) || 1.5) : 1.5;
-        ctx.strokeStyle = (style && style.grid) ? (style.grid.boundaryColor || '#1c1917') : '#1c1917';
-        ctx.lineJoin = 'miter';
-        ctx.lineCap = 'butt';
-        ctx.strokeRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
-        ctx.restore();
+        const boundaryWidth = (style && style.grid && style.grid.boundarySize !== undefined && !isNaN(parseFloat(style.grid.boundarySize))) ? parseFloat(style.grid.boundarySize) : 1.5;
+        if (boundaryWidth > 0) {
+            ctx.save();
+            ctx.lineWidth = boundaryWidth;
+            ctx.strokeStyle = (style && style.grid) ? (style.grid.boundaryColor || '#1c1917') : '#1c1917';
+            ctx.lineJoin = 'miter';
+            ctx.lineCap = 'butt';
+            ctx.strokeRect(PADDING, PADDING, 18 * CELL_SIZE, 18 * CELL_SIZE);
+            ctx.restore();
+        }
 
         // 4. Draw Hoshi star points
-        for (let r = 0; r < 19; r++) {
-            for (let c = 0; c < 19; c++) {
-                if (state.hoshiPoints[r][c]) {
-                    const { cx, cy } = getAnimatedPos(r, c, undefined);
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, hoshiRadius, 0, 2 * Math.PI);
-                    ctx.fillStyle = hoshiColor;
-                    ctx.fill();
+        if (hoshiRadius > 0) {
+            for (let r = 0; r < 19; r++) {
+                for (let c = 0; c < 19; c++) {
+                    if (state.hoshiPoints[r][c]) {
+                        const { cx, cy } = getAnimatedPos(r, c, undefined);
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, hoshiRadius, 0, 2 * Math.PI);
+                        ctx.fillStyle = hoshiColor;
+                        ctx.fill();
+                    }
                 }
             }
         }
@@ -1399,7 +1425,12 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
         }
 
         // 5.5 Draw Move Number Overlays
-        if (state.displayMoveNumbers && state.allSgfMoves && state.allSgfMoves.length > 0) {
+        const varStartMoveIndex = (typeof getVariationStartMoveIndex === 'function') 
+            ? getVariationStartMoveIndex() 
+            : -1;
+        const shouldDrawMoveNumbers = state.displayMoveNumbers || (varStartMoveIndex >= 0);
+
+        if (shouldDrawMoveNumbers && state.allSgfMoves && state.allSgfMoves.length > 0) {
             let absoluteCurrentIndex = -1;
             if (state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex >= 0) {
                 absoluteCurrentIndex = (state.filterStart || 1) - 1 + state.currentMoveIndex;
@@ -1407,8 +1438,12 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                 absoluteCurrentIndex = (state.filterStart || 1) - 2;
             }
 
+            const isInsideVariation = (varStartMoveIndex >= 0 && absoluteCurrentIndex >= varStartMoveIndex);
+
             let startIndex = 0;
-            if (state.moveNumberMode === 'lastN') {
+            if (isInsideVariation) {
+                startIndex = varStartMoveIndex;
+            } else if (state.moveNumberMode === 'lastN') {
                 startIndex = Math.max(0, absoluteCurrentIndex - state.lastNMoves + 1);
             }
             
@@ -1420,7 +1455,17 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                     const move = state.allSgfMoves[i];
                     if (!move || move.r < 0 || move.r >= 19 || move.c < 0 || move.c >= 19) continue;
                     
+                    // In variation (Go World / Dia. 1 style): previous played stones remain without numbering
+                    if (isInsideVariation && i < varStartMoveIndex) {
+                        continue;
+                    }
+
                     const cell = state.board[move.r][move.c];
+                    // If cell has explicit manual annotation or letter label in variation, preserve it
+                    if (isInsideVariation && (cell.annotation || cell.label)) {
+                        continue;
+                    }
+
                     // Only draw number if there's a stone of the move's color there
                     if (cell.player === move.player) {
                         let moveIdx = undefined;
@@ -1439,6 +1484,9 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
                         let moveDisplayNum;
                         if (state.showMoveCoord) {
                             moveDisplayNum = COLS[move.c] + (19 - move.r);
+                        } else if (isInsideVariation) {
+                            // Variation moves always begin at '1'
+                            moveDisplayNum = (i - varStartMoveIndex + 1).toString();
                         } else if (state.moveNumberCountback && state.moveNumberMode === 'lastN') {
                             moveDisplayNum = (state.lastNMoves - (absoluteCurrentIndex - i)).toString();
                         } else {
@@ -1535,7 +1583,7 @@ function renderBoardToCtx(ctx, isPlayerMode, isStudyMode = false, isExportMode =
             }
         }
 
-        if (!state.displayMoveNumbers && state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex >= 0) {
+        if (!shouldDrawMoveNumbers && state.sgfMoves && state.sgfMoves.length > 0 && state.currentMoveIndex >= 0) {
             let shouldHide = false;
             if (ffAnimating) {
                 const annotationRevealTime = (state.sgfMoves ? state.sgfMoves.length : 0) * state.fastForwardAnim.durationPerStone;

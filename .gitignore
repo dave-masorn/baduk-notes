@@ -17,6 +17,7 @@ tech-log-dist/
 _backup/
 _ui/
 _STdB/
+Simple-Baduk/
 # opencode local tooling
 .opencode/
 # scratch / dev artifacts

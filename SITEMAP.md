@@ -1,7 +1,7 @@
 ---
 title: Project Sitemap
 description: baduk-notes — Go/Weiqi board diagram annotator & SGF re-Player
-version: 0.2.032
+version: 0.2.036
 ---
 
 > A browser-based tool for annotating Go game records with board diagram exports, move-term detection, phase analysis, and interactive study mode.
@@ -29,6 +29,25 @@ How the application files interact — UI shell, script load order, scoring pipe
 ---
 
 ## Changelog
+
+### v0.2.036 — Go World Style Variation Numbering & SGF FF[4] Annotation Persistence
+
+#### Changed
+
+| Scope | Type | Description |
+| --- | --- | --- |
+| **variation/numbering** | `feat` | **Professional Go Commentary Numbering (*Go World* / Dia. 1 Style)**: When viewing or replaying a variation, all moves played prior to the variation fork point remain on the board as plain, unnumbered stones (providing diagram situation/context). Numbering begins at **'1'** for the first move of the variation and advances sequentially (1, 2, 3...) for all subsequent moves in that variation. |
+| **variation/naming** | `feat` | **SGF FF[4] `N[Dia. X]` and `MN[1]`**: New variation branches are automatically labeled `Dia. 1`, `Dia. 2`, etc. (fallback for unlabelled variations) and carry `MN[1]` per SGF FF[4] standard to explicitly signal diagram move numbering restart. `addVariationAt` automatically enables move numbering display (`state.displayMoveNumbers = true`). |
+| **annotation/sgf** | `feat` | **SGF FF[4] Annotation Persistence**: `syncAnnotationsToState()` now converts markup ($\triangle$ `TR`, $\square$ `SQ`, $\bigcirc$ `CR`, $\times$ `MA`, labels `LB` like $a$, $b$, $1$) directly into SGF properties on the active node's `sgfNode` in `state.sgfTree`. All annotations persist across branch navigation, session reload, and SGF round-trips via `SgfEngine.writeSgf`. |
+| **export/diagram** | `feat` | **Go World Style Diagram Export**: When exporting a PNG diagram from a variation, background context stones render unnumbered, variation moves render starting from 1 with uniform stone foreground styling, manual annotations/labels are preserved, and the diagram title auto-defaults to `**Dia. 1**` / `**Dia. 2**`. |
+| **ui/replayer** | `feat` | Replayer KPI badge displays variation progress e.g. `Var 1/5 (31/35)` when navigating inside a variation branch. |
+
+#### Verification
+- `test/verify_variation_go_world_style.js` (20/20 checks passed): unnumbered prior moves, variation restart at 1, `MN[1]` & `N[Dia. X]`, `TR`/`LB` direct node mutation, SGF write/parse round-trip, and branch switch restoration.
+- `test/verify_replace_click.js` (10/10) + `test/verify_stone_set_c.js` (13/13) pass.
+- Cache busters synced to `v=0.2.036`.
+
+---
 
 ### v0.2.035 — Board Wood Texture on First Visible Frame (no Flat-Colour Flash)
 
@@ -3010,6 +3029,16 @@ All custom functions introduced in baduk-notes, organized by module.
 | `handleFileSelect` | `(file) → void` | Handles SGF file import via file picker or drag-and-drop. |
 | `applyFilters` | `()` | Applies move range filter to the move list (for studying specific game segments). |
 
+#### Game Tree & Variations
+
+| Function | Signature | Description |
+| --- | --- | --- |
+| `getVariationStartMoveIndex` | `() → number` | Determines the absolute move index where the active variation branch began forking from the main/parent line. Used by the renderer to keep prior contextual stones unnumbered and start variation move numbering at 1 (*Go World* style). |
+| `addVariationAt` | `(row, col, color) → void` | Creates a new variation branch or appends sequential variation moves. Automatically applies SGF FF[4] `N[Dia. X]` and `MN[1]` properties, enables move number overlay display, and updates variation UI. |
+| `navigateVariation` | `(direction) → void` | Cycles forward or backward through sibling variation branches at the active fork point. |
+| `switchBranchAndGoToNode` | `(branchPath, nodeIndex) → void` | Switches the active tree line to the specified branch path and navigates to the target node, rebuilding board stones and annotations. |
+| `syncAnnotationsToState` | `() → void` | Synchronizes active canvas annotations directly into the current SGF node properties (`TR`, `SQ`, `CR`, `MA`, `SL`, `LB`), marks the tree as canonical, and persists changes via autosave. |
+
 #### Comment & Coordinate System
 
 | Function | Signature | Description |
@@ -3296,9 +3325,9 @@ SITEMAP.md (source of truth)
 2. **Bump the version**:
    - Edit the `SITEMAP.md` frontmatter `version:` field (single source of truth):
      ```yaml
-version: 0.1.046
+version: 0.2.036
      ```
-   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.1.046`) and script cache-busters (`?v=0.1.046`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.1.046.html` redirect file if missing. No manual edits to those files needed.
+   - `sync-docs.js` automatically propagates it everywhere: patches the `index.html` header link label (`tech_log-0.2.036`) and script cache-busters (`?v=0.2.036`), updates `TECH_LOG_VERSION` in `tech-log/src/lib/version.ts`, and creates the `tech_log-0.2.036.html` redirect file if missing. No manual edits to those files needed.
 
 3. **Run the One-Line Sync & Build Command**:
    ```bash
@@ -3311,7 +3340,7 @@ version: 0.1.046
 
 4. **Verify**:
    Open `http://localhost:8577/tech-log-dist/docs/` and confirm:
-   - Version badge shows the new version (`0.1.046`) in the sidebar
+   - Version badge shows the new version (`0.2.036`) in the sidebar
    - Updated content renders cleanly
 
 ---
@@ -3342,7 +3371,6 @@ To prevent `Build failed because of webpack errors` or build stalls during Next.
 ##### Rule 4: Fix Turbopack Root Workspace Misdetection (`Turbopack panic reading dir /Users/...`)
 - **Cause**: Next 16 Turbopack scans parent directories if a root `package-lock.json` exists in `~`.
 - **Prevention**: Ensure `turbopack: { root: path.resolve(__dirname) }` is present in `tech-log/next.config.ts` or build using `npx next build --webpack`.
-3. Build and sync (steps 3–4 above)
 
 ## Sound System
 

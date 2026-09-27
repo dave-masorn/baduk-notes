@@ -1544,10 +1544,10 @@ function addVariationAt(r, c) {
         segTree.children = [rest];
     }
 
-    const childIndex = segTree.children.length; // append-last position
-    const label = 'Var ' + String.fromCharCode(65 + childIndex); // B, C, D… (A = main line)
+    const childIndex = segTree.children.length; // append-last position (1, 2, ...)
+    const label = 'Dia. ' + childIndex; // Go World style: Dia. 1, Dia. 2...
     const newSub = {
-        nodes: [{ properties: { [color]: [coordStr], N: [label] }, children: [] }],
+        nodes: [{ properties: { [color]: [coordStr], N: [label], MN: ['1'] }, children: [] }],
         children: []
     };
     segTree.children.push(newSub);
@@ -1555,6 +1555,11 @@ function addVariationAt(r, c) {
     state.isSgfDirty = true;
     state.sgfTreeIsCanonical = true;
     state.popupShownForCurrentChange = false;
+
+    // Ensure move numbers are displayed so the user immediately sees '1' on the variation stone
+    state.displayMoveNumbers = true;
+    if (elements.toggleMoveNumbers) elements.toggleMoveNumbers.checked = true;
+    if (elements.moveNumbersOptions) elements.moveNumbersOptions.style.display = 'flex';
 
     _addingVariation = true;
     try {
@@ -2394,6 +2399,7 @@ function setupEventListeners() {
             }
         }
     }
+    window.autoSaveActiveStudySettings = autoSaveActiveStudySettings;
 
     function updateSaveRecGameButton() {
         const btn = document.getElementById('btn-save-rec-game');
@@ -6200,7 +6206,7 @@ function updateVariationUI() {
             for (const n of child.nodes) {
                 if (n.properties.N && n.properties.N[0]) { label = n.properties.N[0]; break; }
             }
-            return { label: label || `Variation ${ci + 1}`, treeIndex: ci };
+            return { label: label || (ci === 0 ? 'Main Line' : `Dia. ${ci}`), treeIndex: ci };
         });
     }
 
@@ -6544,6 +6550,36 @@ function switchBranchAndGoToNode(path, nodeIndex) {
     populateCommentDropdown();
 }
 window.switchBranchAndGoToNode = switchBranchAndGoToNode;
+
+function getVariationStartMoveIndex() {
+    if (!state.variationData || !Array.isArray(state.variationData.currentBranchPath)) {
+        return -1;
+    }
+    const path = state.variationData.currentBranchPath;
+    const isMainLine = path.length === 0 || path.every(idx => idx === 0);
+    if (isMainLine) return -1;
+
+    const branchPoints = state.variationData.branchPoints || [];
+    for (let i = branchPoints.length - 1; i >= 0; i--) {
+        const bp = branchPoints[i];
+        if (bp && bp.depth < path.length && path[bp.depth] > 0) {
+            return bp.moveIndex;
+        }
+    }
+
+    // Fallback: search for first move after index 0 carrying MN:['1'] or moveNumber === 1
+    if (state.allSgfMoves && state.allSgfMoves.length > 0) {
+        for (let i = 1; i < state.allSgfMoves.length; i++) {
+            const m = state.allSgfMoves[i];
+            if (m && (m.moveNumber === 1 || (m.sgfNode && m.sgfNode.MN && m.sgfNode.MN[0] === '1'))) {
+                return i;
+            }
+        }
+    }
+
+    return -1;
+}
+window.getVariationStartMoveIndex = getVariationStartMoveIndex;
 
 // ── Endgame markup resolution (DD / MA / TB / TW) ─────────────────────────
 // Algorithmic, game-agnostic lookup for dead-stone / territory markup that works
@@ -7148,7 +7184,14 @@ function goToMove(index) {
             const endMove = (state.filterEnd && state.filterEnd !== Infinity) ? state.filterEnd : totalAll;
             elements.replayerMoveKpi.textContent = `${absIdx + 1} / ${endMove}`;
         } else {
-            elements.replayerMoveKpi.textContent = `${absIdx + 1} / ${totalAll}`;
+            const varStart = (typeof getVariationStartMoveIndex === 'function') ? getVariationStartMoveIndex() : -1;
+            if (varStart >= 0 && absIdx >= varStart) {
+                const varMoveNum = absIdx - varStart + 1;
+                const totalVarMoves = totalAll - varStart;
+                elements.replayerMoveKpi.textContent = `Var ${varMoveNum}/${totalVarMoves} (${absIdx + 1}/${totalAll})`;
+            } else {
+                elements.replayerMoveKpi.textContent = `${absIdx + 1} / ${totalAll}`;
+            }
         }
         
         if (!elements.replayerMoveKpi._gotoBound) {
@@ -9781,6 +9824,14 @@ function bindStyleInputsEvents() {
             // Border size is capped at 100% (max size), regardless of typed input
             if (item.id === 'ib-border-size') {
                 val = Math.max(0, Math.min(100, val));
+                el.value = val;
+            }
+            if (item.id === 'ib-grid-line-size') {
+                val = Math.max(0, Math.min(2, val));
+                el.value = val;
+            }
+            if (item.id === 'ib-grid-hoshi-size') {
+                val = Math.max(0, Math.min(5, val));
                 el.value = val;
             }
             
